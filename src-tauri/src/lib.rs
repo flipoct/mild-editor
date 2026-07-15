@@ -737,10 +737,25 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let source = folder.join(filename);
     if !source.exists() { return Err("Workspace source file does not exist.".into()); }
-    Command::new("explorer")
-        .arg(format!("/select,{}", source.to_string_lossy()))
-        .spawn()
-        .map_err(|error| format!("Could not open file location: {error}"))?;
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(format!("/select,{}", source.to_string_lossy()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&source);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(&folder);
+        command
+    };
+    command.spawn().map_err(|error| format!("Could not open file location: {error}"))?;
     Ok(())
 }
 

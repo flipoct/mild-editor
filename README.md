@@ -1,6 +1,10 @@
 # Mild Editor
 
-A compact local competitive-programming editor for C++ and Python 3. It combines Monaco, sample test execution, workspace files, online-judge imports, snippets, and optional clangd IntelliSense in a Tauri desktop app.
+A focused competitive-programming editor for C++ and Python 3. Import problems and sample test cases directly from **AtCoder**, **Codeforces**, and **doj.kr**, then code, run tests, and organize an entire contest in one workspace.
+
+## Download
+
+[Download the latest Mild Editor release](https://github.com/flipoct/mild-editor/releases/latest) for Windows, macOS, or Linux.
 
 ## Quick development preview
 
@@ -48,12 +52,12 @@ Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first
 
 Mild Editor includes lightweight C++ and Python completions. If `clangd` is installed, the app connects it to Monaco for C++ semantic completion, diagnostics, hover information, and signature help. The compiler path is passed as a query driver when available. Open the language-server settings from the status bar to configure a custom clangd path.
 
-## Windows installer
+## Build locally
 
 ```bash
 npm run tauri:build
 ```
 
-The installer is generated under `src-tauri/target/release/bundle/nsis`.
+Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Actions builds Windows, macOS, and Linux packages on their native runners and attaches them to the matching release.
 
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.
