@@ -73,4 +73,12 @@ jobs:
 
       - name: Verify macOS app signature
         if: startsWith(matrix.platform, 'macos')
-        run: codesign --verify --deep --strict --verbose=2 "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Mild Editor.app"
+        run: |
+          DMG_PATH=$(find src-tauri/target -type f -name '*.dmg' -print -quit)
+          test -n "$DMG_PATH"
+          MOUNT_PATH=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_PATH" "$DMG_PATH"
+          APP_PATH=$(find "$MOUNT_PATH" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          hdiutil detach "$MOUNT_PATH"

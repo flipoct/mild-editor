@@ -161,7 +161,7 @@ const loadSnippets = (): CodeSnippet[] => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.1.2";
 
 const messages = {
   en: {
