@@ -180,6 +180,16 @@ struct SaveWorkspaceTestsRequest {
     source_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateWorkspaceSourceRequest {
+    folder_path: String,
+    filename: String,
+    source: String,
+    #[serde(default)]
+    source_url: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceProblemMetadata {
@@ -555,6 +565,22 @@ fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result<(), String
         problem.source_url = request.source_url;
     }
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not save test cases: {error}"))
+}
+
+#[tauri::command]
+fn update_workspace_source(request: UpdateWorkspaceSourceRequest) -> Result<(), String> {
+    if !matches!(request.source.as_str(), "atcoder" | "codeforces" | "doj" | "other") {
+        return Err("Unknown problem source.".into());
+    }
+    let folder = std::path::PathBuf::from(request.folder_path);
+    let metadata_path = workspace_metadata_path(&folder);
+    let json = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}"))?;
+    let mut metadata: WorkspaceMetadata = serde_json::from_str(&json).map_err(|error| format!("Invalid workspace metadata: {error}"))?;
+    let problem = metadata.problems.iter_mut().find(|problem| problem.filename.eq_ignore_ascii_case(&request.filename)).ok_or("Workspace file metadata was not found.")?;
+    problem.source = Some(request.source.clone());
+    problem.source_url = if request.source == "other" { None } else { request.source_url.map(|url| url.trim().to_string()).filter(|url| !url.is_empty()) };
+    problem.judge_status = None;
+    fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update problem source: {error}"))
 }
 
 #[tauri::command]
@@ -1069,6 +1095,36 @@ fn fetch_atcoder_problem(
     })
 }
 
+fn codeforces_pre_text(pre: scraper::ElementRef<'_>) -> String {
+    let line_selector = scraper::Selector::parse(".test-example-line").unwrap();
+    let lines = pre.select(&line_selector).map(|line| line.text().collect::<String>().trim().to_string()).filter(|line| !line.is_empty()).collect::<Vec<_>>();
+    if !lines.is_empty() {
+        lines.join("\n")
+    } else {
+        pre.text().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+    }
+}
+
+fn parse_codeforces_html(html: &str) -> Option<(String, Vec<SavedTestCase>)> {
+    let document = scraper::Html::parse_document(html);
+    let title_selector = scraper::Selector::parse(".problem-statement .header .title").unwrap();
+    let sample_selector = scraper::Selector::parse(".problem-statement .sample-test").unwrap();
+    let input_selector = scraper::Selector::parse(".input pre").unwrap();
+    let output_selector = scraper::Selector::parse(".output pre").unwrap();
+    let title = document.select(&title_selector).next().map(|element| element.text().collect::<String>().trim().to_string()).unwrap_or_else(|| "Codeforces problem".into());
+    let mut tests = Vec::new();
+    for sample in document.select(&sample_selector) {
+        let input = sample.select(&input_selector).next().map(codeforces_pre_text);
+        let expected = sample.select(&output_selector).next().map(codeforces_pre_text);
+        if let (Some(input), Some(expected)) = (input, expected) {
+            if !input.is_empty() && !expected.is_empty() {
+                tests.push(SavedTestCase { name: format!("test {}", tests.len() + 1), input, expected });
+            }
+        }
+    }
+    (!tests.is_empty()).then_some((title, tests))
+}
+
 fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Result<ImportedAtCoderProblem, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid Codeforces problem URL.".to_string())?;
     let segments = parsed.path_segments().map(|values| values.collect::<Vec<_>>()).unwrap_or_default();
@@ -1078,10 +1134,31 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
     } else {
         (segments.get(marker.wrapping_sub(1)).copied().ok_or("Missing contest ID.")?, segments.get(marker + 1).copied().ok_or("Missing problem ID.")?)
     };
-    let reader_url = format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en");
-    let markdown = client.get(reader_url).send().map_err(|error| format!("Could not fetch Codeforces: {error}"))?
-        .error_for_status().map_err(|error| format!("Codeforces response error: {error}"))?
-        .text().map_err(|error| error.to_string())?;
+    let direct_url = format!("https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en");
+    if let Ok(html) = client.get(&direct_url)
+        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+        .send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
+        if let Some((title, tests)) = parse_codeforces_html(&html) {
+            return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+        }
+    }
+    let reader_urls = [
+        format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
+        format!("https://r.jina.ai/https://codeforces.com/contest/{contest}/problem/{letter}?locale=en"),
+    ];
+    let mut last_error = "Codeforces did not return a readable problem statement.".to_string();
+    let mut markdown = None;
+    for reader_url in reader_urls {
+        match client.get(reader_url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
+            Ok(body) if body.contains("Markdown Content:") && (body.contains("\nExample\n") || body.contains("\nExamples\n")) => {
+                markdown = Some(body);
+                break;
+            }
+            Ok(_) => last_error = "Codeforces returned a statement without sample test cases.".into(),
+            Err(error) => last_error = format!("Could not fetch Codeforces: {error}"),
+        }
+    }
+    let markdown = markdown.ok_or(last_error)?;
     let title = markdown.lines().find_map(|line| line.strip_prefix("Title: ")).unwrap_or("Codeforces problem").trim().to_string();
     let lines = markdown.lines().collect::<Vec<_>>();
     let mut tests = Vec::new();
@@ -1127,25 +1204,55 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
     let segments = parsed.path_segments().map(|values| values.collect::<Vec<_>>()).unwrap_or_default();
     let contest_marker = segments.iter().position(|value| *value == "contest").ok_or("This is not a Codeforces contest URL.")?;
     let contest = segments.get(contest_marker + 1).ok_or("Missing Codeforces contest ID.")?;
-    let reader_url = format!("https://r.jina.ai/https://codeforces.com/contest/{contest}?locale=en");
-    let markdown = client.get(reader_url).send().map_err(|error| format!("Could not fetch Codeforces contest: {error}"))?
-        .error_for_status().map_err(|error| format!("Codeforces response error: {error}"))?.text().map_err(|error| error.to_string())?;
     let prefix = format!("https://codeforces.com/contest/{contest}/problem/");
     let mut urls = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for part in markdown.split(&prefix).skip(1) {
-        let letter = part.chars().take_while(|character| character.is_ascii_alphanumeric()).collect::<String>();
-        if !letter.is_empty() && seen.insert(letter.clone()) { urls.push(format!("{prefix}{letter}")); }
+
+    let contest_id = contest.parse::<i64>().map_err(|_| "Invalid Codeforces contest ID.")?;
+    if let Ok(value) = client.get("https://codeforces.com/api/problemset.problems").send().and_then(|response| response.error_for_status()).and_then(|response| response.json::<serde_json::Value>()) {
+        if value.get("status").and_then(|status| status.as_str()) == Some("OK") {
+            if let Some(problems) = value.pointer("/result/problems").and_then(|problems| problems.as_array()) {
+                for problem in problems {
+                    if problem.get("contestId").and_then(|value| value.as_i64()) != Some(contest_id) { continue; }
+                    if let Some(index) = problem.get("index").and_then(|index| index.as_str()) {
+                        if seen.insert(index.to_ascii_uppercase()) { urls.push(format!("{prefix}{index}")); }
+                    }
+                }
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        let reader_url = format!("https://r.jina.ai/https://codeforces.com/contest/{contest}?locale=en");
+        let markdown = client.get(reader_url).send().map_err(|error| format!("Could not fetch Codeforces contest: {error}"))?
+            .error_for_status().map_err(|error| format!("Codeforces response error: {error}"))?.text().map_err(|error| error.to_string())?;
+        for part in markdown.split(&prefix).skip(1) {
+            let letter = part.chars().take_while(|character| character.is_ascii_alphanumeric()).collect::<String>();
+            if !letter.is_empty() && seen.insert(letter.to_ascii_uppercase()) { urls.push(format!("{prefix}{letter}")); }
+        }
     }
     if urls.is_empty() { return Err("No problems found in the Codeforces contest.".into()); }
-    urls.into_iter().take(30).map(|problem_url| fetch_codeforces_problem(client, &problem_url)).collect()
+    urls.sort();
+    let mut problems = Vec::new();
+    let mut errors = Vec::new();
+    for problem_url in urls.into_iter().take(30) {
+        match fetch_codeforces_problem(client, &problem_url) {
+            Ok(problem) => problems.push(problem),
+            Err(error) => errors.push(error),
+        }
+    }
+    if problems.is_empty() {
+        Err(errors.into_iter().next().unwrap_or_else(|| "No Codeforces samples could be imported.".into()))
+    } else {
+        Ok(problems)
+    }
 }
 
 #[tauri::command]
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/0.6.2")
+            .user_agent("MildEditor/1.1.1")
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1237,7 +1344,7 @@ fn doj_problem_id(url: &str) -> Option<String> {
 
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.1.0")
+        .user_agent("MildEditor/1.1.1")
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;
@@ -1528,6 +1635,7 @@ pub fn run() {
             close_app,
             read_font_file,
             save_workspace_tests,
+            update_workspace_source,
             save_problem,
             load_problem,
             create_workspace,
@@ -1587,6 +1695,10 @@ mod tests {
         assert!(!directory.path().join("A.cpp").exists());
         assert!(directory.path().join("B.cpp").exists());
 
+        update_workspace_source(UpdateWorkspaceSourceRequest {
+            folder_path: folder_path.clone(), filename: "B.cpp".into(), source: "codeforces".into(), source_url: Some("https://codeforces.com/contest/2231/problem/C".into()),
+        }).expect("classify source");
+
         let duplicated = duplicate_workspace_file(DuplicateWorkspaceFileRequest { folder_path: folder_path.clone(), filename: "B.cpp".into(), new_filename: "B copy.cpp".into() }).expect("duplicate source");
         assert_eq!(duplicated.filename, "B copy.cpp");
         assert!(directory.path().join("B copy.cpp").exists());
@@ -1596,6 +1708,8 @@ mod tests {
         let metadata: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).expect("read metadata")).expect("parse metadata");
         assert_eq!(metadata.problems.len(), 1);
         assert_eq!(metadata.problems[0].filename, "B copy.cpp");
+        assert_eq!(metadata.problems[0].source.as_deref(), Some("codeforces"));
+        assert_eq!(metadata.problems[0].source_url.as_deref(), Some("https://codeforces.com/contest/2231/problem/C"));
     }
 
     #[test]
@@ -1623,7 +1737,21 @@ mod tests {
         let problem = fetch_codeforces_problem(&client, "https://codeforces.com/contest/2120/problem/A").unwrap();
         assert_eq!(problem.suggested_filename, "A.cpp");
         assert!(!problem.tests.is_empty());
+        let recent_problem = fetch_codeforces_problem(&client, "https://codeforces.com/contest/2231/problem/C").unwrap();
+        assert_eq!(recent_problem.suggested_filename, "C.cpp");
+        assert_eq!(recent_problem.tests[0].input.lines().next(), Some("5"));
+        assert_eq!(recent_problem.tests[0].expected.lines().next(), Some("3"));
         let contest = fetch_codeforces_contest(&client, "https://codeforces.com/contest/4").unwrap();
         assert!(!contest.is_empty());
+    }
+
+    #[test]
+    fn parses_modern_codeforces_sample_markup() {
+        let html = r#"<div class="problem-statement"><div class="header"><div class="title">C. Example</div></div><div class="sample-test"><div class="input"><pre><div class="test-example-line">5</div><div class="test-example-line">3 2 4</div></pre></div><div class="output"><pre><div class="test-example-line">3</div><div class="test-example-line">11</div></pre></div></div></div>"#;
+        let (title, tests) = parse_codeforces_html(html).expect("parse Codeforces sample");
+        assert_eq!(title, "C. Example");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].input, "5\n3 2 4");
+        assert_eq!(tests[0].expected, "3\n11");
     }
 }

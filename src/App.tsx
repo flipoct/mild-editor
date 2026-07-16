@@ -161,7 +161,7 @@ const loadSnippets = (): CodeSnippet[] => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 
 const messages = {
   en: {
@@ -229,6 +229,9 @@ function App() {
   const [selectedExplorerFilename, setSelectedExplorerFilename] = useState("");
   const [renameFile, setRenameFile] = useState<ProblemTab | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [sourceFile, setSourceFile] = useState<ProblemTab | null>(null);
+  const [sourceValue, setSourceValue] = useState<ProblemSource>("other");
+  const [sourceUrlValue, setSourceUrlValue] = useState("");
   const [tabRenameDraft, setTabRenameDraft] = useState<{ id: string; value: string } | null>(null);
   const [fileStatus, setFileStatus] = useState("not saved");
   const [autoSaveRevision, setAutoSaveRevision] = useState(0);
@@ -283,7 +286,7 @@ function App() {
     });
   }, [explorerSort, explorerSource, savedFiles, tabs, workspacePath]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported"].includes(fileStatus);
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated"].includes(fileStatus);
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -579,6 +582,29 @@ function App() {
     await commitWorkspaceRename(renameFile, renameValue);
   };
 
+  const beginSourceEdit = (file: ProblemTab) => {
+    setSourceFile(file);
+    setSourceValue(file.source || "other");
+    setSourceUrlValue(file.sourceUrl || inferredSourceUrl(file.source, file.filename) || "");
+  };
+
+  const updateProblemSource = async () => {
+    if (!sourceFile || !workspacePath) return;
+    const sourceUrl = sourceValue === "other" ? undefined : sourceUrlValue.trim() || undefined;
+    try {
+      await invoke("update_workspace_source", { request: { folderPath: workspacePath, filename: sourceFile.filename, source: sourceValue, sourceUrl } });
+      const update = (file: ProblemTab): ProblemTab => fileKey(file.filename) === fileKey(sourceFile.filename)
+        ? { ...file, source: sourceValue, sourceUrl, judgeStatus: undefined, submissionUrl: undefined }
+        : file;
+      setTabs((items) => items.map(update));
+      setSavedFiles((items) => items.map(update));
+      setSourceFile(null);
+      setFileStatus("source updated");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const openFileLocation = async (file: ProblemTab) => {
     if (!workspacePath) return;
     try { await invoke("open_workspace_file_location", { request: { folderPath: workspacePath, filename: file.filename } }); }
@@ -591,7 +617,11 @@ function App() {
       if (!folderPath || Array.isArray(folderPath)) return;
       const created = await invoke<{ folderPath: string }>("create_workspace", { request: { folderPath } });
       setWorkspacePath(created.folderPath);
+      setTabs([]);
       setSavedFiles([]);
+      setActiveTabId("");
+      setSelectedExplorerFilename("");
+      clearDiagnostics();
       setFileStatus("project created");
     } catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
@@ -650,7 +680,7 @@ function App() {
   };
 
   const newProblem = () => {
-    if (!workspacePath) { void createWorkspace(); return; }
+    void createWorkspace();
   };
 
   const beginImport = () => {
@@ -1392,6 +1422,7 @@ function App() {
       else if (appCloseConfirm) setAppCloseConfirm(false);
       else if (closeConfirmTabId) setCloseConfirmTabId(null);
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
+      else if (sourceFile) setSourceFile(null);
       else if (renameFile) setRenameFile(null);
       else if (blankFilenameOpen) setBlankFilenameOpen(false);
       else if (importCollision) setImportCollision(null);
@@ -1403,7 +1434,7 @@ function App() {
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerMenu, hasFileStatusError, importCollision, renameFile, settingsOpen]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerMenu, hasFileStatusError, importCollision, renameFile, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -1443,6 +1474,9 @@ function App() {
       } else if (deleteConfirmFile) {
         event.preventDefault();
         void deleteSavedFile();
+      } else if (sourceFile) {
+        event.preventDefault();
+        void updateProblemSource();
       } else if (renameFile) {
         event.preventDefault();
         void renameWorkspaceFile();
@@ -1461,7 +1495,7 @@ function App() {
     };
     window.addEventListener("keydown", handleConfirm, true);
     return () => window.removeEventListener("keydown", handleConfirm, true);
-  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, hasFileStatusError, importCollision, renameFile]);
+  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, hasFileStatusError, importCollision, renameFile, sourceFile, sourceUrlValue, sourceValue]);
 
   const summary = useMemo(() => {
     const passed = tests.filter((test) => test.status === "passed").length;
@@ -1661,6 +1695,7 @@ function App() {
         <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file); setExplorerMenu(null); }}>import test cases</button>
         <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file); setExplorerMenu(null); }}>open file location</button>
         <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file); setExplorerMenu(null); }}>duplicate file</button>
+        <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file); setExplorerMenu(null); }}>set problem source</button>
         <button role="menuitem" onClick={() => { setRenameValue(explorerMenu.file.filename); setRenameFile(explorerMenu.file); setExplorerMenu(null); }}>rename file</button>
         <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file); setExplorerMenu(null); }}>delete file</button>
       </div>}
@@ -1701,6 +1736,26 @@ function App() {
           <h2 id="rename-file-title">Rename file</h2>
           <input className="atcoder-url" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void renameWorkspaceFile(); } }} autoFocus spellCheck={false} />
           <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setRenameFile(null)}>cancel</button><button className="primary-button" onClick={() => void renameWorkspaceFile()}>rename</button></footer>
+        </section>
+      </div>}
+
+      {sourceFile && <div className="modal-backdrop close-confirm" role="presentation">
+        <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="source-file-title">
+          <span className="eyebrow">problem classification</span>
+          <h2 id="source-file-title">Set source for {sourceFile.filename}</h2>
+          <label className="clangd-path-label">Platform
+            <select value={sourceValue} onChange={(event) => setSourceValue(event.target.value as ProblemSource)} autoFocus>
+              <option value="other">Local / other</option>
+              <option value="atcoder">AtCoder</option>
+              <option value="codeforces">Codeforces</option>
+              <option value="doj">DOJ</option>
+            </select>
+          </label>
+          {sourceValue !== "other" && <label className="clangd-path-label">Problem URL (optional)
+            <input value={sourceUrlValue} onChange={(event) => setSourceUrlValue(event.target.value)} placeholder="https://..." spellCheck={false} />
+          </label>}
+          <p>The classification is saved even when the test cases were created manually.</p>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setSourceFile(null)}>cancel</button><button className="primary-button" onClick={() => void updateProblemSource()}>save</button></footer>
         </section>
       </div>}
 

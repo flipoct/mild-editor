@@ -54,6 +54,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Test application
+        run: |
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,3 +70,7 @@ jobs:
           uploadUpdaterJson: false
           releaseAssetNamePattern: Mild-Editor_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
+
+      - name: Verify macOS app signature
+        if: startsWith(matrix.platform, 'macos')
+        run: codesign --verify --deep --strict --verbose=2 "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Mild Editor.app"
