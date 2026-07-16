@@ -27,9 +27,9 @@ export class ClangdClient {
     this.editor = editor;
   }
 
-  async start(configuredPath: string | null, workspacePath: string | null, filename: string, code: string): Promise<ClangdInfo> {
+  async start(configuredPath: string | null, workspacePath: string | null, filename: string, code: string, atcoderLibraryPath: string | null = null): Promise<ClangdInfo> {
     this.unlisten = await listen<string>("clangd-message", ({ payload }) => this.handleMessage(payload));
-    const info = await invoke<ClangdInfo>("start_clangd", { configuredPath: configuredPath || null, workspacePath });
+    const info = await invoke<ClangdInfo>("start_clangd", { configuredPath: configuredPath || null, workspacePath, atcoderLibraryPath });
     const rootUri = workspacePath ? fileUri(workspacePath) : null;
     await this.request("initialize", {
       processId: null,
@@ -42,7 +42,7 @@ export class ClangdClient {
           signatureHelp: { signatureInformation: { documentationFormat: ["markdown", "plaintext"], parameterInformation: { labelOffsetSupport: true } } },
         },
       },
-      initializationOptions: { fallbackFlags: ["-std=gnu++20", "-xc++"] },
+      initializationOptions: { fallbackFlags: ["-std=gnu++20", "-xc++", ...(atcoderLibraryPath ? [`-I${atcoderLibraryPath}`] : [])] },
       workspaceFolders: rootUri ? [{ uri: rootUri, name: workspacePath?.split(/[\\/]/).at(-1) || "contest" }] : null,
     });
     await this.notify("initialized", {});

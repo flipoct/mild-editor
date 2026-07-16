@@ -351,3 +351,41 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
   .file-explorer, .explorer-resizer { display: none; }
   .test-fields { padding-left: 13px; }
 }
+.judge-badge {
+  flex: 0 0 auto;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.judge-badge.accepted {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.template-source-tabs {
+  margin-top: 8px;
+}
+
+.judge-settings {
+  gap: 12px;
+}
+
+.path-picker {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.path-picker input {
+  min-width: 0;
+  flex: 1;
+}

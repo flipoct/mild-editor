@@ -11,6 +11,7 @@ type Language = "cpp" | "python";
 type Status = "idle" | "running" | "passed" | "failed" | "error";
 type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
+type UiLocale = "en" | "ko";
 type ExplorerSort = "modified" | "problem" | "name";
 type EditorFont = string;
 type EditorFontOption = { id: string; label: string; family: string; path?: string };
@@ -46,6 +47,9 @@ type ProblemTab = {
   tests: TestCase[];
   dirty?: boolean;
   source?: ProblemSource;
+  sourceUrl?: string;
+  judgeStatus?: string;
+  submissionUrl?: string;
   modifiedAt?: number;
 };
 
@@ -66,6 +70,8 @@ type LoadedWorkspace = {
     code: string;
     tests: LoadedProblem["tests"];
     source?: ProblemSource;
+    sourceUrl?: string;
+    judgeStatus?: string;
     modifiedAt: number;
   }>;
 };
@@ -75,6 +81,7 @@ type ImportedAtCoderProblem = {
   suggestedFilename: string;
   tests: LoadedProblem["tests"];
   source: ProblemSource;
+  sourceUrl: string;
 };
 
 type CodeSnippet = {
@@ -87,7 +94,9 @@ type CodeSnippet = {
 type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[] };
 
 type ExplorerMenu = { file: ProblemTab; x: number; y: number };
-type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; modifiedAt: number };
+type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
+
+type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
 
 const templates: Record<Language, string> = {
   cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
@@ -110,10 +119,32 @@ const loadCustomFonts = (): EditorFontOption[] => {
 };
 
 const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
+const combinedRunOutput = (output: string, error: string) => error
+  ? `${output}${output && !output.endsWith("\n") ? "\n" : ""}${error.replace(/^\s+/, "")}`
+  : output;
 const fileKey = (filename: string) => filename.trim().toLocaleLowerCase();
 const languageFromFilename = (filename: string): Language | null => /\.(cpp|cc|cxx)$/i.test(filename) ? "cpp" : /\.py$/i.test(filename) ? "python" : null;
 const filenameForLanguage = (filename: string, language: Language) => filename.replace(/\.(cpp|cc|cxx|py)$/i, language === "cpp" ? ".cpp" : ".py");
-const storedTemplate = (language: Language) => localStorage.getItem(`mild-template-${language}`) || templates[language];
+const inferredSourceUrl = (source: ProblemSource | undefined, filename: string) => {
+  const problemId = filename.replace(/\.[^.]+$/, "");
+  return source === "doj" && /^\d+$/.test(problemId) ? `https://doj.kr/ko/problems/${problemId}` : undefined;
+};
+const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj"];
+const templateStorageKey = (source: ProblemSource, language: Language) => `mild-template-${source}-${language}`;
+const storedTemplate = (language: Language, source: ProblemSource = "other") => localStorage.getItem(templateStorageKey(source, language)) || localStorage.getItem(`mild-template-${language}`) || templates[language];
+const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatMap((source) => (["cpp", "python"] as Language[]).map((language) => [templateStorageKey(source, language), storedTemplate(language, source)])));
+const renderTemplate = (template: string, context: { source: ProblemSource; filename: string; title: string }) => {
+  const now = new Date();
+  const values: Record<string, string> = {
+    timestamp: now.toISOString(),
+    date: now.toISOString().slice(0, 10),
+    time: now.toTimeString().slice(0, 8),
+    filename: context.filename,
+    title: context.title,
+    platform: context.source,
+  };
+  return template.replace(/\$\{(timestamp|date|time|filename|title|platform)\}/g, (_, key: string) => values[key]);
+};
 const defaultFilename = (index: number, language: Language = "cpp") => `${index < 26 ? String.fromCharCode(65 + index) : `problem${index + 1}`}.${language === "cpp" ? "cpp" : "py"}`;
 const mexFilename = (requested: string, occupied: Set<string>) => {
   if (!occupied.has(fileKey(requested))) return requested;
@@ -130,7 +161,40 @@ const loadSnippets = (): CodeSnippet[] => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
+
+const messages = {
+  en: {
+    appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
+    preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean",
+    templateHelp: "Templates are saved separately for each judge and language. Variables are replaced when a file is created: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}.",
+    local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 60 seconds.",
+    refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
+    newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
+    testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
+    sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files",
+    welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
+    appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", addFont: "add font file", remove: "remove",
+    importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
+    snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
+  },
+  ko: {
+    appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
+    preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어",
+    templateHelp: "템플릿은 사이트와 언어별로 따로 저장됩니다. 파일 생성 시 ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform} 변수가 치환됩니다.",
+    local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 60초마다 자동으로 갱신합니다.",
+    refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
+    newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
+    testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다",
+    welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
+    appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", addFont: "폰트 파일 추가", remove: "제거",
+    importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
+    snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
+  },
+} as const;
 
 function App() {
   const [language, setLanguage] = useState<Language>(() => (localStorage.getItem("mild-language") as Language) || "cpp");
@@ -144,7 +208,8 @@ function App() {
   const testSaveTimerRef = useRef<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [templateLanguage, setTemplateLanguage] = useState<Language>(language);
-  const [draftTemplates, setDraftTemplates] = useState<Record<Language, string>>(() => ({ cpp: storedTemplate("cpp"), python: storedTemplate("python") }));
+  const [templateSource, setTemplateSource] = useState<ProblemSource>("other");
+  const [draftTemplates, setDraftTemplates] = useState<Record<string, string>>(loadTemplateDrafts);
   const [tabs, setTabs] = useState<ProblemTab[]>([]);
   const [activeTabId, setActiveTabId] = useState("");
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
@@ -161,19 +226,27 @@ function App() {
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
   const [explorerSort, setExplorerSort] = useState<ExplorerSort>(() => (localStorage.getItem("mild-explorer-sort") as ExplorerSort) || "problem");
   const [explorerSource, setExplorerSource] = useState<ProblemSource | "all">(() => (localStorage.getItem("mild-explorer-source") as ProblemSource | "all") || "all");
+  const [selectedExplorerFilename, setSelectedExplorerFilename] = useState("");
   const [renameFile, setRenameFile] = useState<ProblemTab | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [tabRenameDraft, setTabRenameDraft] = useState<{ id: string; value: string } | null>(null);
   const [fileStatus, setFileStatus] = useState("not saved");
   const [autoSaveRevision, setAutoSaveRevision] = useState(0);
   const [atCoderOpen, setAtCoderOpen] = useState(false);
+  const [testcaseImportTarget, setTestcaseImportTarget] = useState<ProblemTab | null>(null);
   const [newFileImportPending, setNewFileImportPending] = useState(false);
   const [blankFilenameOpen, setBlankFilenameOpen] = useState(false);
   const [blankFilename, setBlankFilename] = useState("");
   const [importCollision, setImportCollision] = useState<ImportCollision | null>(null);
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
-  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "language-server">("template");
+  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server">("template");
+  const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
+  const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
+  const [codeforcesHandle, setCodeforcesHandle] = useState(() => localStorage.getItem("mild-codeforces-handle") || "");
+  const [dojHandle, setDojHandle] = useState(() => localStorage.getItem("mild-doj-handle") || "");
+  const [atcoderLibraryPath, setAtcoderLibraryPath] = useState(() => localStorage.getItem("mild-atcoder-library-path") || "");
+  const [refreshingJudge, setRefreshingJudge] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
   const [editorFont, setEditorFont] = useState<EditorFont>(() => (localStorage.getItem("mild-editor-font") as EditorFont) || "cascadia");
   const [systemFonts, setSystemFonts] = useState<EditorFontOption[]>([]);
@@ -192,6 +265,7 @@ function App() {
   const [clangdInfo, setClangdInfo] = useState<ClangdInfo | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
+  const t = (key: keyof typeof messages.en) => messages[uiLocale][key];
   const monacoTheme = `mild-${uiTheme}`;
   const fontOptions = useMemo(() => [...systemFonts, ...customFonts], [customFonts, systemFonts]);
   const selectedFont = fontOptions.find((font) => font.id === editorFont) || fontOptions[0] || knownEditorFonts.at(-1)!;
@@ -208,7 +282,8 @@ function App() {
       return natural.compare(left.filename.replace(/\.[^.]+$/, ""), right.filename.replace(/\.[^.]+$/, "")) || natural.compare(left.filename, right.filename);
     });
   }, [explorerSort, explorerSource, savedFiles, tabs, workspacePath]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready"].includes(fileStatus);
+  const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported"].includes(fileStatus);
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -235,6 +310,21 @@ function App() {
     localStorage.setItem("mild-explorer-sort", explorerSort);
     localStorage.setItem("mild-explorer-source", explorerSource);
   }, [explorerSort, explorerSource]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-ui-locale", uiLocale);
+    document.documentElement.lang = uiLocale;
+  }, [uiLocale]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-atcoder-handle", atcoderHandle.trim());
+    localStorage.setItem("mild-codeforces-handle", codeforcesHandle.trim());
+    localStorage.setItem("mild-doj-handle", dojHandle.trim());
+  }, [atcoderHandle, codeforcesHandle, dojHandle]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-atcoder-library-path", atcoderLibraryPath.trim());
+  }, [atcoderLibraryPath]);
 
   useEffect(() => {
     if (fontOptions.length && !fontOptions.some((font) => font.id === editorFont)) setEditorFont(fontOptions[0].id);
@@ -348,6 +438,7 @@ function App() {
   });
 
   const openSavedFile = (file: ProblemTab) => {
+    setSelectedExplorerFilename(file.filename);
     const openTab = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
     if (openTab) {
       activateTab(openTab);
@@ -359,9 +450,9 @@ function App() {
 
   const makeTab = (file: WorkspaceFileResult): ProblemTab => ({
     id: crypto.randomUUID(), title: file.title, filename: file.filename, language: file.language,
-    codes: { cpp: storedTemplate("cpp"), python: storedTemplate("python"), [file.language]: file.code },
+    codes: { cpp: storedTemplate("cpp", file.source || "other"), python: storedTemplate("python", file.source || "other"), [file.language]: file.code },
     tests: hydrateTests(file.tests),
-    source: file.source || "other", modifiedAt: file.modifiedAt,
+    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, modifiedAt: file.modifiedAt,
   });
 
   const changeActiveLanguage = async (next: Language) => {
@@ -394,6 +485,7 @@ function App() {
     const isSaved = savedFiles.some((item) => fileKey(item.filename) === fileKey(file.filename)) && !file.dirty;
     if (!isSaved) {
       setSavedFiles((items) => items.filter((item) => fileKey(item.filename) !== fileKey(file.filename)));
+      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(file.filename) ? "" : selected);
       closeProblem(file.id);
       setDeleteConfirmFile(null);
       return;
@@ -403,6 +495,7 @@ function App() {
       const index = tabs.findIndex((tab) => fileKey(tab.filename) === fileKey(file.filename));
       const remainingTabs = tabs.filter((tab) => fileKey(tab.filename) !== fileKey(file.filename));
       setSavedFiles((items) => items.filter((tab) => fileKey(tab.filename) !== fileKey(file.filename)));
+      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(file.filename) ? "" : selected);
       setTabs(remainingTabs);
       if (activeTab && fileKey(activeTab.filename) === fileKey(file.filename)) {
         const next = remainingTabs[Math.min(Math.max(index, 0), remainingTabs.length - 1)];
@@ -471,6 +564,7 @@ function App() {
       setTabs((items) => items.map(update));
       setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(original.filename) ? { ...update(tab), dirty: false } : tab));
       if (activeTab?.id === original.id) setLanguage(result.language);
+      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(original.filename) ? result.filename : selected);
       setRenameFile(null);
       setFileStatus("saved");
     } catch (error) {
@@ -512,7 +606,7 @@ function App() {
     const saved = await invoke<LoadedWorkspace>("save_workspace", {
       request: {
         folderPath: workspacePath,
-        problems: persistedTabs.map((tab) => ({ filename: tab.filename, title: tab.title, language: tab.language, code: tab.codes[tab.language], tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })), source: tab.source, modifiedAt: tab.modifiedAt })),
+        problems: persistedTabs.map((tab) => ({ filename: tab.filename, title: tab.title, language: tab.language, code: tab.codes[tab.language], tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })), source: tab.source, sourceUrl: tab.sourceUrl, judgeStatus: tab.judgeStatus, modifiedAt: tab.modifiedAt })),
       },
     });
     setWorkspacePath(saved.folderPath);
@@ -534,7 +628,10 @@ function App() {
       title: filename.replace(/\.[^.]+$/, ""),
       filename,
       language: "cpp",
-      codes: { cpp: storedTemplate("cpp"), python: storedTemplate("python") },
+      codes: {
+        cpp: renderTemplate(storedTemplate("cpp", "other"), { source: "other", filename, title: filename.replace(/\.[^.]+$/, "") }),
+        python: renderTemplate(storedTemplate("python", "other"), { source: "other", filename, title: filename.replace(/\.[^.]+$/, "") }),
+      },
       tests: [{ id: 1, name: "test 1", input: "", expected: "", output: "", error: "", status: "idle", open: true }],
       source: "other",
       modifiedAt: Date.now(),
@@ -569,7 +666,15 @@ function App() {
       setBlankFilenameOpen(true);
     }
     setNewFileImportPending(false);
+    setTestcaseImportTarget(null);
     setAtCoderUrl("");
+  };
+
+  const beginTestcaseImport = (file: ProblemTab) => {
+    setTestcaseImportTarget(file);
+    setNewFileImportPending(false);
+    setAtCoderUrl(file.sourceUrl || inferredSourceUrl(file.source, file.filename) || "");
+    setAtCoderOpen(true);
   };
 
   const confirmBlankProblem = () => {
@@ -712,7 +817,7 @@ function App() {
     const client = new ClangdClient(monaco, editor);
     clangdClientRef.current = client;
     try {
-      const info = await client.start(clangdPath || null, workspacePath, activeTab?.filename || "A.cpp", codes.cpp);
+      const info = await client.start(clangdPath || null, workspacePath, activeTab?.filename || "A.cpp", codes.cpp, atcoderLibraryPath || null);
       setClangdInfo(info);
       setClangdStatus("ready");
     } catch (error) {
@@ -847,8 +952,7 @@ function App() {
   };
 
   const saveTemplates = () => {
-    localStorage.setItem("mild-template-cpp", draftTemplates.cpp);
-    localStorage.setItem("mild-template-python", draftTemplates.python);
+    Object.entries(draftTemplates).forEach(([key, value]) => localStorage.setItem(key, value));
     setSettingsOpen(false);
   };
 
@@ -881,7 +985,9 @@ function App() {
 
   const applyTemplate = () => {
     clearDiagnostics();
-    setCodes((current) => ({ ...current, [templateLanguage]: draftTemplates[templateLanguage] }));
+    const key = templateStorageKey(templateSource, templateLanguage);
+    if (!activeTab) return;
+    setCodes((current) => ({ ...current, [templateLanguage]: renderTemplate(draftTemplates[key], { source: templateSource, filename: activeTab.filename, title: activeTab.title }) }));
     markActiveDirty();
     setLanguage(templateLanguage);
     setSettingsOpen(false);
@@ -910,6 +1016,8 @@ function App() {
             code: tab.codes[tab.language],
             tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })),
             source: tab.source,
+            sourceUrl: tab.sourceUrl,
+            judgeStatus: tab.judgeStatus,
             modifiedAt: tab.modifiedAt,
           })),
         },
@@ -960,9 +1068,9 @@ function App() {
       const loadedTabs: ProblemTab[] = loaded.problems.map((problem) => ({
         id: crypto.randomUUID(), title: problem.title, filename: problem.filename,
         language: problem.language,
-        codes: { cpp: storedTemplate("cpp"), python: storedTemplate("python"), [problem.language]: problem.code },
+        codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, modifiedAt: problem.modifiedAt,
       }));
       setWorkspacePath(loaded.folderPath);
       setTabs([]);
@@ -982,9 +1090,9 @@ function App() {
       const loadedTabs: ProblemTab[] = loaded.problems.map((problem) => ({
         id: crypto.randomUUID(), title: problem.title, filename: problem.filename,
         language: problem.language,
-        codes: { cpp: storedTemplate("cpp"), python: storedTemplate("python"), [problem.language]: problem.code },
+        codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, modifiedAt: problem.modifiedAt,
       }));
       let restoredFilenames: string[] = [];
       let restoredActiveFilename = "";
@@ -1036,9 +1144,13 @@ function App() {
       used.add(fileKey(filename));
       return {
         id: crypto.randomUUID(), title: problem.title, filename, language: "cpp",
-        codes: { cpp: storedTemplate("cpp"), python: storedTemplate("python") },
+        codes: {
+          cpp: renderTemplate(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title }),
+          python: renderTemplate(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title }),
+        },
         tests: hydrateTests(problem.tests),
         source: problem.source,
+        sourceUrl: problem.sourceUrl,
         modifiedAt: Date.now(),
       };
     });
@@ -1060,12 +1172,73 @@ function App() {
     setImportingAtCoder(true);
     try {
       const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url: atCoderUrl.trim() });
+      if (testcaseImportTarget) {
+        const targetStem = testcaseImportTarget.filename.replace(/\.[^.]+$/, "").toLocaleLowerCase();
+        const selected = imported.find((problem) => problem.suggestedFilename.replace(/\.[^.]+$/, "").toLocaleLowerCase() === targetStem) || imported[0];
+        if (!selected) throw new Error("No problem test cases were imported.");
+        const nextTests = hydrateTests(selected.tests);
+        if (workspacePath) {
+          await invoke("save_workspace_tests", { request: { folderPath: workspacePath, filename: testcaseImportTarget.filename, tests: selected.tests, source: selected.source, sourceUrl: selected.sourceUrl } });
+        }
+        const update = (file: ProblemTab) => fileKey(file.filename) === fileKey(testcaseImportTarget.filename)
+          ? { ...file, tests: nextTests, source: selected.source, sourceUrl: selected.sourceUrl }
+          : file;
+        setTabs((items) => items.map(update));
+        setSavedFiles((items) => items.map(update));
+        if (activeTab && fileKey(activeTab.filename) === fileKey(testcaseImportTarget.filename)) setTests(nextTests);
+        setAtCoderOpen(false);
+        setTestcaseImportTarget(null);
+        setAtCoderUrl("");
+        setFileStatus("test cases imported");
+        return;
+      }
       await addImportedProblems(imported);
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setImportingAtCoder(false);
     }
+  };
+
+  const refreshSubmissionStatuses = async (silent = false) => {
+    const files = [...savedFiles, ...tabs].filter((file, index, all) => file.sourceUrl && all.findIndex((candidate) => candidate.sourceUrl === file.sourceUrl) === index);
+    if (!files.length || refreshingJudge) return;
+    setRefreshingJudge(true);
+    try {
+      const results = await invoke<SubmissionStatusResult[]>("refresh_submission_statuses", {
+        request: {
+          folderPath: workspacePath,
+          problems: files.map((file) => ({ source: file.source || "other", sourceUrl: file.sourceUrl })),
+          atcoderHandle,
+          codeforcesHandle,
+          dojHandle,
+        },
+      });
+      const update = (file: ProblemTab) => {
+        const result = results.find((item) => item.sourceUrl === file.sourceUrl);
+        return result?.status ? { ...file, judgeStatus: result.status, submissionUrl: result.submissionUrl || file.submissionUrl } : file;
+      };
+      setTabs((items) => items.map(update));
+      setSavedFiles((items) => items.map(update));
+      if (!silent) setFileStatus(results.some((result) => result.status) ? "submission results updated" : "no matching submissions found");
+    } catch (error) {
+      if (!silent) setFileStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingJudge(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!workspacePath || (!atcoderHandle && !codeforcesHandle && !dojHandle)) return;
+    const timer = window.setInterval(() => void refreshSubmissionStatuses(true), 60_000);
+    void refreshSubmissionStatuses(true);
+    return () => window.clearInterval(timer);
+    // File lists intentionally do not restart polling after every returned status update.
+  }, [workspacePath, atcoderHandle, codeforcesHandle, dojHandle, judgeProblemKey]);
+
+  const chooseAtcoderLibrary = async () => {
+    const path = await open({ directory: true, multiple: false, title: "Choose the AtCoder Library include folder" });
+    if (path && !Array.isArray(path)) setAtcoderLibraryPath(path);
   };
 
   const finishTabRename = () => {
@@ -1134,6 +1307,7 @@ function App() {
           code: codes[language],
           tests: tests.map(({ input, expected }) => ({ input, expected })),
           runId,
+          atcoderLibraryPath: atcoderLibraryPath || null,
         },
       });
     } catch (error) {
@@ -1190,6 +1364,16 @@ function App() {
         if (tab) {
           event.preventDefault();
           activateTab(tab);
+        }
+      }
+      if (event.key === "F2" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const focusedInExplorer = document.activeElement instanceof Element && Boolean(document.activeElement.closest(".explorer-file"));
+        const selected = explorerFiles.find((file) => fileKey(file.filename) === fileKey(selectedExplorerFilename));
+        if (focusedInExplorer && selected && workspacePath && !renameFile) {
+          event.preventDefault();
+          setRenameValue(selected.filename);
+          setRenameFile(selected);
+          setExplorerMenu(null);
         }
       }
     };
@@ -1295,10 +1479,10 @@ function App() {
         </div>
         <div className="titlebar-tools">
           <div className="file-actions">
-            <button onClick={newProblem}>new</button>
-            <button onClick={() => void openProblem()}>open</button>
-            <button onClick={() => void saveProblem()}>save</button>
-            <button className="atcoder-button" onClick={beginImport}>import</button>
+            <button onClick={newProblem}>{t("new")}</button>
+            <button onClick={() => void openProblem()}>{t("open")}</button>
+            <button onClick={() => void saveProblem()}>{t("save")}</button>
+            <button className="atcoder-button" onClick={beginImport}>{t("import")}</button>
           </div>
           <div className="snippet-insert">
             <select value={insertSnippetId} onChange={(event) => setInsertSnippetId(event.target.value)} aria-label="Select a code snippet">
@@ -1355,7 +1539,7 @@ function App() {
       <section className={`workspace ${tabs.length ? "" : "empty-workspace"} ${workspacePath ? "" : "no-project"}`} style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px` } as CSSProperties}>
           <aside className="test-panel">
             <div className="panel-heading">
-              <span>test cases</span>
+              <span>{t("testCases")}</span>
               <span className="count">{tests.length}</span>
               <button className="panel-run" onClick={run} disabled={running} aria-label="run all tests" title="run tests">
                 {running ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
@@ -1375,9 +1559,9 @@ function App() {
                   </div>
                   {test.open && (
                     <div className="test-fields">
-                      <label>input<textarea value={test.input} onChange={(event) => updateTest(test.id, { input: event.target.value, status: "idle" })} spellCheck={false} /></label>
-                      <label><span className="field-label">expected<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>use output</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
-                      <label>output<textarea value={test.error || test.output} readOnly className={test.error ? "has-error" : ""} placeholder="run to see output" /></label>
+                      <label>{t("input")}<textarea value={test.input} onChange={(event) => updateTest(test.id, { input: event.target.value, status: "idle" })} spellCheck={false} /></label>
+                      <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
+                      <label>{t("output")}<textarea value={combinedRunOutput(test.output, test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} /></label>
                     </div>
                   )}
                 </article>
@@ -1423,10 +1607,10 @@ function App() {
           />
           </> : <div className="welcome-screen">
             <div className="welcome-mark">m</div>
-            <p className="eyebrow">lightweight competitive programming editor</p>
+            <p className="eyebrow">{t("welcomeTagline")}</p>
             <h1>mild editor</h1>
-            <p>Code, test, save. Built for contest flow.</p>
-            <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>new workspace <kbd>Ctrl+N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>open workspace <kbd>Ctrl+O</kbd></button></div>
+            <p>{t("welcomeBody")}</p>
+            <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>Ctrl+N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>Ctrl+O</kbd></button></div>
             <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>
@@ -1437,23 +1621,25 @@ function App() {
             <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
           </div>
           <div className="explorer-controls">
-            <label title="sort files"><span>sort</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">latest modified</option><option value="problem">problem number</option><option value="name">name</option></select></label>
-            <label title="filter by source"><span>show</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">all sources</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">local / other</option></select></label>
+            <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
+            <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
           </div>
           <div className="explorer-files">
-            {!explorerFiles.length && <div className="explorer-empty">no matching files</div>}
+            {!explorerFiles.length && <div className="explorer-empty">{t("noFiles")}</div>}
             {explorerFiles.map((tab) => {
               const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
               return (
               <div className="explorer-file-row" key={tab.id}>
                 <button
-                  className={`explorer-file ${tab.id === activeTabId ? "active" : ""}`}
+                  className={`explorer-file ${fileKey(tab.filename) === fileKey(selectedExplorerFilename || activeTab?.filename || "") ? "active" : ""}`}
                   onClick={() => openSavedFile(tab)}
-                  onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }}
+                  onFocus={() => setSelectedExplorerFilename(tab.filename)}
+                  onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }}
                   title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (Ctrl+${openIndex + 1})` : ""}`}
                 >
                   <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
                   <span className="explorer-file-name">{tab.filename}</span>
+                  {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
                   {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
                 </button>
                 {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>}
@@ -1472,6 +1658,7 @@ function App() {
       </section>}
 
       {explorerMenu && <div className="explorer-context-menu" style={{ left: explorerMenu.x, top: explorerMenu.y }} role="menu">
+        <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file); setExplorerMenu(null); }}>import test cases</button>
         <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file); setExplorerMenu(null); }}>open file location</button>
         <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file); setExplorerMenu(null); }}>duplicate file</button>
         <button role="menuitem" onClick={() => { setRenameValue(explorerMenu.file.filename); setRenameFile(explorerMenu.file); setExplorerMenu(null); }}>rename file</button>
@@ -1521,17 +1708,19 @@ function App() {
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <header className="settings-header">
-              <div><span className="eyebrow">preferences</span><h2 id="settings-title">{settingsPage === "appearance" ? "appearance" : settingsPage === "template" ? "default template" : settingsPage === "snippets" ? "code snippets" : "language server"}</h2></div>
+              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : t("languageServer")}</h2></div>
               <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
             </header>
             <div className="settings-pages">
-              <button className={settingsPage === "appearance" ? "active" : ""} onClick={() => setSettingsPage("appearance")}>appearance</button>
-              <button className={settingsPage === "template" ? "active" : ""} onClick={() => setSettingsPage("template")}>template</button>
-              <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>snippets</button>
-              <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>language server</button>
+              <button className={settingsPage === "appearance" ? "active" : ""} onClick={() => setSettingsPage("appearance")}>{t("appearance")}</button>
+              <button className={settingsPage === "template" ? "active" : ""} onClick={() => setSettingsPage("template")}>{t("template")}</button>
+              <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>{t("snippets")}</button>
+              <button className={settingsPage === "judge" ? "active" : ""} onClick={() => setSettingsPage("judge")}>{t("judge")}</button>
+              <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>{t("languageServer")}</button>
             </div>
             {settingsPage === "appearance" ? <div className="appearance-settings">
-              <p className="settings-help">Themes update the full interface and Monaco Editor. Only detected fonts are listed; use Add font file to load another programming font.</p>
+              <div className="appearance-group"><label>{t("interfaceLanguage")}<select value={uiLocale} onChange={(event) => setUiLocale(event.target.value as UiLocale)}><option value="en">{t("english")}</option><option value="ko">{t("korean")}</option></select></label></div>
+              <p className="settings-help">{t("appearanceHelp")}</p>
               <div className="appearance-group"><span>theme</span><div className="theme-options">
                 <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>pastel dusk</strong><small>muted Sublime-inspired</small></button>
                 <button className={`theme-option midnight ${uiTheme === "midnight" ? "active" : ""}`} onClick={() => setUiTheme("midnight")}><i /><strong>Catppuccin Mocha</strong><small>official palette inspired</small></button>
@@ -1541,19 +1730,22 @@ function App() {
                 <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord Frost</strong><small>calm arctic blue</small></button>
                 <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>clear neon contrast</small></button>
               </div></div>
-              <div className="appearance-group"><label>editor font<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>add font file</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>remove</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
+              <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
             </div> : settingsPage === "template" ? <>
               <div className="template-tabs" role="tablist" aria-label="Template language">
                 <button className={templateLanguage === "cpp" ? "active" : ""} onClick={() => setTemplateLanguage("cpp")}>C++</button>
                 <button className={templateLanguage === "python" ? "active" : ""} onClick={() => setTemplateLanguage("python")}>Python</button>
               </div>
-              <p className="settings-help">The saved template is used when a new file is created in this language. Apply to editor replaces the current file body.</p>
-              <div className="template-monaco"><Editor beforeMount={beforeMount} height="100%" language={templateLanguage === "cpp" ? "cpp" : "python"} value={draftTemplates[templateLanguage]} onChange={(code) => setDraftTemplates((current) => ({ ...current, [templateLanguage]: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
+              <div className="template-tabs template-source-tabs" role="tablist" aria-label="Template site">
+                {templateSources.map((source) => <button key={source} className={templateSource === source ? "active" : ""} onClick={() => setTemplateSource(source)}>{source === "other" ? t("local") : source === "atcoder" ? "AtCoder" : source === "codeforces" ? "Codeforces" : "DOJ"}</button>)}
+              </div>
+              <p className="settings-help">{t("templateHelp")}</p>
+              <div className="template-monaco"><Editor beforeMount={beforeMount} height="100%" language={templateLanguage === "cpp" ? "cpp" : "python"} value={draftTemplates[templateStorageKey(templateSource, templateLanguage)]} onChange={(code) => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
               <footer className="settings-footer">
-                <button className="subtle-button" onClick={() => setDraftTemplates((current) => ({ ...current, [templateLanguage]: templates[templateLanguage] }))}>reset</button>
+                <button className="subtle-button" onClick={() => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: templates[templateLanguage] }))}>{t("reset")}</button>
                 <span className="footer-spacer" />
-                <button className="subtle-button" onClick={applyTemplate}>apply to editor</button>
-                <button className="primary-button" onClick={saveTemplates}>save template</button>
+                <button className="subtle-button" onClick={applyTemplate}>{t("applyEditor")}</button>
+                <button className="primary-button" onClick={saveTemplates}>{t("saveTemplate")}</button>
               </footer>
             </> : settingsPage === "snippets" ? <div className="snippet-settings">
               <aside className="snippet-list">
@@ -1566,7 +1758,7 @@ function App() {
               <div className="snippet-form">
                 <div className="snippet-guide">
                   <strong>How to use snippets</strong>
-                  <span>Choose a name and language, write the code, then save it. Insert it from the title-bar snippet menu, or type <code>snippet::name</code> in a matching editor and accept the suggestion with Tab or Enter.</span>
+                  <span>{t("snippetsHelp")}</span>
                   <span>Monaco placeholders are supported: <code>{"${1:value}"}</code> selects the first editable field and <code>{"${0}"}</code> sets the final cursor position. Snippets are stored locally on this device.</span>
                 </div>
                 <div className="snippet-meta">
@@ -1576,10 +1768,18 @@ function App() {
                 <div className="snippet-monaco"><Editor beforeMount={beforeMount} height="100%" language={snippetDraft.language === "cpp" ? "cpp" : "python"} value={snippetDraft.code} onChange={(code) => setSnippetDraft((current) => ({ ...current, code: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, padding: { top: 10, bottom: 10 } }} /></div>
                 <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" onClick={saveSnippet} disabled={!snippetDraft.name.trim() || !snippetDraft.code.trim()}>save snippet</button></footer>
               </div>
+            </div> : settingsPage === "judge" ? <div className="language-server-settings judge-settings">
+              <p className="settings-help">{t("judgeHelp")}</p>
+              <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
+              <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
+              <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
+              <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={() => void refreshSubmissionStatuses()}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
             </div> : <div className="language-server-settings">
               <div className={`lsp-state ${clangdStatus}`}><span className="lsp-dot" /><div><strong>{clangdStatus === "ready" ? "clangd connected" : clangdStatus === "connecting" ? "connecting…" : clangdStatus === "missing" ? "clangd not found" : clangdStatus === "error" ? "connection failed" : "clangd idle"}</strong><small>{clangdInfo?.version || "C++ semantic completion, diagnostics, hover and signature help"}</small></div></div>
               <label className="clangd-path-label">clangd executable path<input value={clangdPath} onChange={(event) => setClangdPath(event.target.value)} placeholder="Auto-detect from PATH, or C:\\Program Files\\LLVM\\bin\\clangd.exe" spellCheck={false} /></label>
               <p className="settings-help">Leave the path empty to search PATH automatically. If LLVM clangd is unavailable, Mild Editor keeps using its built-in lightweight completions.</p>
+              <label className="clangd-path-label">{t("aclPath")}<span className="path-picker"><input value={atcoderLibraryPath} onChange={(event) => setAtcoderLibraryPath(event.target.value)} placeholder="C:\\library\\ac-library" spellCheck={false} /><button className="subtle-button" onClick={() => void chooseAtcoderLibrary()}>{t("chooseFolder")}</button></span></label>
+              <p className="settings-help">{t("aclHelp")}</p>
               <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => { setClangdPath(""); localStorage.removeItem("mild-clangd-path"); }}>auto detect</button><button className="primary-button" onClick={() => { localStorage.setItem("mild-clangd-path", clangdPath); void connectClangd(); }}>connect clangd</button></footer>
             </div>}
           </section>
@@ -1608,15 +1808,15 @@ function App() {
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelProblemImport(); }}>
           <section className="atcoder-dialog" role="dialog" aria-modal="true" aria-labelledby="atcoder-title">
             <header className="settings-header">
-              <div><span className="eyebrow">import samples</span><h2 id="atcoder-title">Online judge problem</h2></div>
+              <div><span className="eyebrow">{t("importSamples")}</span><h2 id="atcoder-title">{testcaseImportTarget ? `Import test cases · ${testcaseImportTarget.filename}` : t("onlineProblem")}</h2></div>
               <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import">×</button>
             </header>
-            <p className="settings-help">An AtCoder or Codeforces contest URL imports its listed problems. A supported problem URL imports one problem with its sample test cases.</p>
+            <p className="settings-help">{testcaseImportTarget ? "Replace only this file's test cases. Its code and filename stay unchanged." : t("importHelp")}</p>
             <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void importAtCoderProblem(); } }} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
             <footer className="settings-footer">
               <span className="footer-spacer" />
-              <button className="subtle-button" onClick={cancelProblemImport}>{newFileImportPending ? "create blank file" : "cancel"}</button>
-              <button className="primary-button" onClick={() => void importAtCoderProblem()} disabled={importingAtCoder || !atCoderUrl.trim()}>{importingAtCoder ? "importing…" : "import samples"}</button>
+              <button className="subtle-button" onClick={cancelProblemImport}>{newFileImportPending ? (uiLocale === "ko" ? "빈 파일 만들기" : "create blank file") : t("cancel")}</button>
+              <button className="primary-button" onClick={() => void importAtCoderProblem()} disabled={importingAtCoder || !atCoderUrl.trim()}>{importingAtCoder ? (uiLocale === "ko" ? "가져오는 중…" : "importing…") : t("importSamples")}</button>
             </footer>
           </section>
         </div>

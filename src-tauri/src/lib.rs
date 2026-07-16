@@ -32,6 +32,8 @@ struct RunRequest {
     code: String,
     tests: Vec<TestInput>,
     run_id: String,
+    #[serde(default)]
+    atcoder_library_path: Option<String>,
 }
 
 struct RunState(Arc<AtomicBool>);
@@ -118,6 +120,10 @@ struct WorkspaceProblemInput {
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    judge_status: Option<String>,
+    #[serde(default)]
     modified_at: Option<u64>,
 }
 
@@ -168,6 +174,10 @@ struct SaveWorkspaceTestsRequest {
     folder_path: String,
     filename: String,
     tests: Vec<SavedTestCase>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -179,6 +189,10 @@ struct WorkspaceProblemMetadata {
     tests: Vec<SavedTestCase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    judge_status: Option<String>,
     #[serde(default)]
     modified_at: u64,
 }
@@ -199,6 +213,8 @@ struct WorkspaceProblemOutput {
     code: String,
     tests: Vec<SavedTestCase>,
     source: Option<String>,
+    source_url: Option<String>,
+    judge_status: Option<String>,
     modified_at: u64,
 }
 
@@ -216,6 +232,33 @@ struct ImportedAtCoderProblem {
     suggested_filename: String,
     tests: Vec<SavedTestCase>,
     source: String,
+    source_url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionStatusRequest {
+    #[serde(default)]
+    folder_path: Option<String>,
+    problems: Vec<SubmissionProblem>,
+    atcoder_handle: String,
+    codeforces_handle: String,
+    doj_handle: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionProblem {
+    source: String,
+    source_url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionStatus {
+    source_url: String,
+    status: Option<String>,
+    submission_url: Option<String>,
 }
 
 fn file_modified_at(path: &std::path::Path) -> u64 {
@@ -334,10 +377,16 @@ fn execute_with_cancel(
         .unwrap_or_default();
     let mut stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
     if status.is_none() {
-        stderr.push_str(if stopped { "\nStopped" } else { "\nTime limit exceeded (2s)" });
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(if stopped { "Error: stopped" } else { "Error: TLE (2s)" });
     }
     if stdout_bytes.len() as u64 >= MAX_OUTPUT || stderr_bytes.len() as u64 >= MAX_OUTPUT {
-        stderr.push_str("\nOutput limit exceeded");
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str("Error: output limit exceeded");
     }
 
     RunResult {
@@ -408,10 +457,11 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
                 format!("-std={standard}"),
                 "-O2".into(),
                 "-pipe".into(),
+                request.atcoder_library_path.as_ref().filter(|path| !path.trim().is_empty()).map(|path| format!("-I{path}")).unwrap_or_default(),
                 source.to_string_lossy().into_owned(),
                 "-o".into(),
                 binary.to_string_lossy().into_owned(),
-            ];
+            ].into_iter().filter(|argument| !argument.is_empty()).collect::<Vec<_>>();
             let result = execute(&compiler, &compile_args, cwd, "", Duration::from_secs(10));
             let unsupported = result.stderr.contains("unrecognized command line option");
             compile = Some(result);
@@ -498,6 +548,12 @@ fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result<(), String
     let mut metadata: WorkspaceMetadata = serde_json::from_str(&json).map_err(|error| format!("Invalid workspace metadata: {error}"))?;
     let problem = metadata.problems.iter_mut().find(|problem| problem.filename.eq_ignore_ascii_case(&request.filename)).ok_or("Workspace file metadata was not found.")?;
     problem.tests = request.tests;
+    if request.source.is_some() {
+        problem.source = request.source;
+    }
+    if request.source_url.is_some() {
+        problem.source_url = request.source_url;
+    }
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not save test cases: {error}"))
 }
 
@@ -673,6 +729,8 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             language: problem.language.clone(),
             tests: problem.tests.clone(),
             source: problem.source.clone(),
+            source_url: problem.source_url.clone(),
+            judge_status: problem.judge_status.clone(),
             modified_at: logical_modified_at,
         };
         if let Some(index) = metadata_problems.iter().position(|item| item.filename == filename) {
@@ -687,6 +745,8 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             code: problem.code,
             tests: problem.tests,
             source: problem.source,
+            source_url: problem.source_url,
+            judge_status: problem.judge_status,
             modified_at: logical_modified_at,
         });
     }
@@ -772,10 +832,10 @@ fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<Wo
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
     let code = fs::read_to_string(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
-    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), modified_at: file_modified_at(&destination) };
+    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), modified_at: file_modified_at(&destination) };
     metadata.problems.push(duplicated.clone());
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
-    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, modified_at: duplicated.modified_at })
+    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, modified_at: duplicated.modified_at })
 }
 
 #[tauri::command]
@@ -798,7 +858,7 @@ fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<Workspac
     }
     problem.filename = new_filename.clone();
     problem.language = new_language.clone();
-    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), modified_at: problem.modified_at };
+    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), modified_at: problem.modified_at };
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
     Ok(result)
 }
@@ -837,6 +897,8 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                 code: loaded.code,
                 tests: loaded.tests,
                 source: None,
+                source_url: None,
+                judge_status: None,
                 modified_at: file_modified_at(&selected),
             }],
         });
@@ -860,6 +922,8 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                     language: old.language,
                     tests: old.tests,
                     source: None,
+                    source_url: None,
+                    judge_status: None,
                     modified_at: 0,
                 }],
             }
@@ -877,6 +941,8 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             code,
             tests: problem.tests,
             source: problem.source,
+            source_url: problem.source_url,
+            judge_status: problem.judge_status,
             modified_at: if problem.modified_at > 0 { problem.modified_at } else { file_modified_at(&source_path) },
         });
     }
@@ -999,6 +1065,7 @@ fn fetch_atcoder_problem(
         suggested_filename: format!("{letter}.cpp"),
         tests,
         source: "atcoder".into(),
+        source_url: parsed.to_string(),
     })
 }
 
@@ -1033,7 +1100,7 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
         if !input.is_empty() && !output.is_empty() { tests.push(SavedTestCase { name: format!("test {}", tests.len() + 1), input: input.join("\n"), expected: output.join("\n") }); }
     }
     if tests.is_empty() { return Err("No sample test cases found on Codeforces.".into()); }
-    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into() })
+    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() })
 }
 
 fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<ImportedAtCoderProblem, String> {
@@ -1052,7 +1119,7 @@ fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<Im
     }
     if tests.is_empty() { return Err("No sample test cases found on DOJ.".into()); }
     let title = document.select(&title_selector).next().map(|element| element.text().collect::<String>().replace(" | DOJ", "")).unwrap_or_else(|| format!("DOJ #{problem_id}"));
-    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{problem_id}.cpp"), tests, source: "doj".into() })
+    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{problem_id}.cpp"), tests, source: "doj".into(), source_url: url.to_string() })
 }
 
 fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
@@ -1145,6 +1212,139 @@ async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, Stri
     .map_err(|error| error.to_string())?
 }
 
+fn codeforces_problem_key(url: &str) -> Option<(i64, String)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let parts = parsed.path_segments()?.collect::<Vec<_>>();
+    if let Some(index) = parts.iter().position(|part| *part == "contest") {
+        return Some((parts.get(index + 1)?.parse().ok()?, parts.get(index + 3)?.to_uppercase()));
+    }
+    let index = parts.iter().position(|part| *part == "problem")?;
+    Some((parts.get(index + 1)?.parse().ok()?, parts.get(index + 2)?.to_uppercase()))
+}
+
+fn atcoder_problem_key(url: &str) -> Option<(String, String)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let parts = parsed.path_segments()?.collect::<Vec<_>>();
+    let contest = parts.get(parts.iter().position(|part| *part == "contests")? + 1)?.to_string();
+    let task = parts.get(parts.iter().position(|part| *part == "tasks")? + 1)?.to_string();
+    Some((contest, task))
+}
+
+fn doj_problem_id(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed.path_segments()?.filter(|part| !part.is_empty()).next_back().map(str::to_string)
+}
+
+fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("MildEditor/1.1.0")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut statuses = Vec::new();
+    let folder_path = request.folder_path.clone();
+
+    let codeforces_submissions = if request.codeforces_handle.trim().is_empty() {
+        Vec::new()
+    } else {
+        let mut url = reqwest::Url::parse("https://codeforces.com/api/user.status").unwrap();
+        url.query_pairs_mut().append_pair("handle", request.codeforces_handle.trim()).append_pair("from", "1").append_pair("count", "100");
+        let value: serde_json::Value = client.get(url).send().and_then(|response| response.error_for_status()).map_err(|error| format!("Could not refresh Codeforces submissions: {error}"))?.json().map_err(|error| error.to_string())?;
+        value.get("result").and_then(|result| result.as_array()).cloned().unwrap_or_default()
+    };
+    let atcoder_submissions = if request.atcoder_handle.trim().is_empty() {
+        Vec::new()
+    } else {
+        let from_second = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().saturating_sub(90 * 24 * 60 * 60);
+        let mut url = reqwest::Url::parse("https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions").unwrap();
+        url.query_pairs_mut().append_pair("user", request.atcoder_handle.trim()).append_pair("from_second", &from_second.to_string());
+        client.get(url).send().and_then(|response| response.error_for_status()).ok().and_then(|response| response.json::<Vec<serde_json::Value>>().ok()).unwrap_or_default()
+    };
+
+    for problem in request.problems {
+        let mut status = None;
+        let mut submission_url = None;
+        match problem.source.as_str() {
+            "codeforces" if !request.codeforces_handle.trim().is_empty() => {
+                if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
+                    if let Some(submission) = codeforces_submissions.iter().find(|submission| {
+                        submission.pointer("/problem/contestId").and_then(|value| value.as_i64()) == Some(contest)
+                            && submission.pointer("/problem/index").and_then(|value| value.as_str()).is_some_and(|value| value.eq_ignore_ascii_case(&index))
+                    }) {
+                        status = Some(submission.get("verdict").and_then(|value| value.as_str()).unwrap_or("TESTING").replace('_', " "));
+                        if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
+                            submission_url = Some(format!("https://codeforces.com/contest/{contest}/submission/{id}"));
+                        }
+                    }
+                }
+            }
+            "atcoder" if !request.atcoder_handle.trim().is_empty() => {
+                if let Some((contest, task)) = atcoder_problem_key(&problem.source_url) {
+                    if let Some(submission) = atcoder_submissions.iter().filter(|submission| submission.get("problem_id").and_then(|value| value.as_str()) == Some(task.as_str())).max_by_key(|submission| submission.get("epoch_second").and_then(|value| value.as_i64()).unwrap_or_default()) {
+                        status = submission.get("result").and_then(|value| value.as_str()).map(str::to_string);
+                        if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
+                            submission_url = Some(format!("https://atcoder.jp/contests/{contest}/submissions/{id}"));
+                        }
+                    }
+                }
+            }
+            "doj" if !request.doj_handle.trim().is_empty() => {
+                if let Some(problem_id) = doj_problem_id(&problem.source_url) {
+                    let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
+                    url.query_pairs_mut().append_pair("user", request.doj_handle.trim()).append_pair("problem", &problem_id);
+                    if let Ok(html) = client.get(url.clone()).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
+                        let document = scraper::Html::parse_document(&html);
+                        let row_selector = scraper::Selector::parse("table tbody tr").unwrap();
+                        let score_selector = scraper::Selector::parse(".doj-score-bar-label").unwrap();
+                        if let Some(score) = document.select(&row_selector).next().and_then(|row| row.select(&score_selector).next()) {
+                            let score = score.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join("");
+                            let values = score.split('/').collect::<Vec<_>>();
+                            status = Some(if values.len() == 2 && values[0] == values[1] { "AC".into() } else if score.is_empty() { "JUDGING".into() } else { format!("SCORE {score}") });
+                            submission_url = Some(url.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url });
+    }
+    if let Some(folder_path) = folder_path {
+        let folder = std::path::PathBuf::from(folder_path);
+        let metadata_path = workspace_metadata_path(&folder);
+        if let Ok(json) = fs::read_to_string(&metadata_path) {
+            if let Ok(mut metadata) = serde_json::from_str::<WorkspaceMetadata>(&json) {
+                for problem in &mut metadata.problems {
+                    let inferred_url = if problem.source.as_deref() == Some("doj") {
+                        Path::new(&problem.filename)
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .filter(|value| value.chars().all(|character| character.is_ascii_digit()))
+                            .map(|problem_id| format!("https://doj.kr/ko/problems/{problem_id}"))
+                    } else {
+                        None
+                    };
+                    let effective_url = problem.source_url.clone().or(inferred_url);
+                    if let Some(url) = effective_url {
+                        if let Some(result) = statuses.iter().find(|result| result.source_url == url.as_str()) {
+                            problem.source_url = Some(url);
+                            problem.judge_status = result.status.clone();
+                        }
+                    }
+                }
+                let json = serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?;
+                fs::write(metadata_path, json).map_err(|error| format!("Could not save submission statuses: {error}"))?;
+            }
+        }
+    }
+    Ok(statuses)
+}
+
+#[tauri::command]
+async fn refresh_submission_statuses(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_submission_statuses_sync(request)).await.map_err(|error| error.to_string())?
+}
+
 fn resolve_clangd(configured_path: Option<String>) -> Result<std::path::PathBuf, String> {
     if let Some(path) = configured_path.filter(|path| !path.trim().is_empty()) {
         let path = std::path::PathBuf::from(path);
@@ -1219,6 +1419,7 @@ fn start_clangd(
     state: tauri::State<'_, ClangdState>,
     configured_path: Option<String>,
     workspace_path: Option<String>,
+    atcoder_library_path: Option<String>,
 ) -> Result<ClangdInfo, String> {
     let path = resolve_clangd(configured_path)?;
     let mut process_guard = state.0.lock().map_err(|_| "Could not lock clangd state.")?;
@@ -1238,7 +1439,11 @@ fn start_clangd(
             let config_path = Path::new(&workspace_path).join(".clangd");
             if !config_path.exists() {
                 let compiler_path = compiler.to_string_lossy().replace('\\', "/");
-                let config = format!("CompileFlags:\n  Compiler: {compiler_path}\n  Add: [-std=gnu++20]\n");
+                let mut flags = vec!["-std=gnu++20".to_string()];
+                if let Some(include) = atcoder_library_path.as_ref().filter(|path| !path.trim().is_empty()) {
+                    flags.push(format!("-I{}", include.replace('\\', "/")));
+                }
+                let config = format!("CompileFlags:\n  Compiler: {compiler_path}\n  Add: [{}]\n", flags.join(", "));
                 let _ = fs::write(config_path, config);
             }
         }
@@ -1333,6 +1538,7 @@ pub fn run() {
             rename_workspace_file,
             load_workspace,
             import_problem,
+            refresh_submission_statuses,
             clangd_info,
             start_clangd,
             send_clangd_message,
@@ -1372,7 +1578,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, modified_at: None,
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
             }],
         }).expect("save source");
 
