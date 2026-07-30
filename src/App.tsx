@@ -99,8 +99,8 @@ type WorkspaceFileResult = { filename: string; title: string; language: Language
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
 
 const templates: Record<Language, string> = {
-  cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
-  python: `import sys\n\n\ndef solve():\n    a, b = map(int, sys.stdin.readline().split())\n    print(a + b)\n\n\nif __name__ == "__main__":\n    solve()\n`,
+  cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    \${cursor}int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
+  python: `import sys\n\n\ndef solve():\n    \${cursor}a, b = map(int, sys.stdin.readline().split())\n    print(a + b)\n\n\nif __name__ == "__main__":\n    solve()\n`,
 };
 
 const initialTests: TestCase[] = [
@@ -133,7 +133,7 @@ const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj
 const templateStorageKey = (source: ProblemSource, language: Language) => `mild-template-${source}-${language}`;
 const storedTemplate = (language: Language, source: ProblemSource = "other") => localStorage.getItem(templateStorageKey(source, language)) || localStorage.getItem(`mild-template-${language}`) || templates[language];
 const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatMap((source) => (["cpp", "python"] as Language[]).map((language) => [templateStorageKey(source, language), storedTemplate(language, source)])));
-const renderTemplate = (template: string, context: { source: ProblemSource; filename: string; title: string }) => {
+const renderTemplateWithCursor = (template: string, context: { source: ProblemSource; filename: string; title: string }) => {
   const now = new Date();
   const values: Record<string, string> = {
     timestamp: now.toISOString(),
@@ -143,8 +143,14 @@ const renderTemplate = (template: string, context: { source: ProblemSource; file
     title: context.title,
     platform: context.source,
   };
-  return template.replace(/\$\{(timestamp|date|time|filename|title|platform)\}/g, (_, key: string) => values[key]);
+  const rendered = template.replace(/\$\{(timestamp|date|time|filename|title|platform)\}/g, (_, key: string) => values[key]);
+  const cursorOffset = rendered.indexOf("${cursor}");
+  return {
+    code: rendered.replaceAll("${cursor}", ""),
+    cursorOffset: cursorOffset >= 0 ? cursorOffset : undefined,
+  };
 };
+const renderTemplate = (template: string, context: { source: ProblemSource; filename: string; title: string }) => renderTemplateWithCursor(template, context).code;
 const defaultFilename = (index: number, language: Language = "cpp") => `${index < 26 ? String.fromCharCode(65 + index) : `problem${index + 1}`}.${language === "cpp" ? "cpp" : "py"}`;
 const mexFilename = (requested: string, occupied: Set<string>) => {
   if (!occupied.has(fileKey(requested))) return requested;
@@ -161,15 +167,15 @@ const loadSnippets = (): CodeSnippet[] => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.2.0";
 
 const messages = {
   en: {
     appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
     preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean",
-    templateHelp: "Templates are saved separately for each judge and language. Variables are replaced when a file is created: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}.",
+    templateHelp: "Templates are saved separately for each judge and language. Variables: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}. Put ${cursor} where the editor cursor should start.",
     local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 60 seconds.",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
@@ -182,9 +188,9 @@ const messages = {
   ko: {
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어",
-    templateHelp: "템플릿은 사이트와 언어별로 따로 저장됩니다. 파일 생성 시 ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform} 변수가 치환됩니다.",
+    templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}. 새 파일의 시작 커서 위치에는 ${cursor}를 넣으세요.",
     local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
-    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 60초마다 자동으로 갱신합니다.",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
@@ -258,6 +264,9 @@ function App() {
   const [snippetDraft, setSnippetDraft] = useState<CodeSnippet>(() => ({ id: crypto.randomUUID(), name: "", language: "cpp", code: "" }));
   const [insertSnippetId, setInsertSnippetId] = useState("");
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const templateEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const snippetEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const pendingTemplateCursorRef = useRef<{ tabId: string; language: Language; offset: number } | null>(null);
   const runRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -295,6 +304,29 @@ function App() {
   useEffect(() => {
     setTabs((items) => items.map((tab) => tab.id === activeTabId ? { ...tab, language, codes, tests } : tab));
   }, [activeTabId, codes, language, tests]);
+
+  useEffect(() => {
+    const pending = pendingTemplateCursorRef.current;
+    if (!pending || pending.tabId !== activeTabId || pending.language !== language) return;
+    let frame = 0;
+    let attempts = 0;
+    const placeCursor = () => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      if ((!editor || !model) && attempts++ < 10) {
+        frame = window.requestAnimationFrame(placeCursor);
+        return;
+      }
+      if (!editor || !model) return;
+      const position = model.getPositionAt(Math.min(pending.offset, model.getValueLength()));
+      editor.setPosition(position);
+      editor.revealPositionInCenterIfOutsideViewport(position);
+      editor.focus();
+      pendingTemplateCursorRef.current = null;
+    };
+    frame = window.requestAnimationFrame(placeCursor);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTabId, codes, language]);
 
   useEffect(() => {
     snippetCompletionSource = snippets;
@@ -653,19 +685,25 @@ function App() {
     const withExtension = languageFromFilename(typedName) ? typedName : `${typedName}.cpp`;
     const occupied = new Set([...savedFiles, ...tabs].map((tab) => fileKey(tab.filename)));
     const filename = mexFilename(withExtension, occupied);
+    const fileLanguage = languageFromFilename(filename) || "cpp";
+    const title = filename.replace(/\.[^.]+$/, "");
+    const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title });
+    const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename, title });
     const tab: ProblemTab = {
       id: crypto.randomUUID(),
-      title: filename.replace(/\.[^.]+$/, ""),
+      title,
       filename,
-      language: "cpp",
+      language: fileLanguage,
       codes: {
-        cpp: renderTemplate(storedTemplate("cpp", "other"), { source: "other", filename, title: filename.replace(/\.[^.]+$/, "") }),
-        python: renderTemplate(storedTemplate("python", "other"), { source: "other", filename, title: filename.replace(/\.[^.]+$/, "") }),
+        cpp: renderedCpp.code,
+        python: renderedPython.code,
       },
       tests: [{ id: 1, name: "test 1", input: "", expected: "", output: "", error: "", status: "idle", open: true }],
       source: "other",
       modifiedAt: Date.now(),
     };
+    const cursorOffset = fileLanguage === "cpp" ? renderedCpp.cursorOffset : renderedPython.cursorOffset;
+    if (cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: tab.id, language: fileLanguage, offset: cursorOffset };
     const nextTabs = [...tabs, tab];
     try {
       if (!(await persistTabs(nextTabs, tab.id))) {
@@ -737,6 +775,24 @@ function App() {
   };
 
   const beforeMount: BeforeMount = (monaco) => {
+    const monacoChrome = (panel: string, field: string, border: string, selected: string, accent: string) => ({
+      "focusBorder": accent,
+      "editorWidget.background": panel,
+      "editorWidget.border": border,
+      "editorHoverWidget.background": panel,
+      "editorHoverWidget.border": border,
+      "editorSuggestWidget.background": panel,
+      "editorSuggestWidget.border": border,
+      "editorSuggestWidget.selectedBackground": selected,
+      "editorSuggestWidget.highlightForeground": accent,
+      "input.background": field,
+      "input.border": border,
+      "list.hoverBackground": selected,
+      "list.activeSelectionBackground": selected,
+      "list.highlightForeground": accent,
+      "scrollbarSlider.background": `${border}88`,
+      "scrollbarSlider.hoverBackground": border,
+    });
     monaco.editor.defineTheme("mild-pastel", {
       base: "vs-dark",
       inherit: true,
@@ -748,6 +804,7 @@ function App() {
         { token: "type", foreground: "a9c7cf" },
       ],
       colors: {
+        ...monacoChrome("#292a26", "#232420", "#41423c", "#30312d", "#dec58e"),
         "editor.background": "#2b2c28",
         "editor.foreground": "#dedbd2",
         "editorLineNumber.foreground": "#666861",
@@ -763,33 +820,33 @@ function App() {
       base: "vs-dark",
       inherit: true,
       rules: [{ token: "comment", foreground: "6c7086", fontStyle: "italic" }, { token: "keyword", foreground: "cba6f7" }, { token: "string", foreground: "a6e3a1" }, { token: "number", foreground: "fab387" }, { token: "type", foreground: "89dceb" }],
-      colors: { "editor.background": "#1e1e2e", "editor.foreground": "#cdd6f4", "editorLineNumber.foreground": "#585b70", "editorLineNumber.activeForeground": "#bac2de", "editorCursor.foreground": "#f5e0dc", "editor.selectionBackground": "#585b7088", "editor.lineHighlightBackground": "#252536", "editorIndentGuide.background1": "#313244", "editorIndentGuide.activeBackground1": "#585b70" },
+      colors: { ...monacoChrome("#181825", "#11111b", "#45475a", "#313244", "#cba6f7"), "editor.background": "#1e1e2e", "editor.foreground": "#cdd6f4", "editorLineNumber.foreground": "#585b70", "editorLineNumber.activeForeground": "#bac2de", "editorCursor.foreground": "#f5e0dc", "editor.selectionBackground": "#585b7088", "editor.lineHighlightBackground": "#252536", "editorIndentGuide.background1": "#313244", "editorIndentGuide.activeBackground1": "#585b70" },
     });
     monaco.editor.defineTheme("mild-latte", {
       base: "vs",
       inherit: true,
       rules: [{ token: "comment", foreground: "9893a5", fontStyle: "italic" }, { token: "keyword", foreground: "907aa9" }, { token: "string", foreground: "286983" }, { token: "number", foreground: "d7827e" }, { token: "type", foreground: "56949f" }],
-      colors: { "editor.background": "#faf4ed", "editor.foreground": "#575279", "editorLineNumber.foreground": "#9893a5", "editorLineNumber.activeForeground": "#575279", "editorCursor.foreground": "#b4637a", "editor.selectionBackground": "#dfdad9aa", "editor.lineHighlightBackground": "#f2e9e1", "editorIndentGuide.background1": "#dfdad9", "editorIndentGuide.activeBackground1": "#cecacd" },
+      colors: { ...monacoChrome("#fffaf3", "#faf4ed", "#dfdad9", "#f2e9e1", "#907aa9"), "editor.background": "#faf4ed", "editor.foreground": "#575279", "editorLineNumber.foreground": "#9893a5", "editorLineNumber.activeForeground": "#575279", "editorCursor.foreground": "#b4637a", "editor.selectionBackground": "#dfdad9aa", "editor.lineHighlightBackground": "#f2e9e1", "editorIndentGuide.background1": "#dfdad9", "editorIndentGuide.activeBackground1": "#cecacd" },
     });
     monaco.editor.defineTheme("mild-sakura", {
       base: "vs-dark", inherit: true,
-      rules: [{ token: "comment", foreground: "967987", fontStyle: "italic" }, { token: "keyword", foreground: "f2a6c2" }, { token: "string", foreground: "b8d8ba" }, { token: "number", foreground: "e8c07d" }, { token: "type", foreground: "b9b5e8" }],
-      colors: { "editor.background": "#211820", "editor.foreground": "#f2dce5", "editorLineNumber.foreground": "#765e69", "editorLineNumber.activeForeground": "#e8bdcf", "editorCursor.foreground": "#f2a6c2", "editor.selectionBackground": "#8d526c66", "editor.lineHighlightBackground": "#2b2029", "editorIndentGuide.background1": "#3c2c38", "editorIndentGuide.activeBackground1": "#765466" },
+      rules: [{ token: "comment", foreground: "6272a4", fontStyle: "italic" }, { token: "keyword", foreground: "ff79c6" }, { token: "string", foreground: "f1fa8c" }, { token: "number", foreground: "bd93f9" }, { token: "type", foreground: "8be9fd", fontStyle: "italic" }, { token: "identifier.function", foreground: "50fa7b" }, { token: "predefined", foreground: "8be9fd" }],
+      colors: { ...monacoChrome("#21222c", "#191a21", "#44475a", "#343746", "#bd93f9"), "editor.background": "#282a36", "editor.foreground": "#f8f8f2", "editorLineNumber.foreground": "#6272a4", "editorLineNumber.activeForeground": "#f8f8f2", "editorCursor.foreground": "#f8f8f0", "editor.selectionBackground": "#44475a", "editor.lineHighlightBackground": "#2f3240", "editorIndentGuide.background1": "#3b3e4d", "editorIndentGuide.activeBackground1": "#6272a4", "editorBracketMatch.background": "#bd93f922", "editorBracketMatch.border": "#bd93f9" },
     });
     monaco.editor.defineTheme("mild-blossom", {
-      base: "vs", inherit: true,
-      rules: [{ token: "comment", foreground: "a58491", fontStyle: "italic" }, { token: "keyword", foreground: "b84d7b" }, { token: "string", foreground: "5f8f72" }, { token: "number", foreground: "b7791f" }, { token: "type", foreground: "725eaa" }],
-      colors: { "editor.background": "#fff7fa", "editor.foreground": "#553d49", "editorLineNumber.foreground": "#bfa5b0", "editorLineNumber.activeForeground": "#7b5365", "editorCursor.foreground": "#c45a87", "editor.selectionBackground": "#f0bfd288", "editor.lineHighlightBackground": "#fcecf2", "editorIndentGuide.background1": "#ead8df", "editorIndentGuide.activeBackground1": "#d2a9b9" },
+      base: "vs-dark", inherit: true,
+      rules: [{ token: "comment", foreground: "928374", fontStyle: "italic" }, { token: "keyword", foreground: "fb4934" }, { token: "string", foreground: "b8bb26" }, { token: "number", foreground: "d3869b" }, { token: "type", foreground: "fabd2f" }, { token: "identifier.function", foreground: "b8bb26" }, { token: "predefined", foreground: "8ec07c" }],
+      colors: { ...monacoChrome("#32302f", "#242321", "#504945", "#3c3836", "#fabd2f"), "editor.background": "#282828", "editor.foreground": "#ebdbb2", "editorLineNumber.foreground": "#665c54", "editorLineNumber.activeForeground": "#ebdbb2", "editorCursor.foreground": "#fabd2f", "editor.selectionBackground": "#665c54", "editor.lineHighlightBackground": "#32302f", "editorIndentGuide.background1": "#3c3836", "editorIndentGuide.activeBackground1": "#7c6f64", "editorBracketMatch.background": "#fabd2f22", "editorBracketMatch.border": "#fabd2f" },
     });
     monaco.editor.defineTheme("mild-nord", {
       base: "vs-dark", inherit: true,
       rules: [{ token: "comment", foreground: "616e88", fontStyle: "italic" }, { token: "keyword", foreground: "b48ead" }, { token: "string", foreground: "a3be8c" }, { token: "number", foreground: "d08770" }, { token: "type", foreground: "88c0d0" }],
-      colors: { "editor.background": "#2e3440", "editor.foreground": "#d8dee9", "editorLineNumber.foreground": "#4c566a", "editorLineNumber.activeForeground": "#d8dee9", "editorCursor.foreground": "#88c0d0", "editor.selectionBackground": "#434c5eaa", "editor.lineHighlightBackground": "#343b49", "editorIndentGuide.background1": "#3b4252", "editorIndentGuide.activeBackground1": "#616e88" },
+      colors: { ...monacoChrome("#343b49", "#292e38", "#4c566a", "#3b4252", "#88c0d0"), "editor.background": "#2e3440", "editor.foreground": "#d8dee9", "editorLineNumber.foreground": "#4c566a", "editorLineNumber.activeForeground": "#d8dee9", "editorCursor.foreground": "#88c0d0", "editor.selectionBackground": "#434c5eaa", "editor.lineHighlightBackground": "#343b49", "editorIndentGuide.background1": "#3b4252", "editorIndentGuide.activeBackground1": "#616e88" },
     });
     monaco.editor.defineTheme("mild-tokyo", {
       base: "vs-dark", inherit: true,
       rules: [{ token: "comment", foreground: "565f89", fontStyle: "italic" }, { token: "keyword", foreground: "bb9af7" }, { token: "string", foreground: "9ece6a" }, { token: "number", foreground: "ff9e64" }, { token: "type", foreground: "7dcfff" }],
-      colors: { "editor.background": "#1a1b26", "editor.foreground": "#c0caf5", "editorLineNumber.foreground": "#3b4261", "editorLineNumber.activeForeground": "#a9b1d6", "editorCursor.foreground": "#7aa2f7", "editor.selectionBackground": "#33467c88", "editor.lineHighlightBackground": "#202230", "editorIndentGuide.background1": "#292e42", "editorIndentGuide.activeBackground1": "#515c7e" },
+      colors: { ...monacoChrome("#202230", "#161720", "#3b4261", "#292e42", "#7aa2f7"), "editor.background": "#1a1b26", "editor.foreground": "#c0caf5", "editorLineNumber.foreground": "#3b4261", "editorLineNumber.activeForeground": "#a9b1d6", "editorCursor.foreground": "#7aa2f7", "editor.selectionBackground": "#33467c88", "editor.lineHighlightBackground": "#202230", "editorIndentGuide.background1": "#292e42", "editorIndentGuide.activeBackground1": "#515c7e" },
     });
     if (!completionsRegistered) {
       completionsRegistered = true;
@@ -986,6 +1043,26 @@ function App() {
     setSettingsOpen(false);
   };
 
+  const setTemplateCursor = () => {
+    const editor = templateEditorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+    const key = templateStorageKey(templateSource, templateLanguage);
+    const source = draftTemplates[key] || "";
+    const rawOffset = model.getOffsetAt(position);
+    const offset = source.slice(0, rawOffset).replaceAll("${cursor}", "").length;
+    const clean = source.replaceAll("${cursor}", "");
+    const next = `${clean.slice(0, offset)}${"${cursor}"}${clean.slice(offset)}`;
+    setDraftTemplates((current) => ({ ...current, [key]: next }));
+    window.requestAnimationFrame(() => {
+      const nextModel = templateEditorRef.current?.getModel();
+      if (!nextModel) return;
+      templateEditorRef.current?.setPosition(nextModel.getPositionAt(offset + "${cursor}".length));
+      templateEditorRef.current?.focus();
+    });
+  };
+
   const saveSnippet = () => {
     if (!snippetDraft.name.trim() || !snippetDraft.code.trim()) return;
     const next = snippets.some((snippet) => snippet.id === snippetDraft.id)
@@ -994,6 +1071,25 @@ function App() {
     setSnippets(next);
     localStorage.setItem("mild-snippets", JSON.stringify(next));
     setSnippetDraft({ id: crypto.randomUUID(), name: "", language, code: "" });
+  };
+
+  const setSnippetCursor = () => {
+    const editor = snippetEditorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+    const marker = "${0}";
+    const rawOffset = model.getOffsetAt(position);
+    const offset = snippetDraft.code.slice(0, rawOffset).replaceAll(marker, "").length;
+    const clean = snippetDraft.code.replaceAll(marker, "");
+    const next = `${clean.slice(0, offset)}${marker}${clean.slice(offset)}`;
+    setSnippetDraft((current) => ({ ...current, code: next }));
+    window.requestAnimationFrame(() => {
+      const nextModel = snippetEditorRef.current?.getModel();
+      if (!nextModel) return;
+      snippetEditorRef.current?.setPosition(nextModel.getPositionAt(offset + marker.length));
+      snippetEditorRef.current?.focus();
+    });
   };
 
   const deleteSnippet = (id: string) => {
@@ -1006,9 +1102,8 @@ function App() {
   const insertSnippet = () => {
     const snippet = snippets.find((item) => item.id === insertSnippetId && item.language === language);
     const editor = editorRef.current;
-    const selection = editor?.getSelection();
-    if (!snippet || !editor || !selection) return;
-    editor.executeEdits("mild-snippet", [{ range: selection, text: snippet.code, forceMoveMarkers: true }]);
+    if (!snippet || !editor) return;
+    editor.trigger("mild-snippet", "editor.action.insertSnippet", { snippet: snippet.code });
     editor.focus();
     setInsertSnippetId("");
   };
@@ -1017,7 +1112,9 @@ function App() {
     clearDiagnostics();
     const key = templateStorageKey(templateSource, templateLanguage);
     if (!activeTab) return;
-    setCodes((current) => ({ ...current, [templateLanguage]: renderTemplate(draftTemplates[key], { source: templateSource, filename: activeTab.filename, title: activeTab.title }) }));
+    const rendered = renderTemplateWithCursor(draftTemplates[key], { source: templateSource, filename: activeTab.filename, title: activeTab.title });
+    if (rendered.cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: activeTab.id, language: templateLanguage, offset: rendered.cursorOffset };
+    setCodes((current) => ({ ...current, [templateLanguage]: rendered.code }));
     markActiveDirty();
     setLanguage(templateLanguage);
     setSettingsOpen(false);
@@ -1169,14 +1266,19 @@ function App() {
       return;
     }
     const used = new Set(existingFiles.map((file) => fileKey(file.filename)));
+    const importedCursorOffsets = new Map<string, number>();
     const importedTabs = imported.map((problem): ProblemTab => {
       const filename = mexFilename(problem.suggestedFilename, used);
       used.add(fileKey(filename));
+      const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title });
+      const renderedPython = renderTemplateWithCursor(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title });
+      const id = crypto.randomUUID();
+      if (renderedCpp.cursorOffset !== undefined) importedCursorOffsets.set(id, renderedCpp.cursorOffset);
       return {
-        id: crypto.randomUUID(), title: problem.title, filename, language: "cpp",
+        id, title: problem.title, filename, language: "cpp",
         codes: {
-          cpp: renderTemplate(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title }),
-          python: renderTemplate(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title }),
+          cpp: renderedCpp.code,
+          python: renderedPython.code,
         },
         tests: hydrateTests(problem.tests),
         source: problem.source,
@@ -1185,6 +1287,8 @@ function App() {
       };
     });
     if (!importedTabs.length) throw new Error("No problems were imported.");
+    const firstCursorOffset = importedCursorOffsets.get(importedTabs[0].id);
+    if (firstCursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: importedTabs[0].id, language: "cpp", offset: firstCursorOffset };
     const nextTabs = [...tabs, ...importedTabs];
     if (workspacePath) await persistTabs(nextTabs, importedTabs[0].id);
     else {
@@ -1260,7 +1364,10 @@ function App() {
 
   useEffect(() => {
     if (!workspacePath || (!atcoderHandle && !codeforcesHandle && !dojHandle)) return;
-    const timer = window.setInterval(() => void refreshSubmissionStatuses(true), 60_000);
+    // AtCoder's public submission feed is eventually consistent. Polling a
+    // little more often makes virtual-contest verdicts appear soon after the
+    // feed catches up without requiring a manual refresh.
+    const timer = window.setInterval(() => void refreshSubmissionStatuses(true), 20_000);
     void refreshSubmissionStatuses(true);
     return () => window.clearInterval(timer);
     // File lists intentionally do not restart polling after every returned status update.
@@ -1778,12 +1885,12 @@ function App() {
               <p className="settings-help">{t("appearanceHelp")}</p>
               <div className="appearance-group"><span>theme</span><div className="theme-options">
                 <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>pastel dusk</strong><small>muted Sublime-inspired</small></button>
-                <button className={`theme-option midnight ${uiTheme === "midnight" ? "active" : ""}`} onClick={() => setUiTheme("midnight")}><i /><strong>Catppuccin Mocha</strong><small>official palette inspired</small></button>
-                <button className={`theme-option latte ${uiTheme === "latte" ? "active" : ""}`} onClick={() => setUiTheme("latte")}><i /><strong>Rosé Pine Dawn</strong><small>official palette inspired</small></button>
-                <button className={`theme-option sakura ${uiTheme === "sakura" ? "active" : ""}`} onClick={() => setUiTheme("sakura")}><i /><strong>Sakura Night</strong><small>deep muted pink</small></button>
-                <button className={`theme-option blossom ${uiTheme === "blossom" ? "active" : ""}`} onClick={() => setUiTheme("blossom")}><i /><strong>Blossom Milk</strong><small>soft pink light</small></button>
-                <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord Frost</strong><small>calm arctic blue</small></button>
-                <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>clear neon contrast</small></button>
+                <button className={`theme-option midnight ${uiTheme === "midnight" ? "active" : ""}`} onClick={() => setUiTheme("midnight")}><i /><strong>Catppuccin Mocha</strong><small>soft pastel dark</small></button>
+                <button className={`theme-option latte ${uiTheme === "latte" ? "active" : ""}`} onClick={() => setUiTheme("latte")}><i /><strong>Rosé Pine Dawn</strong><small>warm, quiet light</small></button>
+                <button className={`theme-option sakura ${uiTheme === "sakura" ? "active" : ""}`} onClick={() => setUiTheme("sakura")}><i /><strong>Dracula</strong><small>purple, pink and cyan</small></button>
+                <button className={`theme-option blossom ${uiTheme === "blossom" ? "active" : ""}`} onClick={() => setUiTheme("blossom")}><i /><strong>Gruvbox Dark</strong><small>warm retro contrast</small></button>
+                <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord</strong><small>calm arctic blue</small></button>
+                <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>electric city blue</small></button>
               </div></div>
               <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
             </div> : settingsPage === "template" ? <>
@@ -1795,9 +1902,10 @@ function App() {
                 {templateSources.map((source) => <button key={source} className={templateSource === source ? "active" : ""} onClick={() => setTemplateSource(source)}>{source === "other" ? t("local") : source === "atcoder" ? "AtCoder" : source === "codeforces" ? "Codeforces" : "DOJ"}</button>)}
               </div>
               <p className="settings-help">{t("templateHelp")}</p>
-              <div className="template-monaco"><Editor beforeMount={beforeMount} height="100%" language={templateLanguage === "cpp" ? "cpp" : "python"} value={draftTemplates[templateStorageKey(templateSource, templateLanguage)]} onChange={(code) => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
+              <div className="template-monaco"><Editor beforeMount={beforeMount} onMount={(editor) => { templateEditorRef.current = editor; }} height="100%" language={templateLanguage === "cpp" ? "cpp" : "python"} value={draftTemplates[templateStorageKey(templateSource, templateLanguage)]} onChange={(code) => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
               <footer className="settings-footer">
                 <button className="subtle-button" onClick={() => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: templates[templateLanguage] }))}>{t("reset")}</button>
+                <button className="subtle-button" onClick={setTemplateCursor}>set cursor here</button>
                 <span className="footer-spacer" />
                 <button className="subtle-button" onClick={applyTemplate}>{t("applyEditor")}</button>
                 <button className="primary-button" onClick={saveTemplates}>{t("saveTemplate")}</button>
@@ -1820,8 +1928,8 @@ function App() {
                   <input value={snippetDraft.name} onChange={(event) => setSnippetDraft((current) => ({ ...current, name: event.target.value }))} placeholder="snippet name" aria-label="Snippet name" />
                   <select value={snippetDraft.language} onChange={(event) => setSnippetDraft((current) => ({ ...current, language: event.target.value as Language }))} aria-label="Snippet language"><option value="cpp">C++</option><option value="python">Python</option></select>
                 </div>
-                <div className="snippet-monaco"><Editor beforeMount={beforeMount} height="100%" language={snippetDraft.language === "cpp" ? "cpp" : "python"} value={snippetDraft.code} onChange={(code) => setSnippetDraft((current) => ({ ...current, code: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, padding: { top: 10, bottom: 10 } }} /></div>
-                <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" onClick={saveSnippet} disabled={!snippetDraft.name.trim() || !snippetDraft.code.trim()}>save snippet</button></footer>
+                <div className="snippet-monaco"><Editor beforeMount={beforeMount} onMount={(editor) => { snippetEditorRef.current = editor; }} height="100%" language={snippetDraft.language === "cpp" ? "cpp" : "python"} value={snippetDraft.code} onChange={(code) => setSnippetDraft((current) => ({ ...current, code: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, padding: { top: 10, bottom: 10 } }} /></div>
+                <footer className="settings-footer"><button className="subtle-button" onClick={setSnippetCursor}>set cursor here</button><span className="footer-spacer" /><button className="primary-button" onClick={saveSnippet} disabled={!snippetDraft.name.trim() || !snippetDraft.code.trim()}>save snippet</button></footer>
               </div>
             </div> : settingsPage === "judge" ? <div className="language-server-settings judge-settings">
               <p className="settings-help">{t("judgeHelp")}</p>

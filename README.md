@@ -48,7 +48,13 @@ There are two ways to insert a snippet into a file:
 - Select it from the snippet menu in the title bar, then press **Insert**.
 - Type `snippet::name` in an editor using the same language, then accept the completion with Tab or Enter.
 
-Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first editable field, repeated placeholder numbers stay synchronized, and `${0}` marks the final cursor position after tabbing through the fields.
+Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first editable field, repeated placeholder numbers stay synchronized, and `${0}` marks the final cursor position after tabbing through the fields. Place the editor caret and press **Set cursor here** to insert or move `${0}` automatically.
+
+## Templates and themes
+
+Templates are stored separately by judge and language. Besides filename, platform, date, and time variables, `${cursor}` controls the initial caret position in a newly created file. Use **Set cursor here** in the template editor to place it without typing the marker.
+
+The full interface and Monaco Editor share the selected palette. Mild Editor includes Pastel Dusk, Catppuccin Mocha, Rosé Pine Dawn, Dracula, Gruvbox Dark, Nord, and Tokyo Night.
 
 ## IntelliSense
 

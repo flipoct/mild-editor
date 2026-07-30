@@ -978,31 +978,24 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
     })
 }
 
-fn fetch_atcoder_problem(
-    client: &reqwest::blocking::Client,
-    url: &str,
-) -> Result<ImportedAtCoderProblem, String> {
-    let mut parsed = reqwest::Url::parse(url)
-        .map_err(|_| "Problem not found. Enter a valid AtCoder, Codeforces, or DOJ URL.".to_string())?;
-    if parsed.host_str() != Some("atcoder.jp") || !parsed.path().contains("/tasks/") {
-        return Err("Problem not found. Enter a valid AtCoder problem URL.".into());
-    }
-    parsed.query_pairs_mut().append_pair("lang", "en");
-    let html = client
-        .get(parsed.clone())
-        .send()
-        .map_err(|error| format!("Could not fetch the problem page: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("AtCoder returned an error: {error}"))?
-        .text()
-        .map_err(|error| error.to_string())?;
+fn parse_atcoder_samples(html: &str) -> Vec<SavedTestCase> {
     let document = scraper::Html::parse_document(&html);
-    let heading_selector =
-        scraper::Selector::parse("#task-statement .lang-en h3, #task-statement h3").unwrap();
-    let title_selector = scraper::Selector::parse("span.h2, .h2").unwrap();
+    let english_heading_selector =
+        scraper::Selector::parse("#task-statement .lang-en h3").unwrap();
+    let fallback_heading_selector = scraper::Selector::parse("#task-statement h3").unwrap();
     let mut inputs: Vec<(String, String)> = Vec::new();
     let mut outputs: Vec<(String, String)> = Vec::new();
-    for heading in document.select(&heading_selector) {
+    // AtCoder sends both the Japanese and English statements even with
+    // `?lang=en`. Reading the broad selector as well as `.lang-en` therefore
+    // imported every sample twice. Prefer the English block and only fall back
+    // to the whole statement for old Japanese-only problems.
+    let english_headings = document.select(&english_heading_selector).collect::<Vec<_>>();
+    let headings = if english_headings.is_empty() {
+        document.select(&fallback_heading_selector).collect::<Vec<_>>()
+    } else {
+        english_headings
+    };
+    for heading in headings {
         let heading_text = heading.text().collect::<String>().trim().to_string();
         let is_input = heading_text.contains("Sample Input") || heading_text.contains("入力例");
         let is_output = heading_text.contains("Sample Output") || heading_text.contains("出力例");
@@ -1039,12 +1032,16 @@ fn fetch_atcoder_problem(
         }
     }
     let mut tests = Vec::new();
+    let mut seen_tests = std::collections::HashSet::new();
     for (index, (number, input)) in inputs.into_iter().enumerate() {
         if let Some((_, expected)) = outputs
             .iter()
             .find(|(output_number, _)| output_number == &number)
             .or_else(|| outputs.get(index))
         {
+            if !seen_tests.insert((input.clone(), expected.clone())) {
+                continue;
+            }
             tests.push(SavedTestCase {
                 name: format!(
                     "test {}",
@@ -1059,6 +1056,30 @@ fn fetch_atcoder_problem(
             });
         }
     }
+    tests
+}
+
+fn fetch_atcoder_problem(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<ImportedAtCoderProblem, String> {
+    let mut parsed = reqwest::Url::parse(url)
+        .map_err(|_| "Problem not found. Enter a valid AtCoder, Codeforces, or DOJ URL.".to_string())?;
+    if parsed.host_str() != Some("atcoder.jp") || !parsed.path().contains("/tasks/") {
+        return Err("Problem not found. Enter a valid AtCoder problem URL.".into());
+    }
+    parsed.query_pairs_mut().append_pair("lang", "en");
+    let html = client
+        .get(parsed.clone())
+        .send()
+        .map_err(|error| format!("Could not fetch the problem page: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("AtCoder returned an error: {error}"))?
+        .text()
+        .map_err(|error| error.to_string())?;
+    let document = scraper::Html::parse_document(&html);
+    let title_selector = scraper::Selector::parse("span.h2, .h2").unwrap();
+    let tests = parse_atcoder_samples(&html);
     if tests.is_empty() {
         return Err("No sample test cases were found on this page.".into());
     }
@@ -1252,7 +1273,7 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/1.1.2")
+            .user_agent("MildEditor/1.2.0")
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1342,9 +1363,53 @@ fn doj_problem_id(url: &str) -> Option<String> {
     parsed.path_segments()?.filter(|part| !part.is_empty()).next_back().map(str::to_string)
 }
 
+fn fetch_atcoder_submissions(
+    client: &reqwest::blocking::Client,
+    handle: &str,
+    initial_from_second: u64,
+) -> Vec<serde_json::Value> {
+    let mut submissions = Vec::new();
+    let mut from_second = initial_from_second;
+    // The AtCoder Problems API returns a bounded page. Advance its timestamp
+    // cursor until the newest page is reached; otherwise active users can have
+    // a virtual-contest submission omitted from the first response.
+    for _ in 0..20 {
+        let mut url = reqwest::Url::parse(
+            "https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions",
+        )
+        .unwrap();
+        url.query_pairs_mut()
+            .append_pair("user", handle)
+            .append_pair("from_second", &from_second.to_string());
+        let page = client
+            .get(url)
+            .send()
+            .and_then(|response| response.error_for_status())
+            .ok()
+            .and_then(|response| response.json::<Vec<serde_json::Value>>().ok())
+            .unwrap_or_default();
+        if page.is_empty() {
+            break;
+        }
+        let Some(latest_second) = page
+            .iter()
+            .filter_map(|submission| submission.get("epoch_second").and_then(|value| value.as_u64()))
+            .max()
+        else {
+            break;
+        };
+        submissions.extend(page);
+        if latest_second < from_second || latest_second == u64::MAX {
+            break;
+        }
+        from_second = latest_second + 1;
+    }
+    submissions
+}
+
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.1.2")
+        .user_agent("MildEditor/1.2.0")
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;
@@ -1359,14 +1424,15 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
         let value: serde_json::Value = client.get(url).send().and_then(|response| response.error_for_status()).map_err(|error| format!("Could not refresh Codeforces submissions: {error}"))?.json().map_err(|error| error.to_string())?;
         value.get("result").and_then(|result| result.as_array()).cloned().unwrap_or_default()
     };
-    let atcoder_submissions = if request.atcoder_handle.trim().is_empty() {
+    let atcoder_recent_submissions = if request.atcoder_handle.trim().is_empty() {
         Vec::new()
     } else {
-        let from_second = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().saturating_sub(90 * 24 * 60 * 60);
-        let mut url = reqwest::Url::parse("https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions").unwrap();
-        url.query_pairs_mut().append_pair("user", request.atcoder_handle.trim()).append_pair("from_second", &from_second.to_string());
-        client.get(url).send().and_then(|response| response.error_for_status()).ok().and_then(|response| response.json::<Vec<serde_json::Value>>().ok()).unwrap_or_default()
+        // Keep this window narrow so a very active user's newest virtual-contest
+        // submissions cannot be pushed out of the API response by older entries.
+        let from_second = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().saturating_sub(7 * 24 * 60 * 60);
+        fetch_atcoder_submissions(&client, request.atcoder_handle.trim(), from_second)
     };
+    let mut atcoder_extended_submissions: Option<Vec<serde_json::Value>> = None;
 
     for problem in request.problems {
         let mut status = None;
@@ -1387,7 +1453,23 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
             }
             "atcoder" if !request.atcoder_handle.trim().is_empty() => {
                 if let Some((contest, task)) = atcoder_problem_key(&problem.source_url) {
-                    if let Some(submission) = atcoder_submissions.iter().filter(|submission| submission.get("problem_id").and_then(|value| value.as_str()) == Some(task.as_str())).max_by_key(|submission| submission.get("epoch_second").and_then(|value| value.as_i64()).unwrap_or_default()) {
+                    let mut submission = atcoder_recent_submissions.iter()
+                        .filter(|submission| submission.get("problem_id").and_then(|value| value.as_str()) == Some(task.as_str()))
+                        .max_by_key(|submission| submission.get("epoch_second").and_then(|value| value.as_i64()).unwrap_or_default());
+                    if submission.is_none() {
+                        let extended = atcoder_extended_submissions.get_or_insert_with(|| {
+                            let from_second = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                                .saturating_sub(90 * 24 * 60 * 60);
+                            fetch_atcoder_submissions(&client, request.atcoder_handle.trim(), from_second)
+                        });
+                        submission = extended.iter()
+                            .filter(|submission| submission.get("problem_id").and_then(|value| value.as_str()) == Some(task.as_str()))
+                            .max_by_key(|submission| submission.get("epoch_second").and_then(|value| value.as_i64()).unwrap_or_default());
+                    }
+                    if let Some(submission) = submission {
                         status = submission.get("result").and_then(|value| value.as_str()).map(str::to_string);
                         if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
                             submission_url = Some(format!("https://atcoder.jp/contests/{contest}/submissions/{id}"));
@@ -1724,6 +1806,46 @@ mod tests {
                 .unwrap();
         assert_eq!(problem.suggested_filename, "A.cpp");
         assert_eq!(problem.tests.len(), 3);
+    }
+
+    #[test]
+    fn atcoder_bilingual_statement_imports_each_sample_once() {
+        let html = r#"
+            <div id="task-statement">
+              <span class="lang-ja">
+                <h3>入力例 1</h3><pre>3
+</pre>
+                <h3>出力例 1</h3><pre>6
+</pre>
+              </span>
+              <span class="lang-en">
+                <h3>Sample Input 1</h3><pre>3
+</pre>
+                <h3>Sample Output 1</h3><pre>6
+</pre>
+              </span>
+            </div>
+        "#;
+        let tests = parse_atcoder_samples(html);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].input, "3");
+        assert_eq!(tests[0].expected, "6");
+    }
+
+    #[test]
+    fn atcoder_japanese_only_statement_uses_fallback_samples() {
+        let html = r#"
+            <div id="task-statement">
+              <h3>入力例 1</h3><pre>4
+</pre>
+              <h3>出力例 1</h3><pre>8
+</pre>
+            </div>
+        "#;
+        let tests = parse_atcoder_samples(html);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].input, "4");
+        assert_eq!(tests[0].expected, "8");
     }
 
     #[test]
