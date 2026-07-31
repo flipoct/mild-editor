@@ -165,9 +165,74 @@ const mexFilename = (requested: string, occupied: Set<string>) => {
 const loadSnippets = (): CodeSnippet[] => {
   try { return JSON.parse(localStorage.getItem("mild-snippets") || "[]"); } catch { return []; }
 };
+const themeIconCache = new Map<UiTheme, Uint8Array>();
+const createThemeWindowIcon = async (theme: UiTheme) => {
+  const cached = themeIconCache.get(theme);
+  if (cached) return cached;
+
+  const mark = document.createElement("span");
+  mark.className = "welcome-mark";
+  mark.textContent = "m";
+  mark.style.position = "fixed";
+  mark.style.visibility = "hidden";
+  mark.style.pointerEvents = "none";
+  document.body.appendChild(mark);
+  const markStyle = getComputedStyle(mark);
+  const sourceSize = Number.parseFloat(markStyle.width);
+  const sourceRadius = Number.parseFloat(markStyle.borderRadius);
+  const sourceBorderWidth = Number.parseFloat(markStyle.borderTopWidth);
+  const sourceFontSize = Number.parseFloat(markStyle.fontSize);
+  const background = markStyle.backgroundColor;
+  const foreground = markStyle.color;
+  const font = `${markStyle.fontStyle} ${markStyle.fontWeight} ${sourceFontSize}px ${markStyle.fontFamily}`;
+  mark.remove();
+
+  const canvas = document.createElement("canvas");
+  const size = 128;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable.");
+
+  const scale = size / sourceSize;
+  const borderWidth = sourceBorderWidth * scale;
+  const inset = borderWidth / 2;
+  const radius = sourceRadius * scale;
+  context.beginPath();
+  context.moveTo(inset + radius, inset);
+  context.lineTo(size - inset - radius, inset);
+  context.quadraticCurveTo(size - inset, inset, size - inset, inset + radius);
+  context.lineTo(size - inset, size - inset - radius);
+  context.quadraticCurveTo(size - inset, size - inset, size - inset - radius, size - inset);
+  context.lineTo(inset + radius, size - inset);
+  context.quadraticCurveTo(inset, size - inset, inset, size - inset - radius);
+  context.lineTo(inset, inset + radius);
+  context.quadraticCurveTo(inset, inset, inset + radius, inset);
+  context.closePath();
+  context.fillStyle = background;
+  context.fill();
+  context.lineWidth = borderWidth;
+  context.strokeStyle = foreground;
+  context.stroke();
+
+  context.fillStyle = foreground;
+  context.font = font.replace(`${sourceFontSize}px`, `${sourceFontSize * scale}px`);
+  context.textAlign = "center";
+  context.textBaseline = "alphabetic";
+  const metrics = context.measureText("m");
+  const baseline = size / 2 + (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+  context.fillText("m", size / 2, baseline);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not create the theme icon.")), "image/png");
+  });
+  const icon = new Uint8Array(await blob.arrayBuffer());
+  themeIconCache.set(theme, icon);
+  return icon;
+};
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 
 const messages = {
   en: {
@@ -335,6 +400,19 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = uiTheme;
     localStorage.setItem("mild-ui-theme", uiTheme);
+  }, [uiTheme]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    void createThemeWindowIcon(uiTheme)
+      .then(async (icon) => {
+        if (!cancelled) await getCurrentWindow().setIcon(icon);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [uiTheme]);
 
   useEffect(() => {
