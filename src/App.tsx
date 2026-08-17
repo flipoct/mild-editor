@@ -12,6 +12,7 @@ type Status = "idle" | "running" | "passed" | "failed" | "error";
 type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 type UiLocale = "en" | "ko";
+type WallpaperLayout = "cover" | "contain" | "stretch" | "original" | "tile" | "custom";
 type ExplorerSort = "modified" | "problem" | "name";
 type EditorFont = string;
 type EditorFontOption = { id: string; label: string; family: string; path?: string };
@@ -123,6 +124,11 @@ const storedBoundedNumber = (key: string, fallback: number, minimum: number, max
   if (stored === null) return fallback;
   const value = Number(stored);
   return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+};
+const wallpaperLayouts: WallpaperLayout[] = ["cover", "contain", "stretch", "original", "tile", "custom"];
+const storedWallpaperLayout = (): WallpaperLayout => {
+  const stored = localStorage.getItem("mild-wallpaper-layout") as WallpaperLayout | null;
+  return stored && wallpaperLayouts.includes(stored) ? stored : "cover";
 };
 
 const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
@@ -255,6 +261,7 @@ const messages = {
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", addFont: "add font file", remove: "remove",
     backgroundImage: "background image", chooseBackground: "choose image", clearBackground: "remove image", acrylicOpacity: "panel opacity", acrylicBlur: "background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "no image selected",
+    wallpaperLayout: "image layout", wallpaperCover: "fill", wallpaperContain: "fit", wallpaperStretch: "stretch", wallpaperOriginal: "original size", wallpaperTile: "tile", wallpaperCustom: "custom size", wallpaperScale: "image size", wallpaperPositionX: "horizontal position", wallpaperPositionY: "vertical position", resetWallpaperLayout: "reset layout",
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
   },
@@ -271,6 +278,7 @@ const messages = {
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
+    wallpaperLayout: "이미지 배치", wallpaperCover: "채우기", wallpaperContain: "맞춤", wallpaperStretch: "늘이기", wallpaperOriginal: "원본 크기", wallpaperTile: "바둑판식", wallpaperCustom: "사용자 지정", wallpaperScale: "이미지 크기", wallpaperPositionX: "가로 위치", wallpaperPositionY: "세로 위치", resetWallpaperLayout: "배치 초기화",
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
     snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
   },
@@ -334,8 +342,12 @@ function App() {
   const [backgroundImagePath, setBackgroundImagePath] = useState(() => "__TAURI_INTERNALS__" in window ? localStorage.getItem("mild-background-image") || "" : "");
   const [backgroundImageUrl, setBackgroundImageUrl] = useState("");
   const [backgroundImageError, setBackgroundImageError] = useState("");
-  const [acrylicOpacity, setAcrylicOpacity] = useState(() => storedBoundedNumber("mild-acrylic-opacity", 82, 48, 95));
+  const [acrylicOpacity, setAcrylicOpacity] = useState(() => storedBoundedNumber("mild-acrylic-opacity", 82, 0, 100));
   const [acrylicBlur, setAcrylicBlur] = useState(() => storedBoundedNumber("mild-acrylic-blur", 14, 0, 32));
+  const [wallpaperLayout, setWallpaperLayout] = useState<WallpaperLayout>(storedWallpaperLayout);
+  const [wallpaperScale, setWallpaperScale] = useState(() => storedBoundedNumber("mild-wallpaper-scale", 100, 25, 300));
+  const [wallpaperPositionX, setWallpaperPositionX] = useState(() => storedBoundedNumber("mild-wallpaper-position-x", 50, 0, 100));
+  const [wallpaperPositionY, setWallpaperPositionY] = useState(() => storedBoundedNumber("mild-wallpaper-position-y", 50, 0, 100));
   const [editorFont, setEditorFont] = useState<EditorFont>(() => (localStorage.getItem("mild-editor-font") as EditorFont) || "cascadia");
   const [systemFonts, setSystemFonts] = useState<EditorFontOption[]>([]);
   const [customFonts, setCustomFonts] = useState<EditorFontOption[]>(loadCustomFonts);
@@ -363,6 +375,13 @@ function App() {
   const fontOptions = useMemo(() => [...systemFonts, ...customFonts], [customFonts, systemFonts]);
   const selectedFont = fontOptions.find((font) => font.id === editorFont) || fontOptions[0] || knownEditorFonts.at(-1)!;
   const editorFontFamily = selectedFont.family;
+  const wallpaperSize = wallpaperLayout === "cover" ? "cover"
+    : wallpaperLayout === "contain" ? "contain"
+      : wallpaperLayout === "stretch" ? "100% 100%"
+        : wallpaperLayout === "original" ? "auto"
+          : `${wallpaperScale}% auto`;
+  const wallpaperRepeat = wallpaperLayout === "tile" ? "repeat" : "no-repeat";
+  const wallpaperPosition = `${wallpaperPositionX}% ${wallpaperPositionY}%`;
   const explorerFiles = useMemo(() => {
     const files = workspacePath
       ? [...savedFiles.map((saved) => tabs.find((tab) => fileKey(tab.filename) === fileKey(saved.filename)) || saved), ...tabs.filter((tab) => !savedFiles.some((saved) => fileKey(saved.filename) === fileKey(tab.filename)))]
@@ -467,6 +486,13 @@ function App() {
     localStorage.setItem("mild-acrylic-opacity", String(acrylicOpacity));
     localStorage.setItem("mild-acrylic-blur", String(acrylicBlur));
   }, [acrylicBlur, acrylicOpacity]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-wallpaper-layout", wallpaperLayout);
+    localStorage.setItem("mild-wallpaper-scale", String(wallpaperScale));
+    localStorage.setItem("mild-wallpaper-position-x", String(wallpaperPositionX));
+    localStorage.setItem("mild-wallpaper-position-y", String(wallpaperPositionY));
+  }, [wallpaperLayout, wallpaperPositionX, wallpaperPositionY, wallpaperScale]);
 
   useEffect(() => () => {
     if (browserBackgroundUrlRef.current) URL.revokeObjectURL(browserBackgroundUrlRef.current);
@@ -1787,6 +1813,9 @@ function App() {
       data-wallpaper={backgroundImageUrl ? "image" : undefined}
       style={{
         "--wallpaper-image": backgroundImageUrl ? `url(${backgroundImageUrl})` : "none",
+        "--wallpaper-size": wallpaperSize,
+        "--wallpaper-repeat": wallpaperRepeat,
+        "--wallpaper-position": wallpaperPosition,
         "--acrylic-opacity": `${acrylicOpacity}%`,
         "--acrylic-blur": `${acrylicBlur}px`,
       } as CSSProperties}
@@ -2079,11 +2108,16 @@ function App() {
                 <p className="settings-help">{t("backgroundHelp")}</p>
                 <div className="wallpaper-picker">
                   <input ref={backgroundImageInputRef} className="wallpaper-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" onChange={chooseBrowserBackgroundImage} tabIndex={-1} />
-                  <div className={`wallpaper-preview ${backgroundImageUrl ? "has-image" : ""}`} style={backgroundImageUrl ? { backgroundImage: `url(${backgroundImageUrl})` } : undefined}><span>{backgroundImageUrl ? backgroundImagePath.split(/[\\/]/).at(-1) : t("noBackground")}</span></div>
+                  <div className={`wallpaper-preview ${backgroundImageUrl ? "has-image" : ""}`} style={backgroundImageUrl ? { backgroundImage: `url(${backgroundImageUrl})`, backgroundPosition: wallpaperPosition, backgroundRepeat: wallpaperRepeat, backgroundSize: wallpaperSize } : undefined}><span>{backgroundImageUrl ? backgroundImagePath.split(/[\\/]/).at(-1) : t("noBackground")}</span></div>
                   <div className="font-actions"><button className="subtle-button" onClick={() => void chooseBackgroundImage()}>{t("chooseBackground")}</button>{backgroundImagePath && <button className="danger-button" onClick={clearBackgroundImage}>{t("clearBackground")}</button>}</div>
                 </div>
                 {backgroundImageError && <p className="wallpaper-error">{backgroundImageError}</p>}
-                <label className="appearance-range"><span>{t("acrylicOpacity")}</span><input type="range" min="48" max="95" value={acrylicOpacity} onChange={(event) => setAcrylicOpacity(Number(event.target.value))} /><output>{acrylicOpacity}%</output></label>
+                <label className="wallpaper-layout-select"><span>{t("wallpaperLayout")}</span><select value={wallpaperLayout} onChange={(event) => setWallpaperLayout(event.target.value as WallpaperLayout)}><option value="cover">{t("wallpaperCover")}</option><option value="contain">{t("wallpaperContain")}</option><option value="stretch">{t("wallpaperStretch")}</option><option value="original">{t("wallpaperOriginal")}</option><option value="tile">{t("wallpaperTile")}</option><option value="custom">{t("wallpaperCustom")}</option></select></label>
+                {(wallpaperLayout === "custom" || wallpaperLayout === "tile") && <label className="appearance-range"><span>{t("wallpaperScale")}</span><input type="range" min="25" max="300" step="5" value={wallpaperScale} onChange={(event) => setWallpaperScale(Number(event.target.value))} /><output>{wallpaperScale}%</output></label>}
+                <label className="appearance-range"><span>{t("wallpaperPositionX")}</span><input type="range" min="0" max="100" value={wallpaperPositionX} onChange={(event) => setWallpaperPositionX(Number(event.target.value))} /><output>{wallpaperPositionX}%</output></label>
+                <label className="appearance-range"><span>{t("wallpaperPositionY")}</span><input type="range" min="0" max="100" value={wallpaperPositionY} onChange={(event) => setWallpaperPositionY(Number(event.target.value))} /><output>{wallpaperPositionY}%</output></label>
+                <div className="wallpaper-layout-actions"><button className="subtle-button" onClick={() => { setWallpaperLayout("cover"); setWallpaperScale(100); setWallpaperPositionX(50); setWallpaperPositionY(50); }}>{t("resetWallpaperLayout")}</button></div>
+                <label className="appearance-range"><span>{t("acrylicOpacity")}</span><input type="range" min="0" max="100" value={acrylicOpacity} onChange={(event) => setAcrylicOpacity(Number(event.target.value))} /><output>{acrylicOpacity}%</output></label>
                 <label className="appearance-range"><span>{t("acrylicBlur")}</span><input type="range" min="0" max="32" value={acrylicBlur} onChange={(event) => setAcrylicBlur(Number(event.target.value))} /><output>{acrylicBlur}px</output></label>
               </div>
               <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
