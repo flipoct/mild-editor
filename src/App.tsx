@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { invoke } from "@tauri-apps/api/core";
@@ -97,6 +97,7 @@ type ExplorerMenu = { file: ProblemTab; x: number; y: number };
 type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
 
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
+type BackgroundImageFile = { bytes: number[]; mime: string };
 
 const templates: Record<Language, string> = {
   cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    \${cursor}int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
@@ -116,6 +117,12 @@ const knownEditorFonts: EditorFontOption[] = [
 ];
 const loadCustomFonts = (): EditorFontOption[] => {
   try { return JSON.parse(localStorage.getItem("mild-custom-fonts") || "[]"); } catch { return []; }
+};
+const storedBoundedNumber = (key: string, fallback: number, minimum: number, maximum: number) => {
+  const stored = localStorage.getItem(key);
+  if (stored === null) return fallback;
+  const value = Number(stored);
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
 };
 
 const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
@@ -232,7 +239,7 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.2.2";
 
 const messages = {
   en: {
@@ -247,6 +254,7 @@ const messages = {
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", addFont: "add font file", remove: "remove",
+    backgroundImage: "background image", chooseBackground: "choose image", clearBackground: "remove image", acrylicOpacity: "panel opacity", acrylicBlur: "background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "no image selected",
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
   },
@@ -262,6 +270,7 @@ const messages = {
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", addFont: "폰트 파일 추가", remove: "제거",
+    backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
     snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
   },
@@ -322,6 +331,11 @@ function App() {
   const [atcoderLibraryPath, setAtcoderLibraryPath] = useState(() => localStorage.getItem("mild-atcoder-library-path") || "");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
+  const [backgroundImagePath, setBackgroundImagePath] = useState(() => "__TAURI_INTERNALS__" in window ? localStorage.getItem("mild-background-image") || "" : "");
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState("");
+  const [backgroundImageError, setBackgroundImageError] = useState("");
+  const [acrylicOpacity, setAcrylicOpacity] = useState(() => storedBoundedNumber("mild-acrylic-opacity", 82, 48, 95));
+  const [acrylicBlur, setAcrylicBlur] = useState(() => storedBoundedNumber("mild-acrylic-blur", 14, 0, 32));
   const [editorFont, setEditorFont] = useState<EditorFont>(() => (localStorage.getItem("mild-editor-font") as EditorFont) || "cascadia");
   const [systemFonts, setSystemFonts] = useState<EditorFontOption[]>([]);
   const [customFonts, setCustomFonts] = useState<EditorFontOption[]>(loadCustomFonts);
@@ -331,6 +345,8 @@ function App() {
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const templateEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const snippetEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const backgroundImageInputRef = useRef<HTMLInputElement | null>(null);
+  const browserBackgroundUrlRef = useRef("");
   const pendingTemplateCursorRef = useRef<{ tabId: string; language: Language; offset: number } | null>(null);
   const runRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
@@ -418,6 +434,43 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-editor-font", editorFont);
   }, [editorFont]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-background-image", backgroundImagePath);
+    setBackgroundImageError("");
+    if (!backgroundImagePath) {
+      setBackgroundImageUrl("");
+      return;
+    }
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    let objectUrl = "";
+    void invoke<BackgroundImageFile>("read_image_file", { request: { path: backgroundImagePath } })
+      .then((image) => {
+        objectUrl = URL.createObjectURL(new Blob([new Uint8Array(image.bytes)], { type: image.mime }));
+        if (cancelled) URL.revokeObjectURL(objectUrl);
+        else setBackgroundImageUrl(objectUrl);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setBackgroundImageUrl("");
+          setBackgroundImageError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [backgroundImagePath]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-acrylic-opacity", String(acrylicOpacity));
+    localStorage.setItem("mild-acrylic-blur", String(acrylicBlur));
+  }, [acrylicBlur, acrylicOpacity]);
+
+  useEffect(() => () => {
+    if (browserBackgroundUrlRef.current) URL.revokeObjectURL(browserBackgroundUrlRef.current);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("mild-explorer-sort", explorerSort);
@@ -970,6 +1023,7 @@ function App() {
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    editor.updateOptions({ stickyScroll: { enabled: false } });
     diagnosticDecorationsRef.current = editor.createDecorationsCollection();
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runRef.current());
     if (language === "cpp") void connectClangd(editor, monaco);
@@ -1107,6 +1161,46 @@ function App() {
       localStorage.setItem("mild-custom-fonts", JSON.stringify(next));
       setEditorFont(id);
     } catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const chooseBackgroundImage = async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      backgroundImageInputRef.current?.click();
+      return;
+    }
+    try {
+      const path = await open({ multiple: false, directory: false, title: t("chooseBackground"), filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }] });
+      if (!path || Array.isArray(path)) return;
+      setBackgroundImagePath(path);
+    } catch (error) {
+      setBackgroundImageError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const chooseBrowserBackgroundImage = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 40 * 1024 * 1024) {
+      setBackgroundImageError("Background images must be 40 MB or smaller.");
+      return;
+    }
+    if (browserBackgroundUrlRef.current) URL.revokeObjectURL(browserBackgroundUrlRef.current);
+    const objectUrl = URL.createObjectURL(file);
+    browserBackgroundUrlRef.current = objectUrl;
+    setBackgroundImageError("");
+    setBackgroundImagePath(file.name);
+    setBackgroundImageUrl(objectUrl);
+  };
+
+  const clearBackgroundImage = () => {
+    if (browserBackgroundUrlRef.current) {
+      URL.revokeObjectURL(browserBackgroundUrlRef.current);
+      browserBackgroundUrlRef.current = "";
+    }
+    setBackgroundImageUrl("");
+    setBackgroundImagePath("");
+    setBackgroundImageError("");
   };
 
   const removeEditorFont = () => {
@@ -1688,7 +1782,15 @@ function App() {
   }, [running, tests]);
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      data-wallpaper={backgroundImageUrl ? "image" : undefined}
+      style={{
+        "--wallpaper-image": backgroundImageUrl ? `url(${backgroundImageUrl})` : "none",
+        "--acrylic-opacity": `${acrylicOpacity}%`,
+        "--acrylic-blur": `${acrylicBlur}px`,
+      } as CSSProperties}
+    >
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo" aria-hidden="true">m</span>
@@ -1809,10 +1911,12 @@ function App() {
               fontFamily: editorFontFamily,
               fontSize: 14,
               lineHeight: 22,
+              editContext: false,
+              disableLayerHinting: true,
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
               padding: { top: 18, bottom: 18 },
-              renderLineHighlight: "line",
+              renderLineHighlight: "none",
               overviewRulerBorder: false,
               hideCursorInOverviewRuler: true,
               quickSuggestions: { other: true, comments: false, strings: false },
@@ -1970,6 +2074,18 @@ function App() {
                 <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord</strong><small>calm arctic blue</small></button>
                 <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>electric city blue</small></button>
               </div></div>
+              <div className="appearance-group wallpaper-settings">
+                <span>{t("backgroundImage")}</span>
+                <p className="settings-help">{t("backgroundHelp")}</p>
+                <div className="wallpaper-picker">
+                  <input ref={backgroundImageInputRef} className="wallpaper-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" onChange={chooseBrowserBackgroundImage} tabIndex={-1} />
+                  <div className={`wallpaper-preview ${backgroundImageUrl ? "has-image" : ""}`} style={backgroundImageUrl ? { backgroundImage: `url(${backgroundImageUrl})` } : undefined}><span>{backgroundImageUrl ? backgroundImagePath.split(/[\\/]/).at(-1) : t("noBackground")}</span></div>
+                  <div className="font-actions"><button className="subtle-button" onClick={() => void chooseBackgroundImage()}>{t("chooseBackground")}</button>{backgroundImagePath && <button className="danger-button" onClick={clearBackgroundImage}>{t("clearBackground")}</button>}</div>
+                </div>
+                {backgroundImageError && <p className="wallpaper-error">{backgroundImageError}</p>}
+                <label className="appearance-range"><span>{t("acrylicOpacity")}</span><input type="range" min="48" max="95" value={acrylicOpacity} onChange={(event) => setAcrylicOpacity(Number(event.target.value))} /><output>{acrylicOpacity}%</output></label>
+                <label className="appearance-range"><span>{t("acrylicBlur")}</span><input type="range" min="0" max="32" value={acrylicBlur} onChange={(event) => setAcrylicBlur(Number(event.target.value))} /><output>{acrylicBlur}px</output></label>
+              </div>
               <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
             </div> : settingsPage === "template" ? <>
               <div className="template-tabs" role="tablist" aria-label="Template language">

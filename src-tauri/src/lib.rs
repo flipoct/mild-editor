@@ -169,6 +169,17 @@ struct ReadFontFileRequest {
 }
 
 #[derive(Deserialize)]
+struct ReadImageFileRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct ReadImageFileResponse {
+    bytes: Vec<u8>,
+    mime: String,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveWorkspaceTestsRequest {
     folder_path: String,
@@ -548,6 +559,26 @@ fn read_font_file(request: ReadFontFileRequest) -> Result<Vec<u8>, String> {
     let metadata = fs::metadata(&path).map_err(|error| format!("Could not read font file: {error}"))?;
     if metadata.len() > 25 * 1024 * 1024 { return Err("Font files must be 25 MB or smaller.".into()); }
     fs::read(path).map_err(|error| format!("Could not read font file: {error}"))
+}
+
+#[tauri::command]
+fn read_image_file(request: ReadImageFileRequest) -> Result<ReadImageFileResponse, String> {
+    let path = std::path::PathBuf::from(request.path);
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => return Err("Select a PNG, JPG, WEBP, GIF, or BMP image.".into()),
+    };
+    let metadata = fs::metadata(&path).map_err(|error| format!("Could not read background image: {error}"))?;
+    if metadata.len() > 40 * 1024 * 1024 {
+        return Err("Background images must be 40 MB or smaller.".into());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("Could not read background image: {error}"))?;
+    Ok(ReadImageFileResponse { bytes, mime: mime.into() })
 }
 
 #[tauri::command]
@@ -1273,7 +1304,7 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/1.2.1")
+            .user_agent("MildEditor/1.2.2")
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1409,7 +1440,7 @@ fn fetch_atcoder_submissions(
 
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.2.1")
+        .user_agent("MildEditor/1.2.2")
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;
@@ -1716,6 +1747,7 @@ pub fn run() {
             stop_run,
             close_app,
             read_font_file,
+            read_image_file,
             save_workspace_tests,
             update_workspace_source,
             save_problem,
@@ -1875,5 +1907,17 @@ mod tests {
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].input, "5\n3 2 4");
         assert_eq!(tests[0].expected, "3\n11");
+    }
+
+    #[test]
+    fn reads_supported_background_images() {
+        let image = tempfile::Builder::new().suffix(".png").tempfile().expect("create image");
+        fs::write(image.path(), [0x89, b'P', b'N', b'G']).expect("write image");
+        let loaded = read_image_file(ReadImageFileRequest { path: image.path().to_string_lossy().into_owned() }).expect("read image");
+        assert_eq!(loaded.mime, "image/png");
+        assert_eq!(loaded.bytes, [0x89, b'P', b'N', b'G']);
+
+        let text = tempfile::Builder::new().suffix(".txt").tempfile().expect("create text");
+        assert!(read_image_file(ReadImageFileRequest { path: text.path().to_string_lossy().into_owned() }).is_err());
     }
 }

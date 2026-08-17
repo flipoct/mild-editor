@@ -225,6 +225,17 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .appearance-group label { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 10px; }
 .appearance-group select { height: 31px; border: 1px solid #454640; border-radius: 6px; background: #232420; color: #cac7bd; padding: 0 9px; font-size: 11px; text-transform: none; letter-spacing: 0; }
 .appearance-group pre { margin: 0; padding: 13px; border: 1px solid #454640; border-radius: 7px; background: #232420; color: #d1cec4; font-size: 13px; letter-spacing: 0; text-transform: none; }
+.wallpaper-settings > .settings-help { margin: -2px 0 2px; text-transform: none; letter-spacing: 0; }
+.wallpaper-picker { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 12px; }
+.wallpaper-file-input { display: none; }
+.wallpaper-preview { width: 150px; height: 78px; display: grid; place-items: center; overflow: hidden; border: 1px dashed var(--border); border-radius: 9px; background: var(--field); color: var(--muted); background-position: center; background-size: cover; text-align: center; text-transform: none; letter-spacing: 0; }
+.wallpaper-preview.has-image { align-items: end; border-style: solid; }
+.wallpaper-preview span { max-width: 100%; padding: 5px 7px; overflow: hidden; background: color-mix(in srgb, var(--bg-0) 76%, transparent); color: var(--text); font: 8px "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; backdrop-filter: blur(8px); }
+.wallpaper-picker .font-actions { align-self: end; }
+.wallpaper-error { margin: 0; color: var(--danger); font-size: 9px; line-height: 1.4; text-transform: none; letter-spacing: 0; }
+.appearance-group label.appearance-range { grid-template-columns: 110px minmax(0, 1fr) 42px; }
+.appearance-range input[type="range"] { width: 100%; height: 4px; padding: 0; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--accent) 34%, var(--field)); accent-color: var(--accent); }
+.appearance-range output { color: var(--accent); font: 9px "Cascadia Code", Consolas, monospace; text-align: right; letter-spacing: 0; text-transform: none; }
 .font-actions { display: flex; gap: 7px; }
 .font-actions .danger-button { height: 30px; }
 .snippet-settings { min-height: 0; flex: 1; display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 12px; margin-top: 14px; }
@@ -340,6 +351,91 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .error-close { width: 25px; height: 25px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; }
 .error-close:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .error-confirm { height: 29px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--danger) 16%, var(--bg-3)); color: var(--danger); cursor: pointer; }
+
+/* Wallpaper mode keeps every surface in the selected theme while allowing the image through. */
+:root[data-theme] .app-shell[data-wallpaper] {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--bg-0);
+  background-image: none;
+}
+.app-shell[data-wallpaper="image"]::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -36px;
+  pointer-events: none;
+  background-image: linear-gradient(color-mix(in srgb, var(--bg-0) 12%, transparent), color-mix(in srgb, var(--bg-0) 12%, transparent)), var(--wallpaper-image);
+  background-position: center;
+  background-size: cover;
+  filter: blur(var(--acrylic-blur)) saturate(125%);
+}
+.app-shell[data-wallpaper="image"] > .window-titlebar,
+.app-shell[data-wallpaper="image"] > .problem-tabs,
+.app-shell[data-wallpaper="image"] > .workspace,
+.app-shell[data-wallpaper="image"] > .statusbar {
+  position: relative;
+  z-index: 1;
+}
+.app-shell[data-wallpaper] .window-titlebar,
+.app-shell[data-wallpaper] .problem-tabs,
+.app-shell[data-wallpaper] .statusbar,
+.app-shell[data-wallpaper] .test-panel,
+.app-shell[data-wallpaper] .file-explorer,
+.app-shell[data-wallpaper] .editor-area {
+  background: color-mix(in srgb, var(--bg-1) var(--acrylic-opacity), transparent);
+}
+.app-shell[data-wallpaper] .editor-area {
+  background: color-mix(in srgb, var(--bg-editor) var(--acrylic-opacity), transparent);
+}
+.app-shell[data-wallpaper] .panel-resizer { background: color-mix(in srgb, var(--bg-1) var(--acrylic-opacity), transparent); }
+.app-shell[data-wallpaper] .problem-tab,
+.app-shell[data-wallpaper] .explorer-folder,
+.app-shell[data-wallpaper] .explorer-controls,
+.app-shell[data-wallpaper] .test-actions,
+.app-shell[data-wallpaper] .test-card.open,
+.app-shell[data-wallpaper] .snippet-list,
+.app-shell[data-wallpaper] .lsp-state {
+  background: color-mix(in srgb, var(--bg-2) var(--acrylic-opacity), transparent);
+}
+.app-shell[data-wallpaper] .problem-tab.active,
+.app-shell[data-wallpaper] .explorer-file.active,
+.app-shell[data-wallpaper] .snippet-item.active {
+  background: color-mix(in srgb, var(--bg-3) var(--acrylic-opacity), transparent);
+}
+.app-shell[data-wallpaper] textarea,
+.app-shell[data-wallpaper] input,
+.app-shell[data-wallpaper] select,
+.app-shell[data-wallpaper] .template-monaco,
+.app-shell[data-wallpaper] .snippet-monaco,
+.app-shell[data-wallpaper] .appearance-group pre {
+  background: color-mix(in srgb, var(--field) var(--acrylic-opacity), transparent);
+}
+.app-shell[data-wallpaper] .settings-dialog,
+.app-shell[data-wallpaper] .atcoder-dialog,
+.app-shell[data-wallpaper] .confirm-dialog,
+.app-shell[data-wallpaper] .explorer-context-menu,
+.app-shell[data-wallpaper] .error-notice {
+  background: color-mix(in srgb, var(--bg-2) var(--acrylic-opacity), transparent);
+  backdrop-filter: blur(var(--acrylic-blur)) saturate(130%);
+}
+.app-shell[data-wallpaper] .monaco-editor,
+.app-shell[data-wallpaper] .monaco-editor-background,
+.app-shell[data-wallpaper] .monaco-editor .margin,
+.app-shell[data-wallpaper] .monaco-editor .monaco-scrollable-element {
+  background-color: transparent !important;
+}
+.app-shell[data-wallpaper] .monaco-editor .native-edit-context,
+.app-shell[data-wallpaper] .monaco-editor .ime-text-area,
+.app-shell[data-wallpaper] .monaco-editor .textAreaCover {
+  background: transparent !important;
+}
+.editor-area .monaco-editor .sticky-widget { display: none !important; }
+
+@media (max-width: 620px) {
+  .wallpaper-picker { grid-template-columns: 1fr; }
+  .wallpaper-preview { width: 100%; }
+}
 .error-confirm:hover { filter: brightness(1.1); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
