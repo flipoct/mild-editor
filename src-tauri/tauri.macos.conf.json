@@ -1,4 +1,27 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "Mild Editor",
+        "width": 1280,
+        "height": 800,
+        "maximized": true,
+        "minWidth": 800,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true,
+        "decorations": true,
+        "shadow": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 13,
+          "y": 11
+        }
+      }
+    ]
+  },
   "bundle": {
     "targets": ["dmg"]
   }
