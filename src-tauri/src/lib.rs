@@ -1409,7 +1409,7 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/1.2.3")
+            .user_agent("MildEditor/1.2.4")
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1545,7 +1545,7 @@ fn fetch_atcoder_submissions(
 
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.2.3")
+        .user_agent("MildEditor/1.2.4")
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;

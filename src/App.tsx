@@ -226,7 +226,7 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.2.3";
+const APP_VERSION = "1.2.4";
 
 const messages = {
   en: {
