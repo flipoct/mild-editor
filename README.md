@@ -6,6 +6,8 @@ A focused competitive-programming editor for C++ and Python 3. Import problems a
 
 [Download the latest Mild Editor release](https://github.com/flipoct/mild-editor/releases/latest) for Windows, macOS, or Linux.
 
+Windows releases include both an installer and a portable executable. The portable build has the same editor features, requires no installation, and can display the theme-aware runtime icon without the installed app identity overriding it.
+
 On macOS, Mild Editor is ad-hoc signed for direct distribution. On first launch, you may need to approve it in **System Settings → Privacy & Security** because the release is not notarized with a paid Apple Developer account.
 
 ## Quick development preview

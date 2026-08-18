@@ -71,6 +71,18 @@ jobs:
           releaseAssetNamePattern: Mild-Editor_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
 
+      - name: Upload Windows portable executable
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $asset = "Mild-Editor_${version}_windows_x64-portable.exe"
+          Copy-Item -LiteralPath "src-tauri/target/release/mild-editor.exe" -Destination $asset
+          gh release upload $env:RELEASE_TAG $asset --clobber
+
       - name: Verify macOS app signature
         if: startsWith(matrix.platform, 'macos')
         run: |
