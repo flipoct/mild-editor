@@ -6,9 +6,12 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ClangdClient, type ClangdInfo } from "./clangd";
+import { isMac, modLabel } from "./platform";
 
 type Language = "cpp" | "python";
-type Status = "idle" | "running" | "passed" | "failed" | "error";
+/** Competitive-programming verdicts. `ac`/`wa` come from comparing streams, the rest from the runner. */
+type Status = "idle" | "running" | "ac" | "wa" | "tle" | "re" | "ce" | "stopped";
+type Verdict = "ok" | "ce" | "re" | "tle" | "limit" | "stopped";
 type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 type UiLocale = "en" | "ko";
@@ -35,6 +38,7 @@ type NativeRunResult = {
   stdout: string;
   stderr: string;
   timeMs: number;
+  verdict: Verdict;
 };
 
 type TestResultEvent = { runId: string; index: number; result: NativeRunResult };
@@ -100,6 +104,18 @@ type WorkspaceFileResult = { filename: string; title: string; language: Language
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
 type BackgroundImageFile = { bytes: number[]; mime: string };
 
+type CompanionProblem = {
+  name: string;
+  group?: string;
+  url: string;
+  tests: Array<{ input: string; output: string }>;
+  timeLimit?: number;
+  memoryLimit?: number;
+  batch?: { id: string; size: number };
+};
+type CompanionStatus = { listening: boolean; port: number | null };
+type DiffRow = { line: number; expected: string | null; actual: string | null; same: boolean; whitespaceOnly: boolean };
+
 const templates: Record<Language, string> = {
   cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    \${cursor}int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
   python: `import sys\n\n\ndef solve():\n    \${cursor}a, b = map(int, sys.stdin.readline().split())\n    print(a + b)\n\n\nif __name__ == "__main__":\n    solve()\n`,
@@ -111,11 +127,20 @@ const initialTests: TestCase[] = [
 ];
 
 const knownEditorFonts: EditorFontOption[] = [
-  { id: "cascadia", label: "Cascadia Code", family: "'Cascadia Code', Consolas, monospace" },
-  { id: "jetbrains", label: "JetBrains Mono", family: "'JetBrains Mono', monospace" },
-  { id: "fira", label: "Fira Code", family: "'Fira Code', monospace" },
-  { id: "consolas", label: "Consolas", family: "Consolas, monospace" },
+  ...(isMac ? [
+    { id: "sfmono", label: "SF Mono", family: "'SF Mono', ui-monospace, SFMono-Regular, monospace" },
+    { id: "menlo", label: "Menlo", family: "Menlo, ui-monospace, monospace" },
+    { id: "monaco", label: "Monaco", family: "Monaco, ui-monospace, monospace" },
+  ] : []),
+  { id: "cascadia", label: "Cascadia Code", family: "'Cascadia Code', Consolas, ui-monospace, monospace" },
+  { id: "jetbrains", label: "JetBrains Mono", family: "'JetBrains Mono', ui-monospace, monospace" },
+  { id: "fira", label: "Fira Code", family: "'Fira Code', ui-monospace, monospace" },
+  ...(isMac ? [] : [{ id: "consolas", label: "Consolas", family: "Consolas, monospace" }]),
 ];
+/** Cascadia and Consolas do not exist on macOS, so the stored Windows default is not a sensible starting point there. */
+const defaultEditorFontId = isMac ? "sfmono" : "cascadia";
+const alwaysInstalledFontIds = isMac ? ["sfmono", "menlo", "monaco"] : ["consolas"];
+const fallbackEditorFont = knownEditorFonts.find((font) => font.id === defaultEditorFontId) || knownEditorFonts[0];
 const loadCustomFonts = (): EditorFontOption[] => {
   try { return JSON.parse(localStorage.getItem("mild-custom-fonts") || "[]"); } catch { return []; }
 };
@@ -132,6 +157,36 @@ const storedWallpaperLayout = (): WallpaperLayout => {
 };
 
 const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
+const verdictLabels: Record<Status, string> = {
+  idle: "", running: "…", ac: "AC", wa: "WA", tle: "TLE", re: "RE", ce: "CE", stopped: "—",
+};
+/** Turns one runner result into a verdict. Only a clean exit can still be judged against the expected output. */
+const judge = (result: NativeRunResult, expected: string): Status => {
+  if (result.verdict === "limit") return "re";
+  if (result.verdict !== "ok") return result.verdict;
+  return normalize(result.stdout) === normalize(expected) ? "ac" : "wa";
+};
+const finalVerdicts: Status[] = ["ac", "wa", "tle", "re", "ce", "stopped"];
+const diffLines = (expected: string, actual: string): DiffRow[] => {
+  const left = normalize(expected).split("\n");
+  const right = normalize(actual).split("\n");
+  const rows: DiffRow[] = [];
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const expectedLine = index < left.length ? left[index] : null;
+    const actualLine = index < right.length ? right[index] : null;
+    const same = expectedLine === actualLine;
+    rows.push({
+      line: index + 1,
+      expected: expectedLine,
+      actual: actualLine,
+      same,
+      // The classic contest trap: identical tokens, different spacing.
+      whitespaceOnly: !same && (expectedLine ?? "").replace(/\s+/g, "") === (actualLine ?? "").replace(/\s+/g, ""),
+    });
+  }
+  return rows;
+};
+const visibleWhitespace = (value: string) => value.replace(/ /g, "·").replace(/\t/g, "⇥");
 const combinedRunOutput = (output: string, error: string) => error
   ? `${output}${output && !output.endsWith("\n") ? "\n" : ""}${error.replace(/^\s+/, "")}`
   : output;
@@ -174,6 +229,29 @@ const mexFilename = (requested: string, occupied: Set<string>) => {
     const candidate = `${base} (${number})${extension}`;
     if (!occupied.has(fileKey(candidate))) return candidate;
   }
+};
+const companionSource = (url: string): ProblemSource =>
+  /atcoder\.jp/i.test(url) ? "atcoder" : /codeforces\.com/i.test(url) ? "codeforces" : /doj\.kr/i.test(url) ? "doj" : "other";
+/** `"A. Theatre Square"` and `"A - Sum"` both become `A.cpp`, matching what the URL importer produces. */
+const companionFilename = (problem: CompanionProblem, source: ProblemSource) => {
+  if (source === "doj") {
+    const problemId = /\/problems\/(\d+)/.exec(problem.url)?.[1];
+    if (problemId) return `${problemId}.cpp`;
+  }
+  const letter = /^([A-Za-z][0-9]?)\s*[.)\-–—]/.exec(problem.name.trim())?.[1];
+  if (letter) return `${letter.toUpperCase()}.cpp`;
+  const slug = problem.name.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `${slug || "problem"}.cpp`;
+};
+const companionToImported = (problem: CompanionProblem): ImportedAtCoderProblem => {
+  const source = companionSource(problem.url);
+  return {
+    title: problem.name,
+    suggestedFilename: companionFilename(problem, source),
+    tests: problem.tests.map((test, index) => ({ name: `test ${index + 1}`, input: test.input, expected: test.output })),
+    source,
+    sourceUrl: problem.url,
+  };
 };
 const loadSnippets = (): CodeSnippet[] => {
   try { return JSON.parse(localStorage.getItem("mild-snippets") || "[]"); } catch { return []; }
@@ -264,6 +342,10 @@ const messages = {
     wallpaperLayout: "image layout", wallpaperCover: "fill", wallpaperContain: "fit", wallpaperStretch: "stretch", wallpaperOriginal: "original size", wallpaperTile: "tile", wallpaperCustom: "custom size", wallpaperScale: "image size", wallpaperPositionX: "horizontal position", wallpaperPositionY: "vertical position", resetWallpaperLayout: "reset layout",
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
+    companion: "Competitive Companion", companionEnable: "listen for problems", companionPort: "port",
+    companionHelp: "Install the Competitive Companion browser extension, open a problem, and press its button. Mild Editor creates the file and sample tests automatically. Contest parses arrive as one batch.",
+    companionListening: "listening", companionOff: "off", companionPortInUse: "port unavailable",
+    diff: "diff", showDiff: "compare", showRaw: "raw output", diffExpected: "expected", diffActual: "output", diffWhitespace: "whitespace only",
   },
   ko: {
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
@@ -281,6 +363,10 @@ const messages = {
     wallpaperLayout: "이미지 배치", wallpaperCover: "채우기", wallpaperContain: "맞춤", wallpaperStretch: "늘이기", wallpaperOriginal: "원본 크기", wallpaperTile: "바둑판식", wallpaperCustom: "사용자 지정", wallpaperScale: "이미지 크기", wallpaperPositionX: "가로 위치", wallpaperPositionY: "세로 위치", resetWallpaperLayout: "배치 초기화",
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
     snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
+    companion: "Competitive Companion", companionEnable: "문제 수신 대기", companionPort: "포트",
+    companionHelp: "Competitive Companion 브라우저 확장을 설치하고 문제 페이지에서 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 대회 페이지에서는 문제 전체가 한 번에 들어옵니다.",
+    companionListening: "수신 중", companionOff: "꺼짐", companionPortInUse: "포트를 사용할 수 없음",
+    diff: "비교", showDiff: "비교 보기", showRaw: "원본 출력", diffExpected: "예상", diffActual: "출력", diffWhitespace: "공백만 다름",
   },
 } as const;
 
@@ -348,7 +434,7 @@ function App() {
   const [wallpaperScale, setWallpaperScale] = useState(() => storedBoundedNumber("mild-wallpaper-scale", 100, 25, 300));
   const [wallpaperPositionX, setWallpaperPositionX] = useState(() => storedBoundedNumber("mild-wallpaper-position-x", 50, 0, 100));
   const [wallpaperPositionY, setWallpaperPositionY] = useState(() => storedBoundedNumber("mild-wallpaper-position-y", 50, 0, 100));
-  const [editorFont, setEditorFont] = useState<EditorFont>(() => (localStorage.getItem("mild-editor-font") as EditorFont) || "cascadia");
+  const [editorFont, setEditorFont] = useState<EditorFont>(() => (localStorage.getItem("mild-editor-font") as EditorFont) || defaultEditorFontId);
   const [systemFonts, setSystemFonts] = useState<EditorFontOption[]>([]);
   const [customFonts, setCustomFonts] = useState<EditorFontOption[]>(loadCustomFonts);
   const [snippets, setSnippets] = useState<CodeSnippet[]>(loadSnippets);
@@ -368,12 +454,21 @@ function App() {
   const [clangdPath, setClangdPath] = useState(() => localStorage.getItem("mild-clangd-path") || "");
   const [clangdStatus, setClangdStatus] = useState<"idle" | "connecting" | "ready" | "missing" | "error">("idle");
   const [clangdInfo, setClangdInfo] = useState<ClangdInfo | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [explorerVisible, setExplorerVisible] = useState(() => localStorage.getItem("mild-explorer-visible") !== "0");
+  const [testPanelVisible, setTestPanelVisible] = useState(() => localStorage.getItem("mild-test-panel-visible") !== "0");
+  const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
+  const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
+  const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
+  const [companionError, setCompanionError] = useState("");
+  const [rawOutputTests, setRawOutputTests] = useState<number[]>([]);
+  const companionBatchRef = useRef<{ id: string; size: number; problems: ImportedAtCoderProblem[]; timer: number } | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
   const t = (key: keyof typeof messages.en) => messages[uiLocale][key];
   const monacoTheme = `mild-${uiTheme}`;
   const fontOptions = useMemo(() => [...systemFonts, ...customFonts], [customFonts, systemFonts]);
-  const selectedFont = fontOptions.find((font) => font.id === editorFont) || fontOptions[0] || knownEditorFonts.at(-1)!;
+  const selectedFont = fontOptions.find((font) => font.id === editorFont) || fontOptions[0] || fallbackEditorFont;
   const editorFontFamily = selectedFont.family;
   const wallpaperSize = wallpaperLayout === "cover" ? "cover"
     : wallpaperLayout === "contain" ? "contain"
@@ -436,6 +531,58 @@ function App() {
     document.documentElement.dataset.theme = uiTheme;
     localStorage.setItem("mild-ui-theme", uiTheme);
   }, [uiTheme]);
+
+  // Single hook every macOS-only rule in styles.css keys off.
+  useEffect(() => {
+    document.documentElement.dataset.platform = isMac ? "mac" : "other";
+  }, []);
+
+  // macOS slides the traffic lights away in fullscreen, so the space reserved for them has to go with it.
+  useEffect(() => {
+    if (!isMac || !("__TAURI_INTERNALS__" in window)) return;
+    const appWindow = getCurrentWindow();
+    const sync = () => void appWindow.isFullscreen().then(setFullscreen).catch(() => undefined);
+    let unlisten: (() => void) | undefined;
+    sync();
+    void appWindow.onResized(sync).then((stopListening) => { unlisten = stopListening; });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.fullscreen = fullscreen ? "true" : "false";
+  }, [fullscreen]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-explorer-visible", explorerVisible ? "1" : "0");
+  }, [explorerVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-test-panel-visible", testPanelVisible ? "1" : "0");
+  }, [testPanelVisible]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    localStorage.setItem("mild-companion-enabled", companionEnabled ? "1" : "0");
+    localStorage.setItem("mild-companion-port", String(companionPort));
+    let cancelled = false;
+    const apply = (status: CompanionStatus) => {
+      if (cancelled) return;
+      setCompanionStatus(status);
+      setCompanionError("");
+    };
+    if (!companionEnabled) {
+      void invoke<CompanionStatus>("stop_companion").then(apply).catch(() => undefined);
+    } else {
+      void invoke<CompanionStatus>("start_companion", { port: companionPort })
+        .then(apply)
+        .catch((error) => {
+          if (cancelled) return;
+          setCompanionStatus({ listening: false, port: null });
+          setCompanionError(error instanceof Error ? error.message : String(error));
+        });
+    }
+    return () => { cancelled = true; };
+  }, [companionEnabled, companionPort]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -530,11 +677,14 @@ function App() {
     context.font = "72px monospace";
     const baseline = context.measureText(sample).width;
     const installed = knownEditorFonts.filter((font) => {
+      // The generic `monospace` baseline is Consolas on Windows and Menlo on macOS, so the
+      // stock face of each platform measures identically to it and has to be kept explicitly.
+      if (alwaysInstalledFontIds.includes(font.id)) return true;
       const family = font.label.replace(/'/g, "");
       context.font = `72px '${family}', monospace`;
-      return Math.abs(context.measureText(sample).width - baseline) > 0.1 || family.toLowerCase() === "consolas";
+      return Math.abs(context.measureText(sample).width - baseline) > 0.1;
     });
-    setSystemFonts(installed.length ? installed : [knownEditorFonts.at(-1)!]);
+    setSystemFonts(installed.length ? installed : [fallbackEditorFont]);
   }, []);
 
   useEffect(() => {
@@ -1532,6 +1682,60 @@ function App() {
     }
   };
 
+  const importCompanionProblems = async (problems: ImportedAtCoderProblem[]) => {
+    if (!problems.length) return;
+    try {
+      await addImportedProblems(problems);
+      setFileStatus(problems.length > 1 ? `imported ${problems.length} problems` : "saved");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  // Competitive Companion sends a contest as `batch.size` separate POSTs. Collecting them
+  // into one import keeps the filename-collision prompt from firing once per problem.
+  const queueCompanionProblem = (problem: ImportedAtCoderProblem, batch?: CompanionProblem["batch"]) => {
+    if (!batch || batch.size <= 1) {
+      void importCompanionProblems([problem]);
+      return;
+    }
+    const pending = companionBatchRef.current?.id === batch.id
+      ? companionBatchRef.current
+      : { id: batch.id, size: batch.size, problems: [], timer: 0 };
+    if (companionBatchRef.current && companionBatchRef.current !== pending) {
+      window.clearTimeout(companionBatchRef.current.timer);
+      void importCompanionProblems(companionBatchRef.current.problems);
+    }
+    pending.problems = [...pending.problems, problem];
+    window.clearTimeout(pending.timer);
+    const flush = () => {
+      window.clearTimeout(pending.timer);
+      companionBatchRef.current = null;
+      void importCompanionProblems(pending.problems);
+    };
+    if (pending.problems.length >= pending.size) {
+      flush();
+      return;
+    }
+    // The extension can drop a problem it failed to parse, so never wait on the count alone.
+    pending.timer = window.setTimeout(flush, 1500);
+    companionBatchRef.current = pending;
+  };
+
+  // Kept in a ref so the single event subscription always sees the current tab and workspace state.
+  const companionHandlerRef = useRef<(problem: CompanionProblem) => void>(() => {});
+  useEffect(() => {
+    companionHandlerRef.current = (problem) => queueCompanionProblem(companionToImported(problem), problem.batch);
+  });
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listen<CompanionProblem>("companion-problem", (event) => companionHandlerRef.current(event.payload))
+      .then((stopListening) => { unlisten = stopListening; });
+    return () => unlisten?.();
+  }, []);
+
   const refreshSubmissionStatuses = async (silent = false) => {
     const files = [...savedFiles, ...tabs].filter((file, index, all) => file.sourceUrl && all.findIndex((candidate) => candidate.sourceUrl === file.sourceUrl) === index);
     if (!files.length || refreshingJudge) return;
@@ -1609,6 +1813,10 @@ function App() {
     autoSaveTests(next);
   };
 
+  const toggleRawOutput = (id: number) => {
+    setRawOutputTests((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+  };
+
   const removeTest = (id: number) => {
     const next = tests.filter((test) => test.id !== id);
     setTests(next);
@@ -1629,9 +1837,9 @@ function App() {
       const { index, result } = event.payload;
       const hasEditorDiagnostics = showDiagnostics(result.stderr || "");
       const expected = snapshot[index]?.expected || "";
-      const passed = result.ok && normalize(result.stdout) === normalize(expected);
+      const verdict = judge(result, expected);
       setTests((items) => items.map((test, itemIndex) => itemIndex === index
-        ? { ...test, output: hasEditorDiagnostics ? "" : result.stdout, error: hasEditorDiagnostics ? "" : result.stderr, timeMs: result.timeMs, status: result.ok ? (passed ? "passed" : "failed") : "error", open: passed ? false : test.open }
+        ? { ...test, output: hasEditorDiagnostics ? "" : result.stdout, error: hasEditorDiagnostics ? "" : result.stderr, timeMs: result.timeMs, status: verdict, open: verdict === "ac" ? false : test.open }
         : itemIndex === index + 1 && !runCancelledRef.current ? { ...test, status: "running" } : test));
     });
 
@@ -1646,7 +1854,7 @@ function App() {
         },
       });
     } catch (error) {
-      setTests((items) => items.map((test) => ({ ...test, status: "error", error: error instanceof Error ? error.message : "Execution failed" })));
+      setTests((items) => items.map((test) => ({ ...test, status: "re", error: error instanceof Error ? error.message : "Execution failed" })));
     } finally {
       unlisten();
       setTests((items) => items.map((test) => test.status === "running" ? { ...test, status: "idle" } : test));
@@ -1668,8 +1876,42 @@ function App() {
     return () => unlisten?.();
   }, []);
 
+  // The macOS menu bar drives the same handlers as the toolbar; only the entry point differs.
+  const menuHandlerRef = useRef<(id: string) => void>(() => {});
+  useEffect(() => {
+    menuHandlerRef.current = (id) => {
+      switch (id) {
+        case "app:settings": openSettings(); break;
+        case "app:quit": requestApplicationClose(); break;
+        case "file:new": newProblem(); break;
+        case "file:open": void openProblem(); break;
+        case "file:save": void saveProblem(); break;
+        case "file:import": beginImport(); break;
+        case "file:close-tab": if (activeTab) requestCloseProblem(activeTab.id); break;
+        case "view:toggle-explorer": setExplorerVisible((visible) => !visible); break;
+        case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
+        case "run:tests": void run(); break;
+        case "run:stop": stopRun(); break;
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (!isMac || !("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("menu", (event) => menuHandlerRef.current(event.payload))
+      .then((stopListening) => { unlisten = stopListening; });
+    return () => unlisten?.();
+  }, []);
+
   useEffect(() => {
     const handleRunShortcut = (event: KeyboardEvent) => {
+      // On macOS these accelerators live on the native menu bar, which fires first;
+      // handling them here as well would run every command twice.
+      if (isMac && "__TAURI_INTERNALS__" in window) {
+        const key = event.key.toLowerCase();
+        if ((event.metaKey || event.ctrlKey) && ["enter", "s", "n", "t", "o", "w", "b", ",", "."].includes(key)) return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
         void run();
@@ -1802,9 +2044,23 @@ function App() {
     return () => window.removeEventListener("keydown", handleConfirm, true);
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, hasFileStatusError, importCollision, renameFile, sourceFile, sourceUrlValue, sourceValue]);
 
+  const showTestPanel = testPanelVisible && tabs.length > 0;
+  const showExplorer = explorerVisible && Boolean(workspacePath);
+  // Built here rather than in CSS so hiding a panel also removes its grid track and resizer.
+  const workspaceColumns = [
+    ...(showTestPanel ? ["var(--test-panel-width, 306px)", "5px"] : []),
+    "minmax(0, 1fr)",
+    ...(showExplorer ? ["5px", "var(--explorer-width, 218px)"] : []),
+  ].join(" ");
+
   const summary = useMemo(() => {
-    const passed = tests.filter((test) => test.status === "passed").length;
-    return running ? "running tests…" : tests.some((test) => test.status !== "idle") ? `${passed} / ${tests.length} passed` : "ready";
+    if (running) return "running tests…";
+    if (!tests.some((test) => test.status !== "idle")) return "ready";
+    const accepted = tests.filter((test) => test.status === "ac").length;
+    // A compile error fails every test the same way; naming it beats reporting "0 / 5 AC".
+    if (tests.every((test) => test.status === "ce")) return "compile error";
+    const worst = finalVerdicts.find((verdict) => verdict !== "ac" && tests.some((test) => test.status === verdict));
+    return `${accepted} / ${tests.length} AC${worst ? ` · ${verdictLabels[worst]}` : ""}`;
   }, [running, tests]);
 
   return (
@@ -1842,11 +2098,12 @@ function App() {
             <button onClick={insertSnippet} disabled={!insertSnippetId}>insert</button>
           </div>
         </div>
-        <div className="window-controls">
+        {/* macOS draws its own traffic lights over the title bar; a second set of controls would be redundant. */}
+        {!isMac && <div className="window-controls">
           <button onClick={() => { if ("__TAURI_INTERNALS__" in window) void getCurrentWindow().minimize(); }} aria-label="Minimize window"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 8.5h8v1H2z" /></svg></button>
           <button onClick={() => { if ("__TAURI_INTERNALS__" in window) void getCurrentWindow().toggleMaximize(); }} aria-label="Maximize window"><svg viewBox="0 0 12 12" aria-hidden="true"><path fillRule="evenodd" d="M2 2h8v8H2V2Zm1 1v6h6V3H3Z" /></svg></button>
           <button className="window-close" onClick={requestApplicationClose} aria-label="Close window"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
-        </div>
+        </div>}
       </div>
       <nav className="problem-tabs" aria-label="Open problems">
         <div className="tab-strip">
@@ -1886,8 +2143,8 @@ function App() {
           ))}
         </div>
       </nav>
-      <section className={`workspace ${tabs.length ? "" : "empty-workspace"} ${workspacePath ? "" : "no-project"}`} style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px` } as CSSProperties}>
-          <aside className="test-panel">
+      <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
+          {showTestPanel && <><aside className="test-panel">
             <div className="panel-heading">
               <span>{t("testCases")}</span>
               <span className="count">{tests.length}</span>
@@ -1904,6 +2161,7 @@ function App() {
                       <span>{test.name}</span>
                       {test.timeMs !== undefined && <span className="time">{test.timeMs} ms</span>}
                     </button>
+                    {finalVerdicts.includes(test.status) && <span className={`verdict ${test.status}`}>{verdictLabels[test.status]}</span>}
                     <span className={`signal ${test.status}`} aria-label={test.status} />
                     <button className="delete-test" onClick={() => removeTest(test.id)} aria-label={`Delete ${test.name}`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
                   </div>
@@ -1911,7 +2169,21 @@ function App() {
                     <div className="test-fields">
                       <label>{t("input")}<textarea value={test.input} onChange={(event) => updateTest(test.id, { input: event.target.value, status: "idle" })} spellCheck={false} /></label>
                       <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
-                      <label>{t("output")}<textarea value={combinedRunOutput(test.output, test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} /></label>
+                      <label>
+                        <span className="field-label">{t("output")}{test.status === "wa" && <button className="accept-output" onClick={() => toggleRawOutput(test.id)}>{rawOutputTests.includes(test.id) ? t("showDiff") : t("showRaw")}</button>}</span>
+                        {test.status === "wa" && !rawOutputTests.includes(test.id)
+                          ? <div className="test-diff">
+                              <div className="diff-row diff-head"><span className="diff-line" /><span>{t("diffExpected")}</span><span>{t("diffActual")}</span></div>
+                              {diffLines(test.expected, test.output).map((row) => (
+                                <div className={`diff-row ${row.same ? "same" : row.whitespaceOnly ? "whitespace" : "different"}`} key={row.line} title={row.whitespaceOnly ? t("diffWhitespace") : undefined}>
+                                  <span className="diff-line">{row.line}</span>
+                                  <span className="diff-cell">{row.expected === null ? "" : row.whitespaceOnly ? visibleWhitespace(row.expected) : row.expected}</span>
+                                  <span className="diff-cell">{row.actual === null ? "" : row.whitespaceOnly ? visibleWhitespace(row.actual) : row.actual}</span>
+                                </div>
+                              ))}
+                            </div>
+                          : <textarea value={combinedRunOutput(test.output, test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} />}
+                      </label>
                     </div>
                   )}
                 </article>
@@ -1919,7 +2191,7 @@ function App() {
             </div>
             <div className="test-actions"><button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case">＋</button></div>
           </aside>
-          <div className="panel-resizer test-resizer" onPointerDown={(event) => startPanelResize("test", event)} role="separator" aria-label="Resize test case panel" aria-orientation="vertical" />
+          <div className="panel-resizer test-resizer" onPointerDown={(event) => startPanelResize("test", event)} role="separator" aria-label="Resize test case panel" aria-orientation="vertical" /></>}
 
         <section className="editor-area">
           {tabs.length ? <>
@@ -1940,6 +2212,7 @@ function App() {
               fontFamily: editorFontFamily,
               fontSize: 14,
               lineHeight: 22,
+              smoothScrolling: true,
               editContext: false,
               disableLayerHinting: true,
               minimap: { enabled: false },
@@ -1962,11 +2235,11 @@ function App() {
             <p className="eyebrow">{t("welcomeTagline")}</p>
             <h1>mild editor</h1>
             <p>{t("welcomeBody")}</p>
-            <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>Ctrl+N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>Ctrl+O</kbd></button></div>
+            <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>{modLabel}N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>{modLabel}O</kbd></button></div>
             <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>
-        {workspacePath && <><div className="panel-resizer explorer-resizer" onPointerDown={(event) => startPanelResize("explorer", event)} role="separator" aria-label="Resize file explorer" aria-orientation="vertical" />
+        {showExplorer && <><div className="panel-resizer explorer-resizer" onPointerDown={(event) => startPanelResize("explorer", event)} role="separator" aria-label="Resize file explorer" aria-orientation="vertical" />
         <aside className="file-explorer" aria-label="Saved files">
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
             <span className="explorer-chevron">⌄</span>
@@ -1987,7 +2260,7 @@ function App() {
                   onClick={() => openSavedFile(tab)}
                   onFocus={() => setSelectedExplorerFilename(tab.filename)}
                   onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }}
-                  title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (Ctrl+${openIndex + 1})` : ""}`}
+                  title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}
                 >
                   <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
                   <span className="explorer-file-name">{tab.filename}</span>
@@ -2161,6 +2434,18 @@ function App() {
               </div>
             </div> : settingsPage === "judge" ? <div className="language-server-settings judge-settings">
               <p className="settings-help">{t("judgeHelp")}</p>
+              <div className={`lsp-state ${companionStatus.listening ? "ready" : companionError ? "error" : "idle"}`}>
+                <span className="lsp-dot" />
+                <div>
+                  <strong>{t("companion")}</strong>
+                  <small>{companionError || (companionStatus.listening ? `${t("companionListening")} · ${companionStatus.port}` : t("companionOff"))}</small>
+                </div>
+              </div>
+              <p className="settings-help">{t("companionHelp")}</p>
+              <div className="companion-controls">
+                <label className="companion-toggle"><input type="checkbox" checked={companionEnabled} onChange={(event) => setCompanionEnabled(event.target.checked)} />{t("companionEnable")}</label>
+                <label className="clangd-path-label">{t("companionPort")}<input type="number" min={1024} max={65535} value={companionPort} onChange={(event) => setCompanionPort(Math.min(65535, Math.max(1024, Number(event.target.value) || 10043)))} /></label>
+              </div>
               <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
@@ -2217,6 +2502,7 @@ function App() {
         <span className="wordmark">mild editor <small>v{APP_VERSION}</small></span>
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
+        <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
         <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={language} onChange={(event) => {

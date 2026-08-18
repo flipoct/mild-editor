@@ -41,6 +41,16 @@ contest-folder/
 
 `use output` copies the latest program output into the expected-output field.
 
+### Competitive Companion
+
+Mild Editor listens for the [Competitive Companion](https://github.com/jmerle/competitive-companion) browser extension on `127.0.0.1:10043`, the same port cph uses. Open a problem on any judge the extension supports, press its button, and the file and its sample tests are created in the current workspace. Parsing a whole contest arrives as one batch and imports in a single step.
+
+The listener is on by default and is confined to the loopback interface. Toggle it or change the port in **Settings → online judges**; the status bar shows `CC listening` while it is bound.
+
+## Verdicts and diffs
+
+Each test reports a competitive-programming verdict: `AC`, `WA`, `TLE`, `RE`, or `CE`. A wrong answer shows a line-by-line comparison of expected versus actual output instead of a plain text box, with mismatched lines highlighted and whitespace-only differences called out separately. Press `raw output` to switch back to the unformatted stream.
+
 ## Snippets
 
 Open **Settings → Snippets**, create a snippet name, select C++ or Python, write the snippet body in Monaco, and press **Save snippet**. Snippets are stored locally on the current device.
@@ -61,6 +71,23 @@ The full interface and Monaco Editor share the selected palette. Mild Editor inc
 ## IntelliSense
 
 Mild Editor includes lightweight C++ and Python completions. If `clangd` is installed, the app connects it to Monaco for C++ semantic completion, diagnostics, hover information, and signature help. The compiler path is passed as a query driver when available. Open the language-server settings from the status bar to configure a custom clangd path.
+
+## macOS
+
+The macOS build uses the system window chrome: native traffic lights sit over the title bar, the green button enters real full screen, and the app installs a standard menu bar.
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘N` / `⌘O` / `⌘S` | New file / Open / Save |
+| `⌘T` | Import problem |
+| `⌘W` | Close tab |
+| `⌘1`–`⌘9` | Switch to tab |
+| `⌘↵` / `⌘.` | Run tests / Stop |
+| `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
+| `⌘,` | Settings |
+| `⌃⌘F` | Full screen |
+
+The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
 
 ## Build locally
 

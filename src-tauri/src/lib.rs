@@ -1,3 +1,7 @@
+mod companion;
+#[cfg(target_os = "macos")]
+mod macos_menu;
+
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::{
@@ -57,6 +61,25 @@ struct TestInput {
     expected: String,
 }
 
+/// Competitive-programming verdict for a single execution, independent of whether
+/// the produced output matches the expected one. The frontend turns `Ok` into
+/// `AC`/`WA` by comparing the streams; every other value is already final.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum Verdict {
+    Ok,
+    /// Compilation failed before any test could run.
+    Ce,
+    /// The process exited with a non-zero status or could not be spawned.
+    Re,
+    /// The process was still alive when the time limit expired.
+    Tle,
+    /// The process wrote more than `MAX_OUTPUT` bytes.
+    Limit,
+    /// The user cancelled the run.
+    Stopped,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RunResult {
@@ -65,6 +88,7 @@ struct RunResult {
     stdout: String,
     stderr: String,
     time_ms: u128,
+    verdict: Verdict,
 }
 
 #[derive(Serialize)]
@@ -349,6 +373,7 @@ fn execute_with_cancel(
                 stdout: String::new(),
                 stderr: error.to_string(),
                 time_ms: started.elapsed().as_millis(),
+                verdict: Verdict::Re,
             }
         }
     };
@@ -397,17 +422,28 @@ fn execute_with_cancel(
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default();
     let mut stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    let mut verdict = match status {
+        Some(value) if value.success() => Verdict::Ok,
+        Some(_) => Verdict::Re,
+        None if stopped => Verdict::Stopped,
+        None => Verdict::Tle,
+    };
     if status.is_none() {
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
         }
-        stderr.push_str(if stopped { "Error: stopped" } else { "Error: TLE (2s)" });
+        if stopped {
+            stderr.push_str("Error: stopped");
+        } else {
+            stderr.push_str(&format!("Error: TLE ({}s)", timeout.as_secs()));
+        }
     }
     if stdout_bytes.len() as u64 >= MAX_OUTPUT || stderr_bytes.len() as u64 >= MAX_OUTPUT {
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
         }
         stderr.push_str("Error: output limit exceeded");
+        verdict = Verdict::Limit;
     }
 
     RunResult {
@@ -416,6 +452,7 @@ fn execute_with_cancel(
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr,
         time_ms: started.elapsed().as_millis(),
+        verdict,
     }
 }
 
@@ -495,6 +532,7 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
             let result = RunResult {
                 stdout: String::new(),
                 stderr: format!("Compile error\n{}", compile.stderr),
+                verdict: Verdict::Ce,
                 ..compile
             };
             let results = request.tests.iter().enumerate().map(|(index, _)| {
@@ -1773,6 +1811,29 @@ fn send_clangd_message(
 }
 
 #[tauri::command]
+fn start_companion(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, companion::CompanionState>,
+    port: Option<u16>,
+) -> Result<companion::CompanionStatus, String> {
+    companion::start(&state, port.unwrap_or(companion::DEFAULT_PORT), move |problem| {
+        let _ = app.emit("companion-problem", problem);
+    })?;
+    Ok(companion::status(&state))
+}
+
+#[tauri::command]
+fn stop_companion(state: tauri::State<'_, companion::CompanionState>) -> companion::CompanionStatus {
+    companion::stop(&state);
+    companion::status(&state)
+}
+
+#[tauri::command]
+fn companion_status(state: tauri::State<'_, companion::CompanionState>) -> companion::CompanionStatus {
+    companion::status(&state)
+}
+
+#[tauri::command]
 fn stop_clangd(state: tauri::State<'_, ClangdState>) {
     if let Ok(mut guard) = state.0.lock() {
         if let Some(mut process) = guard.take() {
@@ -1784,10 +1845,21 @@ fn stop_clangd(state: tauri::State<'_, ClangdState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(ClangdState::default())
         .manage(RunState::default())
-        .plugin(tauri_plugin_dialog::init())
+        .manage(companion::CompanionState::default())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .setup(|app| {
+            macos_menu::install(app.handle())?;
+            Ok(())
+        })
+        .on_menu_event(macos_menu::forward_event);
+
+    builder
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_run,
@@ -1810,7 +1882,10 @@ pub fn run() {
             clangd_info,
             start_clangd,
             send_clangd_message,
-            stop_clangd
+            stop_clangd,
+            start_companion,
+            stop_companion,
+            companion_status
         ])
         .on_window_event(|window, event| {
             match event {
@@ -1826,6 +1901,7 @@ pub fn run() {
                             let _ = process.child.wait();
                         }
                     };
+                    companion::stop(&window.state::<companion::CompanionState>());
                 }
                 _ => {}
             }
@@ -1837,6 +1913,39 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_shell(script: &str, timeout: Duration) -> RunResult {
+        let shell = which::which("sh").expect("a POSIX shell");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        execute(&shell, &["-c".into(), script.into()], directory.path(), "", timeout)
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "requires a POSIX shell")]
+    fn classifies_execution_verdicts() {
+        let accepted = run_shell("printf 'done'", Duration::from_secs(5));
+        assert_eq!(accepted.verdict, Verdict::Ok);
+        assert_eq!(accepted.stdout, "done");
+        assert!(accepted.ok);
+
+        let runtime_error = run_shell("exit 3", Duration::from_secs(5));
+        assert_eq!(runtime_error.verdict, Verdict::Re);
+        assert_eq!(runtime_error.code, Some(3));
+        assert!(!runtime_error.ok);
+
+        let timed_out = run_shell("sleep 5", Duration::from_millis(300));
+        assert_eq!(timed_out.verdict, Verdict::Tle);
+        assert!(timed_out.stderr.contains("Error: TLE"));
+        assert!(!timed_out.ok);
+    }
+
+    #[test]
+    fn serializes_verdicts_as_lowercase_tags() {
+        assert_eq!(serde_json::to_string(&Verdict::Ok).unwrap(), "\"ok\"");
+        assert_eq!(serde_json::to_string(&Verdict::Ce).unwrap(), "\"ce\"");
+        assert_eq!(serde_json::to_string(&Verdict::Tle).unwrap(), "\"tle\"");
+        assert_eq!(serde_json::to_string(&Verdict::Stopped).unwrap(), "\"stopped\"");
+    }
 
     #[test]
     fn rename_duplicate_and_delete_keep_files_and_metadata_in_sync() {
