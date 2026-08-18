@@ -7,6 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
+import { fileKey, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
+import { renderTemplateWithCursor } from "./templateParser";
 
 type Language = "cpp" | "python";
 /** Competitive-programming verdicts. `ac`/`wa` come from comparing streams, the rest from the runner. */
@@ -96,7 +98,7 @@ type CodeSnippet = {
   code: string;
 };
 
-type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[] };
+type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[]; contestImport: boolean };
 
 type ExplorerMenu = { file: ProblemTab; x: number; y: number };
 type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
@@ -190,7 +192,6 @@ const visibleWhitespace = (value: string) => value.replace(/ /g, "·").replace(/
 const combinedRunOutput = (output: string, error: string) => error
   ? `${output}${output && !output.endsWith("\n") ? "\n" : ""}${error.replace(/^\s+/, "")}`
   : output;
-const fileKey = (filename: string) => filename.trim().toLocaleLowerCase();
 const languageFromFilename = (filename: string): Language | null => /\.(cpp|cc|cxx)$/i.test(filename) ? "cpp" : /\.py$/i.test(filename) ? "python" : null;
 const filenameForLanguage = (filename: string, language: Language) => filename.replace(/\.(cpp|cc|cxx|py)$/i, language === "cpp" ? ".cpp" : ".py");
 const inferredSourceUrl = (source: ProblemSource | undefined, filename: string) => {
@@ -201,35 +202,15 @@ const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj
 const templateStorageKey = (source: ProblemSource, language: Language) => `mild-template-${source}-${language}`;
 const storedTemplate = (language: Language, source: ProblemSource = "other") => localStorage.getItem(templateStorageKey(source, language)) || localStorage.getItem(`mild-template-${language}`) || templates[language];
 const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatMap((source) => (["cpp", "python"] as Language[]).map((language) => [templateStorageKey(source, language), storedTemplate(language, source)])));
-const renderTemplateWithCursor = (template: string, context: { source: ProblemSource; filename: string; title: string }) => {
-  const now = new Date();
-  const values: Record<string, string> = {
-    timestamp: now.toISOString(),
-    date: now.toISOString().slice(0, 10),
-    time: now.toTimeString().slice(0, 8),
-    filename: context.filename,
-    title: context.title,
-    platform: context.source,
-  };
-  const rendered = template.replace(/\$\{(timestamp|date|time|filename|title|platform)\}/g, (_, key: string) => values[key]);
-  const cursorOffset = rendered.indexOf("${cursor}");
-  return {
-    code: rendered.replaceAll("${cursor}", ""),
-    cursorOffset: cursorOffset >= 0 ? cursorOffset : undefined,
-  };
+const isContestImportUrl = (rawUrl: string) => {
+  try {
+    const url = new URL(rawUrl);
+    return url.hostname.endsWith("atcoder.jp")
+      ? url.pathname.includes("/contests/") && !url.pathname.includes("/tasks/")
+      : url.hostname.endsWith("codeforces.com") && url.pathname.includes("/contest/") && !url.pathname.includes("/problem/");
+  } catch { return false; }
 };
-const renderTemplate = (template: string, context: { source: ProblemSource; filename: string; title: string }) => renderTemplateWithCursor(template, context).code;
 const defaultFilename = (index: number, language: Language = "cpp") => `${index < 26 ? String.fromCharCode(65 + index) : `problem${index + 1}`}.${language === "cpp" ? "cpp" : "py"}`;
-const mexFilename = (requested: string, occupied: Set<string>) => {
-  if (!occupied.has(fileKey(requested))) return requested;
-  const match = /^(.*?)(\.[^.]+)?$/.exec(requested);
-  const base = match?.[1] || requested;
-  const extension = match?.[2] || ".cpp";
-  for (let number = 1; ; number += 1) {
-    const candidate = `${base} (${number})${extension}`;
-    if (!occupied.has(fileKey(candidate))) return candidate;
-  }
-};
 const companionSource = (url: string): ProblemSource =>
   /atcoder\.jp/i.test(url) ? "atcoder" : /codeforces\.com/i.test(url) ? "codeforces" : /doj\.kr/i.test(url) ? "doj" : "other";
 /** `"A. Theatre Square"` and `"A - Sum"` both become `A.cpp`, matching what the URL importer produces. */
@@ -323,15 +304,15 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.2.3";
+const APP_VERSION = "1.2.4";
 
 const messages = {
   en: {
     appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
     preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean",
-    templateHelp: "Templates are saved separately for each judge and language. Variables: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}. Put ${cursor} where the editor cursor should start.",
+    templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. The existing ${...} syntax remains supported.",
     local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", contestImportExtension: "contest import files", contestImportExtensionHelp: "Used when a contest URL imports every problem. Single-problem imports keep their own flow.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
@@ -350,9 +331,9 @@ const messages = {
   ko: {
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어",
-    templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: ${timestamp}, ${date}, ${time}, ${filename}, ${title}, ${platform}. 새 파일의 시작 커서 위치에는 ${cursor}를 넣으세요.",
+    templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 기존 ${...} 문법도 계속 지원됩니다.",
     local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
-    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", contestImportExtension: "대회 전체 파일 형식", contestImportExtensionHelp: "대회 URL로 모든 문제를 가져올 때 사용합니다. 단일 문제 가져오기는 기존 흐름을 유지합니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
@@ -417,11 +398,13 @@ function App() {
   const [importCollision, setImportCollision] = useState<ImportCollision | null>(null);
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
+  const importInFlightRef = useRef(false);
   const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server">("template");
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
   const [codeforcesHandle, setCodeforcesHandle] = useState(() => localStorage.getItem("mild-codeforces-handle") || "");
   const [dojHandle, setDojHandle] = useState(() => localStorage.getItem("mild-doj-handle") || "");
+  const [contestImportLanguage, setContestImportLanguage] = useState<Language>(() => (localStorage.getItem("mild-contest-import-language") as Language) || "cpp");
   const [atcoderLibraryPath, setAtcoderLibraryPath] = useState(() => localStorage.getItem("mild-atcoder-library-path") || "");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
@@ -659,7 +642,8 @@ function App() {
     localStorage.setItem("mild-atcoder-handle", atcoderHandle.trim());
     localStorage.setItem("mild-codeforces-handle", codeforcesHandle.trim());
     localStorage.setItem("mild-doj-handle", dojHandle.trim());
-  }, [atcoderHandle, codeforcesHandle, dojHandle]);
+    localStorage.setItem("mild-contest-import-language", contestImportLanguage);
+  }, [atcoderHandle, codeforcesHandle, contestImportLanguage, dojHandle]);
 
   useEffect(() => {
     localStorage.setItem("mild-atcoder-library-path", atcoderLibraryPath.trim());
@@ -799,24 +783,25 @@ function App() {
 
   const changeActiveLanguage = async (next: Language) => {
     if (!activeTab || next === language) return;
-    const filename = filenameForLanguage(activeTab.filename, next);
-    const existing = [...tabs, ...savedFiles].find((tab) => tab.id !== activeTab.id && fileKey(tab.filename) === fileKey(filename));
-    if (existing) {
-      openSavedFile(existing);
-      return;
-    }
+    const requestedFilename = filenameForLanguage(activeTab.filename, next);
+    const occupied = [...tabs, ...savedFiles]
+      .filter((tab) => tab.id !== activeTab.id && fileKey(tab.filename) !== fileKey(activeTab.filename))
+      .map((tab) => tab.filename);
+    const filename = mexFilename(requestedFilename, occupied);
     const saved = workspacePath && savedFiles.find((tab) => fileKey(tab.filename) === fileKey(activeTab.filename));
+    let resolvedFilename = filename;
     if (saved) {
       try {
-        await invoke("rename_workspace_file", { request: { folderPath: workspacePath, filename: activeTab.filename, newFilename: filename } });
-        setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(activeTab.filename) ? { ...tab, filename, language: next } : tab));
+        const result = await invoke<WorkspaceFileResult>("rename_workspace_file", { request: { folderPath: workspacePath, filename: activeTab.filename, newFilename: filename } });
+        resolvedFilename = result.filename;
+        setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(activeTab.filename) ? { ...tab, filename: resolvedFilename, language: next } : tab));
       } catch (error) {
         setFileStatus(error instanceof Error ? error.message : String(error));
         return;
       }
     }
     setLanguage(next);
-    setTabs((items) => items.map((tab) => tab.id === activeTabId ? { ...tab, filename, language: next, dirty: false } : tab));
+    setTabs((items) => items.map((tab) => tab.id === activeTabId ? { ...tab, filename: resolvedFilename, language: next, dirty: false } : tab));
     setFileStatus("saved");
     setAutoSaveRevision((revision) => revision + 1);
   };
@@ -858,11 +843,7 @@ function App() {
     if (!workspacePath) return;
     const extension = file.filename.slice(file.filename.lastIndexOf("."));
     const base = file.filename.slice(0, file.filename.length - extension.length);
-    let number = 2;
-    let filename = `${base} copy${extension}`;
-    const occupied = new Set(savedFiles.map((item) => fileKey(item.filename)));
-    tabs.forEach((item) => occupied.add(fileKey(item.filename)));
-    while (occupied.has(fileKey(filename))) filename = `${base} copy ${number++}${extension}`;
+    const filename = mexFilename(`${base} copy${extension}`, [...savedFiles, ...tabs].map((item) => item.filename));
     if (!savedFiles.some((item) => fileKey(item.filename) === fileKey(file.filename))) {
       const tab: ProblemTab = { ...file, id: crypto.randomUUID(), filename, title: filename.replace(/\.[^.]+$/, ""), dirty: true };
       const nextTabs = [...tabs, tab];
@@ -882,13 +863,15 @@ function App() {
 
   const commitWorkspaceRename = async (original: ProblemTab, requestedFilename: string) => {
     if (!workspacePath) return;
-    const filename = requestedFilename.trim();
-    if (!filename) return;
-    if (fileKey(filename) === fileKey(original.filename) && filename === original.filename) return;
-    if (savedFiles.some((file) => fileKey(file.filename) === fileKey(filename) && fileKey(file.filename) !== fileKey(original.filename))) {
-      setFileStatus("a file with that extension and name already exists");
-      return;
-    }
+    const typed = requestedFilename.trim();
+    if (!typed) return;
+    const originalExtension = original.filename.match(/\.(cpp|cc|cxx|py)$/i)?.[0] || ".cpp";
+    const requested = languageFromFilename(typed) ? typed : `${typed}${originalExtension}`;
+    if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return;
+    const occupied = [...savedFiles, ...tabs]
+      .filter((file) => file.id !== original.id && fileKey(file.filename) !== fileKey(original.filename))
+      .map((file) => file.filename);
+    const filename = mexFilename(requested, occupied);
     if (!savedFiles.some((file) => fileKey(file.filename) === fileKey(original.filename))) {
       const nextLanguage = languageFromFilename(filename);
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename, title: filename.replace(/\.[^.]+$/, ""), language: nextLanguage || tab.language, dirty: false } : tab));
@@ -990,12 +973,14 @@ function App() {
   const createBlankProblem = async (requestedFilename: string) => {
     const typedName = requestedFilename.trim() || defaultFilename(savedFiles.length + tabs.length);
     const withExtension = languageFromFilename(typedName) ? typedName : `${typedName}.cpp`;
-    const occupied = new Set([...savedFiles, ...tabs].map((tab) => fileKey(tab.filename)));
+    const diskFiles = workspacePath ? await invoke<string[]>("list_workspace_source_filenames", { request: { folderPath: workspacePath } }) : [];
+    const occupied = new Set([...savedFiles.map((tab) => tab.filename), ...tabs.map((tab) => tab.filename), ...diskFiles]);
     const filename = mexFilename(withExtension, occupied);
     const fileLanguage = languageFromFilename(filename) || "cpp";
     const title = filename.replace(/\.[^.]+$/, "");
-    const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title });
-    const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename, title });
+    const createdAt = new Date();
+    const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title, url: "", now: createdAt });
+    const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename, title, url: "", now: createdAt });
     const tab: ProblemTab = {
       id: crypto.randomUUID(),
       title,
@@ -1460,7 +1445,7 @@ function App() {
     clearDiagnostics();
     const key = templateStorageKey(templateSource, templateLanguage);
     if (!activeTab) return;
-    const rendered = renderTemplateWithCursor(draftTemplates[key], { source: templateSource, filename: activeTab.filename, title: activeTab.title });
+    const rendered = renderTemplateWithCursor(draftTemplates[key], { source: templateSource, filename: activeTab.filename, title: activeTab.title, url: activeTab.sourceUrl });
     if (rendered.cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: activeTab.id, language: templateLanguage, offset: rendered.cursorOffset };
     setCodes((current) => ({ ...current, [templateLanguage]: rendered.code }));
     markActiveDirty();
@@ -1603,27 +1588,48 @@ function App() {
     localStorage.setItem("mild-last-open-tabs", JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
   }, [activeTab?.filename, tabs, workspacePath]);
 
-  const addImportedProblems = async (imported: ImportedAtCoderProblem[], renameDuplicates = false) => {
+  const addImportedProblems = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1) => {
     const existingFiles = [...savedFiles, ...tabs].filter((file, index, files) => files.findIndex((item) => fileKey(item.filename) === fileKey(file.filename)) === index);
-    const collision = imported.find((problem) => existingFiles.some((file) => fileKey(file.filename) === fileKey(problem.suggestedFilename)));
-    if (collision && !renameDuplicates) {
-      setImportCollision({ existing: existingFiles.find((file) => fileKey(file.filename) === fileKey(collision.suggestedFilename))!, imported });
+    const existingProblemIds = new Set(existingFiles.map((file) => problemIdentity(file.source, file.sourceUrl)).filter(Boolean));
+    const incomingProblemIds = new Set<string>();
+    const candidates = imported.filter((problem) => {
+      const identity = problemIdentity(problem.source, problem.sourceUrl);
+      if (identity && incomingProblemIds.has(identity)) return false;
+      if (identity) incomingProblemIds.add(identity);
+      return !(contestImport && identity && existingProblemIds.has(identity));
+    });
+    if (!candidates.length) {
+      setAtCoderOpen(false);
+      setNewFileImportPending(false);
+      setAtCoderUrl("");
+      setFileStatus("saved");
+      return;
+    }
+    const importLanguage = contestImport ? contestImportLanguage : "cpp";
+    const requestedNames = new Map(candidates.map((problem) => [problem.sourceUrl, importedFilename(problem.title, problem.suggestedFilename, importLanguage)]));
+    const collision = candidates.find((problem) => existingFiles.some((file) => fileKey(file.filename) === fileKey(requestedNames.get(problem.sourceUrl) || problem.suggestedFilename)));
+    if (collision && !renameDuplicates && !contestImport) {
+      const requested = requestedNames.get(collision.sourceUrl) || collision.suggestedFilename;
+      setImportCollision({ existing: existingFiles.find((file) => fileKey(file.filename) === fileKey(requested))!, imported: candidates, contestImport });
       setAtCoderOpen(false);
       setNewFileImportPending(false);
       setAtCoderUrl("");
       return;
     }
-    const used = new Set(existingFiles.map((file) => fileKey(file.filename)));
+    const diskFiles = workspacePath ? await invoke<string[]>("list_workspace_source_filenames", { request: { folderPath: workspacePath } }) : [];
+    const used = new Set([...existingFiles.map((file) => file.filename), ...diskFiles]);
     const importedCursorOffsets = new Map<string, number>();
-    const importedTabs = imported.map((problem): ProblemTab => {
-      const filename = mexFilename(problem.suggestedFilename, used);
-      used.add(fileKey(filename));
-      const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title });
-      const renderedPython = renderTemplateWithCursor(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title });
+    const importedTabs = candidates.map((problem): ProblemTab => {
+      const filename = mexFilename(requestedNames.get(problem.sourceUrl) || problem.suggestedFilename, used);
+      used.add(filename);
+      const createdAt = new Date();
+      const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title, url: problem.sourceUrl, now: createdAt });
+      const renderedPython = renderTemplateWithCursor(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title, url: problem.sourceUrl, now: createdAt });
       const id = crypto.randomUUID();
-      if (renderedCpp.cursorOffset !== undefined) importedCursorOffsets.set(id, renderedCpp.cursorOffset);
+      const cursorOffset = importLanguage === "cpp" ? renderedCpp.cursorOffset : renderedPython.cursorOffset;
+      if (cursorOffset !== undefined) importedCursorOffsets.set(id, cursorOffset);
       return {
-        id, title: problem.title, filename, language: "cpp",
+        id, title: problem.title, filename, language: importLanguage,
         codes: {
           cpp: renderedCpp.code,
           python: renderedPython.code,
@@ -1636,7 +1642,7 @@ function App() {
     });
     if (!importedTabs.length) throw new Error("No problems were imported.");
     const firstCursorOffset = importedCursorOffsets.get(importedTabs[0].id);
-    if (firstCursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: importedTabs[0].id, language: "cpp", offset: firstCursorOffset };
+    if (firstCursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: importedTabs[0].id, language: importLanguage, offset: firstCursorOffset };
     const nextTabs = [...tabs, ...importedTabs];
     if (workspacePath) await persistTabs(nextTabs, importedTabs[0].id);
     else {
@@ -1650,7 +1656,8 @@ function App() {
   };
 
   const importAtCoderProblem = async () => {
-    if (!atCoderUrl.trim()) return;
+    if (!atCoderUrl.trim() || importInFlightRef.current) return;
+    importInFlightRef.current = true;
     setImportingAtCoder(true);
     try {
       const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url: atCoderUrl.trim() });
@@ -1674,10 +1681,11 @@ function App() {
         setFileStatus("test cases imported");
         return;
       }
-      await addImportedProblems(imported);
+      await addImportedProblems(imported, false, isContestImportUrl(atCoderUrl.trim()));
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      importInFlightRef.current = false;
       setImportingAtCoder(false);
     }
   };
@@ -2011,31 +2019,26 @@ function App() {
         return;
       }
       if (event.defaultPrevented) return;
+      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || sourceFile || renameFile || blankFilenameOpen || importCollision || atCoderOpen)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
       if (appCloseConfirm) {
-        event.preventDefault();
         void saveAndCloseApplication();
       } else if (closeConfirmTabId) {
-        event.preventDefault();
         closeProblem(closeConfirmTabId);
         setCloseConfirmTabId(null);
       } else if (deleteConfirmFile) {
-        event.preventDefault();
         void deleteSavedFile();
       } else if (sourceFile) {
-        event.preventDefault();
         void updateProblemSource();
       } else if (renameFile) {
-        event.preventDefault();
         void renameWorkspaceFile();
       } else if (blankFilenameOpen) {
-        event.preventDefault();
         confirmBlankProblem();
       } else if (importCollision) {
-        event.preventDefault();
         openSavedFile(importCollision.existing);
         setImportCollision(null);
       } else if (atCoderOpen) {
-        event.preventDefault();
         if (atCoderUrl.trim()) void importAtCoderProblem();
         else cancelProblemImport();
       }
@@ -2446,6 +2449,8 @@ function App() {
                 <label className="companion-toggle"><input type="checkbox" checked={companionEnabled} onChange={(event) => setCompanionEnabled(event.target.checked)} />{t("companionEnable")}</label>
                 <label className="clangd-path-label">{t("companionPort")}<input type="number" min={1024} max={65535} value={companionPort} onChange={(event) => setCompanionPort(Math.min(65535, Math.max(1024, Number(event.target.value) || 10043)))} /></label>
               </div>
+              <label className="clangd-path-label">{t("contestImportExtension")}<select value={contestImportLanguage} onChange={(event) => setContestImportLanguage(event.target.value as Language)}><option value="cpp">C++ (.cpp)</option><option value="python">Python (.py)</option></select></label>
+              <p className="settings-help">{t("contestImportExtensionHelp")}</p>
               <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
@@ -2476,7 +2481,7 @@ function App() {
           <span className="eyebrow">file already exists</span>
           <h2 id="import-collision-title">{importCollision.existing.filename} already exists</h2>
           <p>Open the existing file, or import a new copy with the smallest available number suffix.</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setImportCollision(null)}>cancel</button><button className="subtle-button" onClick={() => { openSavedFile(importCollision.existing); setImportCollision(null); }}>open existing</button><button className="primary-button" onClick={() => { const pending = importCollision.imported; setImportCollision(null); void addImportedProblems(pending, true); }}>import copy</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setImportCollision(null)}>cancel</button><button className="subtle-button" onClick={() => { openSavedFile(importCollision.existing); setImportCollision(null); }}>open existing</button><button className="primary-button" onClick={() => { const { imported: pending, contestImport } = importCollision; setImportCollision(null); void addImportedProblems(pending, true, contestImport); }}>import copy</button></footer>
         </section>
       </div>}
 
@@ -2488,7 +2493,7 @@ function App() {
               <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import">×</button>
             </header>
             <p className="settings-help">{testcaseImportTarget ? "Replace only this file's test cases. Its code and filename stay unchanged." : t("importHelp")}</p>
-            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void importAtCoderProblem(); } }} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
+            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
             <footer className="settings-footer">
               <span className="footer-spacer" />
               <button className="subtle-button" onClick={cancelProblemImport}>{newFileImportPending ? (uiLocale === "ko" ? "빈 파일 만들기" : "create blank file") : t("cancel")}</button>

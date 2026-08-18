@@ -188,6 +188,25 @@ struct RenameWorkspaceFileRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListWorkspaceFilesRequest {
+    folder_path: String,
+}
+
+#[tauri::command]
+fn list_workspace_source_filenames(request: ListWorkspaceFilesRequest) -> Result<Vec<String>, String> {
+    let folder = std::path::PathBuf::from(request.folder_path);
+    let mut filenames = fs::read_dir(&folder)
+        .map_err(|error| format!("Could not read workspace folder: {error}"))?
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|filename| workspace_source_filename(filename).is_ok())
+        .collect::<Vec<_>>();
+    filenames.sort_by_key(|filename| filename_key(filename));
+    Ok(filenames)
+}
+
+#[derive(Deserialize)]
 struct ReadFontFileRequest {
     path: String,
 }
@@ -791,6 +810,44 @@ fn workspace_source_filename(filename: &str) -> Result<(String, String), String>
     Ok((filename.to_string(), language.to_string()))
 }
 
+fn filename_key(filename: &str) -> String {
+    filename.trim().to_lowercase()
+}
+
+fn strip_copy_suffix(stem: &str) -> &str {
+    let Some(prefix) = stem.strip_suffix(')') else { return stem };
+    let Some(open) = prefix.rfind(" (") else { return stem };
+    let number = &prefix[open + 2..];
+    if !number.is_empty() && !number.starts_with('0') && number.chars().all(|character| character.is_ascii_digit()) {
+        &prefix[..open]
+    } else {
+        stem
+    }
+}
+
+fn unique_workspace_filename(folder: &Path, requested: &str, metadata: &WorkspaceMetadata, exclude: Option<&str>) -> String {
+    let excluded = exclude.map(filename_key);
+    let mut occupied = metadata.problems.iter().map(|problem| problem.filename.clone()).collect::<Vec<_>>();
+    if let Ok(entries) = fs::read_dir(folder) {
+        occupied.extend(entries.flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string)));
+    }
+    let occupied = occupied.into_iter()
+        .filter(|filename| excluded.as_ref().map_or(true, |excluded| filename_key(filename) != *excluded))
+        .map(|filename| filename_key(&filename))
+        .collect::<std::collections::HashSet<_>>();
+    if !occupied.contains(&filename_key(requested)) { return requested.to_string(); }
+
+    let path = Path::new(requested);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or(requested);
+    let base = strip_copy_suffix(stem);
+    let extension = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{value}")).unwrap_or_default();
+    for number in 1.. {
+        let candidate = format!("{base} ({number}){extension}");
+        if !occupied.contains(&filename_key(&candidate)) { return candidate; }
+    }
+    unreachable!()
+}
+
 #[tauri::command]
 fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, String> {
     if request.problems.is_empty() {
@@ -802,7 +859,7 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
     let mut new_filenames = std::collections::HashSet::new();
     for problem in &request.problems {
         let filename = safe_filename(&problem.filename, &problem.language)?;
-        if !new_filenames.insert(filename.clone()) {
+        if !new_filenames.insert(filename_key(&filename)) {
             return Err(format!("Duplicate filename: {filename}"));
         }
     }
@@ -894,8 +951,11 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     if !source.exists() { return Err("Workspace source file does not exist.".into()); }
     #[cfg(windows)]
     let mut command = {
-        let mut command = Command::new("explorer");
-        command.arg(format!("/select,{}", source.to_string_lossy()));
+        let mut command = Command::new("explorer.exe");
+        // Explorer requires the switch outside the quotes: /select,"C:\\path with spaces\\file.cpp".
+        // Command::arg quotes the whole argument when it contains spaces, which makes Explorer
+        // ignore /select. raw_arg preserves the syntax expected by Explorer.
+        std::os::windows::process::CommandExt::raw_arg(&mut command, windows_explorer_select_argument(&source));
         command
     };
     #[cfg(target_os = "macos")]
@@ -914,14 +974,20 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     Ok(())
 }
 
+#[cfg(windows)]
+fn windows_explorer_select_argument(source: &Path) -> String {
+    format!("/select,\"{}\"", source.to_string_lossy())
+}
+
 #[tauri::command]
 fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
-    let (new_filename, new_language) = workspace_source_filename(&request.new_filename)?;
+    let (requested_filename, _) = workspace_source_filename(&request.new_filename)?;
     let metadata_path = workspace_metadata_path(&folder);
     let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}")).and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
-    if metadata.problems.iter().any(|problem| problem.filename.eq_ignore_ascii_case(&new_filename)) { return Err("A file with that name already exists.".into()); }
+    let new_filename = unique_workspace_filename(&folder, &requested_filename, &metadata, None);
+    let (_, new_language) = workspace_source_filename(&new_filename)?;
     let source_problem = metadata.problems.iter().find(|problem| problem.filename == filename).cloned().ok_or("Workspace file metadata was not found.")?;
     let source = folder.join(&filename);
     let destination = folder.join(&new_filename);
@@ -937,10 +1003,11 @@ fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<Wo
 fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
-    let (new_filename, new_language) = workspace_source_filename(&request.new_filename)?;
+    let (requested_filename, _) = workspace_source_filename(&request.new_filename)?;
     let metadata_path = workspace_metadata_path(&folder);
     let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}")).and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
-    if !filename.eq_ignore_ascii_case(&new_filename) && metadata.problems.iter().any(|problem| problem.filename.eq_ignore_ascii_case(&new_filename)) { return Err("A file with that name already exists.".into()); }
+    let new_filename = unique_workspace_filename(&folder, &requested_filename, &metadata, Some(&filename));
+    let (_, new_language) = workspace_source_filename(&new_filename)?;
     let problem = metadata.problems.iter_mut().find(|problem| problem.filename == filename).ok_or("Workspace file metadata was not found.")?;
     let source_path = folder.join(&filename);
     let destination_path = folder.join(&new_filename);
@@ -1388,7 +1455,7 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/1.2.3")
+            .user_agent("MildEditor/1.2.4")
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1524,7 +1591,7 @@ fn fetch_atcoder_submissions(
 
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.2.3")
+        .user_agent("MildEditor/1.2.4")
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;
@@ -1872,6 +1939,7 @@ pub fn run() {
             load_problem,
             create_workspace,
             save_workspace,
+            list_workspace_source_filenames,
             delete_workspace_file,
             open_workspace_file_location,
             duplicate_workspace_file,
@@ -1945,6 +2013,27 @@ mod tests {
         assert_eq!(serde_json::to_string(&Verdict::Ce).unwrap(), "\"ce\"");
         assert_eq!(serde_json::to_string(&Verdict::Tle).unwrap(), "\"tle\"");
         assert_eq!(serde_json::to_string(&Verdict::Stopped).unwrap(), "\"stopped\"");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn explorer_select_argument_keeps_switch_outside_quoted_path() {
+        let path = Path::new(r"C:\contest folder\A.cpp");
+        assert_eq!(windows_explorer_select_argument(path), r#"/select,"C:\contest folder\A.cpp""#);
+    }
+
+    #[test]
+    fn filename_allocator_uses_smallest_free_suffix_per_extension() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        fs::write(directory.path().join("A.cpp"), "").unwrap();
+        fs::write(directory.path().join("A (2).CPP"), "").unwrap();
+        fs::write(directory.path().join("A.py"), "").unwrap();
+        let metadata = WorkspaceMetadata { version: 2, problems: Vec::new() };
+
+        assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, None), "A (1).cpp");
+        assert_eq!(unique_workspace_filename(directory.path(), "A (2).cpp", &metadata, None), "A (1).cpp");
+        assert_eq!(unique_workspace_filename(directory.path(), "A.py", &metadata, None), "A (1).py");
+        assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, Some("A.cpp")), "A.cpp");
     }
 
     #[test]
