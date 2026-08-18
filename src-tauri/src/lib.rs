@@ -913,8 +913,11 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     if !source.exists() { return Err("Workspace source file does not exist.".into()); }
     #[cfg(windows)]
     let mut command = {
-        let mut command = Command::new("explorer");
-        command.arg(format!("/select,{}", source.to_string_lossy()));
+        let mut command = Command::new("explorer.exe");
+        // Explorer requires the switch outside the quotes: /select,"C:\\path with spaces\\file.cpp".
+        // Command::arg quotes the whole argument when it contains spaces, which makes Explorer
+        // ignore /select. raw_arg preserves the syntax expected by Explorer.
+        std::os::windows::process::CommandExt::raw_arg(&mut command, windows_explorer_select_argument(&source));
         command
     };
     #[cfg(target_os = "macos")]
@@ -931,6 +934,11 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     };
     command.spawn().map_err(|error| format!("Could not open file location: {error}"))?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_explorer_select_argument(source: &Path) -> String {
+    format!("/select,\"{}\"", source.to_string_lossy())
 }
 
 #[tauri::command]
@@ -1897,6 +1905,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn explorer_select_argument_keeps_switch_outside_quoted_path() {
+        let path = Path::new(r"C:\contest folder\A.cpp");
+        assert_eq!(windows_explorer_select_argument(path), r#"/select,"C:\contest folder\A.cpp""#);
+    }
 
     #[test]
     fn filename_allocator_uses_smallest_free_suffix_per_extension() {

@@ -312,6 +312,7 @@ function App() {
   const [importCollision, setImportCollision] = useState<ImportCollision | null>(null);
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
+  const importInFlightRef = useRef(false);
   const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server">("template");
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
@@ -1505,7 +1506,8 @@ function App() {
   };
 
   const importAtCoderProblem = async () => {
-    if (!atCoderUrl.trim()) return;
+    if (!atCoderUrl.trim() || importInFlightRef.current) return;
+    importInFlightRef.current = true;
     setImportingAtCoder(true);
     try {
       const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url: atCoderUrl.trim() });
@@ -1533,6 +1535,7 @@ function App() {
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      importInFlightRef.current = false;
       setImportingAtCoder(false);
     }
   };
@@ -1774,31 +1777,26 @@ function App() {
         return;
       }
       if (event.defaultPrevented) return;
+      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || sourceFile || renameFile || blankFilenameOpen || importCollision || atCoderOpen)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
       if (appCloseConfirm) {
-        event.preventDefault();
         void saveAndCloseApplication();
       } else if (closeConfirmTabId) {
-        event.preventDefault();
         closeProblem(closeConfirmTabId);
         setCloseConfirmTabId(null);
       } else if (deleteConfirmFile) {
-        event.preventDefault();
         void deleteSavedFile();
       } else if (sourceFile) {
-        event.preventDefault();
         void updateProblemSource();
       } else if (renameFile) {
-        event.preventDefault();
         void renameWorkspaceFile();
       } else if (blankFilenameOpen) {
-        event.preventDefault();
         confirmBlankProblem();
       } else if (importCollision) {
-        event.preventDefault();
         openSavedFile(importCollision.existing);
         setImportCollision(null);
       } else if (atCoderOpen) {
-        event.preventDefault();
         if (atCoderUrl.trim()) void importAtCoderProblem();
         else cancelProblemImport();
       }
@@ -2210,7 +2208,7 @@ function App() {
               <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import">×</button>
             </header>
             <p className="settings-help">{testcaseImportTarget ? "Replace only this file's test cases. Its code and filename stay unchanged." : t("importHelp")}</p>
-            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void importAtCoderProblem(); } }} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
+            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
             <footer className="settings-footer">
               <span className="footer-spacer" />
               <button className="subtle-button" onClick={cancelProblemImport}>{newFileImportPending ? (uiLocale === "ko" ? "빈 파일 만들기" : "create blank file") : t("cancel")}</button>
