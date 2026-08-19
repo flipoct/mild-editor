@@ -534,7 +534,10 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 }
 
 .judge-settings {
+  min-height: 0;
   gap: 12px;
+  padding-right: 8px;
+  overflow-y: auto;
 }
 
 .path-picker {

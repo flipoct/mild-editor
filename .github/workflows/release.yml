@@ -65,6 +65,13 @@ jobs:
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
+          releaseBody: |
+            ## What's changed in v1.2.7
+
+            - Explorer now keeps its highlight synchronized with the file currently shown in the editor, including tab switches and `Ctrl+W`.
+            - Settings → Online Judge now has a themed scrollbar when its contents exceed the available height.
+
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.2.7/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false

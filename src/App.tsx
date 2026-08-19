@@ -2259,7 +2259,7 @@ function App() {
               return (
               <div className="explorer-file-row" key={tab.id}>
                 <button
-                  className={`explorer-file ${fileKey(tab.filename) === fileKey(selectedExplorerFilename || activeTab?.filename || "") ? "active" : ""}`}
+                  className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`}
                   onClick={() => openSavedFile(tab)}
                   onFocus={() => setSelectedExplorerFilename(tab.filename)}
                   onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }}
