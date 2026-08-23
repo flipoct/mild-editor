@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { invoke } from "@tauri-apps/api/core";
@@ -9,6 +9,7 @@ import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { fileKey, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
 import { renderTemplateWithCursor } from "./templateParser";
+import packageInfo from "../package.json";
 
 type Language = "cpp" | "python";
 /** Competitive-programming verdicts. `ac`/`wa` come from comparing streams, the rest from the runner. */
@@ -100,7 +101,8 @@ type CodeSnippet = {
 
 type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[]; contestImport: boolean };
 
-type ExplorerMenu = { file: ProblemTab; x: number; y: number };
+type ExplorerMenu = { file?: ProblemTab; directory?: string; x: number; y: number };
+type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
 type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
 
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
@@ -211,6 +213,16 @@ const isContestImportUrl = (rawUrl: string) => {
   } catch { return false; }
 };
 const defaultFilename = (index: number, language: Language = "cpp") => `${index < 26 ? String.fromCharCode(65 + index) : `problem${index + 1}`}.${language === "cpp" ? "cpp" : "py"}`;
+const normalizedExplorerPath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+const explorerBasename = (path: string) => normalizedExplorerPath(path).split("/").at(-1) || path;
+const explorerParent = (path: string) => normalizedExplorerPath(path).split("/").slice(0, -1).join("/");
+const nextDefaultFilename = (filenames: Iterable<string>, language: Language = "cpp") => {
+  const occupied = new Set(Array.from(filenames, fileKey));
+  for (let index = 0; ; index += 1) {
+    const candidate = defaultFilename(index, language);
+    if (!occupied.has(fileKey(candidate))) return candidate;
+  }
+};
 const companionSource = (url: string): ProblemSource =>
   /atcoder\.jp/i.test(url) ? "atcoder" : /codeforces\.com/i.test(url) ? "codeforces" : /doj\.kr/i.test(url) ? "doj" : "other";
 /** `"A. Theatre Square"` and `"A - Sum"` both become `A.cpp`, matching what the URL importer produces. */
@@ -304,7 +316,7 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 };
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-const APP_VERSION = "1.2.4";
+const APP_VERSION = packageInfo.version;
 
 const messages = {
   en: {
@@ -316,7 +328,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
-    sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files",
+    sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", addFont: "add font file", remove: "remove",
     backgroundImage: "background image", chooseBackground: "choose image", clearBackground: "remove image", acrylicOpacity: "panel opacity", acrylicBlur: "background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "no image selected",
@@ -337,7 +349,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
-    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
@@ -369,6 +381,8 @@ function App() {
   const [activeTabId, setActiveTabId] = useState("");
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
   const [savedFiles, setSavedFiles] = useState<ProblemTab[]>([]);
+  const [workspaceDirectories, setWorkspaceDirectories] = useState<string[]>([]);
+  const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const [testPanelWidth, setTestPanelWidth] = useState(() => Number(localStorage.getItem("mild-test-panel-width")) || 306);
   const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
   const resizeRef = useRef<{ panel: "test" | "explorer"; startX: number; startWidth: number; width: number } | null>(null);
@@ -395,6 +409,10 @@ function App() {
   const [newFileImportPending, setNewFileImportPending] = useState(false);
   const [blankFilenameOpen, setBlankFilenameOpen] = useState(false);
   const [blankFilename, setBlankFilename] = useState("");
+  const [folderNameOpen, setFolderNameOpen] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const [entryParentDirectory, setEntryParentDirectory] = useState("");
+  const [deleteConfirmDirectory, setDeleteConfirmDirectory] = useState<string | null>(null);
   const [importCollision, setImportCollision] = useState<ImportCollision | null>(null);
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
@@ -449,6 +467,13 @@ function App() {
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
   const t = (key: keyof typeof messages.en) => messages[uiLocale][key];
+  const updateCollapsedDirectories = (update: (items: Set<string>) => Set<string>) => {
+    setCollapsedDirectories((items) => {
+      const next = update(items);
+      if (workspacePath) localStorage.setItem(`mild-collapsed-directories:${workspacePath}`, JSON.stringify([...next]));
+      return next;
+    });
+  };
   const monacoTheme = `mild-${uiTheme}`;
   const fontOptions = useMemo(() => [...systemFonts, ...customFonts], [customFonts, systemFonts]);
   const selectedFont = fontOptions.find((font) => font.id === editorFont) || fontOptions[0] || fallbackEditorFont;
@@ -472,6 +497,42 @@ function App() {
       return natural.compare(left.filename.replace(/\.[^.]+$/, ""), right.filename.replace(/\.[^.]+$/, "")) || natural.compare(left.filename, right.filename);
     });
   }, [explorerSort, explorerSource, savedFiles, tabs, workspacePath]);
+  const explorerTree = useMemo(() => {
+    type DirectoryNode = Extract<ExplorerTreeNode, { kind: "directory" }>;
+    const root: DirectoryNode = { kind: "directory", name: "", path: "", children: [] };
+    const directories = new Map<string, DirectoryNode>([["", root]]);
+    const ensureDirectory = (rawPath: string) => {
+      const path = normalizedExplorerPath(rawPath);
+      let current = root;
+      let built = "";
+      for (const part of path.split("/").filter(Boolean)) {
+        built = built ? `${built}/${part}` : part;
+        let child = directories.get(fileKey(built));
+        if (!child) {
+          child = { kind: "directory", name: part, path: built, children: [] };
+          directories.set(fileKey(built), child);
+          current.children.push(child);
+        }
+        current = child;
+      }
+      return current;
+    };
+    workspaceDirectories.forEach(ensureDirectory);
+    explorerFiles.forEach((file) => ensureDirectory(explorerParent(file.filename)).children.push({ kind: "file", file }));
+    const fileOrder = new Map(explorerFiles.map((file, index) => [fileKey(file.filename), index]));
+    const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    const sortChildren = (directory: DirectoryNode) => {
+      directory.children.sort((left, right) => {
+        if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+        if (left.kind === "directory" && right.kind === "directory") return natural.compare(left.name, right.name);
+        if (left.kind === "file" && right.kind === "file") return (fileOrder.get(fileKey(left.file.filename)) || 0) - (fileOrder.get(fileKey(right.file.filename)) || 0);
+        return 0;
+      });
+      directory.children.forEach((child) => { if (child.kind === "directory") sortChildren(child); });
+    };
+    sortChildren(root);
+    return root.children;
+  }, [explorerFiles, workspaceDirectories]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
   const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated"].includes(fileStatus);
 
@@ -933,6 +994,76 @@ function App() {
     catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
 
+  const openFolderLocation = async (directory: string) => {
+    if (!workspacePath) return;
+    try { await invoke("open_workspace_folder_location", { request: { folderPath: workspacePath, directory } }); }
+    catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const refreshWorkspaceDirectories = async (folderPath = workspacePath) => {
+    if (!folderPath) { setWorkspaceDirectories([]); return; }
+    try {
+      const directories = await invoke<string[]>("list_workspace_directories", { request: { folderPath } });
+      setWorkspaceDirectories(directories);
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const beginBlankFile = (parentDirectory = "") => {
+    setExplorerMenu(null);
+    const parent = normalizedExplorerPath(parentDirectory);
+    const siblingNames = [...savedFiles, ...tabs].filter((file) => fileKey(explorerParent(file.filename)) === fileKey(parent)).map((file) => explorerBasename(file.filename));
+    setEntryParentDirectory(parent);
+    setBlankFilename(nextDefaultFilename(siblingNames));
+    setBlankFilenameOpen(true);
+  };
+
+  const beginFolderCreation = (parentDirectory = "") => {
+    setExplorerMenu(null);
+    setEntryParentDirectory(normalizedExplorerPath(parentDirectory));
+    setFolderName("");
+    setFolderNameOpen(true);
+  };
+
+  const createWorkspaceFolder = async () => {
+    if (!workspacePath || !folderName.trim()) return;
+    try {
+      const created = await invoke<string>("create_workspace_folder", { request: { folderPath: workspacePath, name: folderName, parentDirectory: entryParentDirectory } });
+      setFolderNameOpen(false);
+      setFolderName("");
+      updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(entryParentDirectory)); next.delete(fileKey(created)); return next; });
+      await refreshWorkspaceDirectories(workspacePath);
+      setFileStatus("saved");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const deleteWorkspaceFolder = async () => {
+    if (!workspacePath || !deleteConfirmDirectory) return;
+    try {
+      const directory = deleteConfirmDirectory;
+      const removed = await invoke<string[]>("delete_workspace_folder", { request: { folderPath: workspacePath, directory } });
+      const removedKeys = new Set(removed.map(fileKey));
+      const remainingTabs = tabs.filter((tab) => !removedKeys.has(fileKey(tab.filename)));
+      setTabs(remainingTabs);
+      setSavedFiles((files) => files.filter((file) => !removedKeys.has(fileKey(file.filename))));
+      setSelectedExplorerFilename((filename) => removedKeys.has(fileKey(filename)) ? "" : filename);
+      updateCollapsedDirectories((items) => new Set([...items].filter((path) => path !== fileKey(directory) && !path.startsWith(`${fileKey(directory)}/`))));
+      if (activeTab && removedKeys.has(fileKey(activeTab.filename))) {
+        const next = remainingTabs[0];
+        if (next) activateTab(next);
+        else { setActiveTabId(""); clearDiagnostics(); }
+      }
+      setDeleteConfirmDirectory(null);
+      await refreshWorkspaceDirectories(workspacePath);
+      setFileStatus("saved");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const createWorkspace = async () => {
     try {
       const folderPath = await open({ directory: true, multiple: false, title: "Create Mild Editor project" });
@@ -941,6 +1072,7 @@ function App() {
       setWorkspacePath(created.folderPath);
       setTabs([]);
       setSavedFiles([]);
+      setWorkspaceDirectories([]);
       setActiveTabId("");
       setSelectedExplorerFilename("");
       clearDiagnostics();
@@ -971,13 +1103,18 @@ function App() {
   };
 
   const createBlankProblem = async (requestedFilename: string) => {
-    const typedName = requestedFilename.trim() || defaultFilename(savedFiles.length + tabs.length);
-    const withExtension = languageFromFilename(typedName) ? typedName : `${typedName}.cpp`;
     const diskFiles = workspacePath ? await invoke<string[]>("list_workspace_source_filenames", { request: { folderPath: workspacePath } }) : [];
-    const occupied = new Set([...savedFiles.map((tab) => tab.filename), ...tabs.map((tab) => tab.filename), ...diskFiles]);
+    const occupiedNames = [...savedFiles.map((tab) => tab.filename), ...tabs.map((tab) => tab.filename), ...diskFiles];
+    const requestedPath = requestedFilename.trim() || nextDefaultFilename(occupiedNames);
+    const typedName = entryParentDirectory ? `${entryParentDirectory}/${explorerBasename(requestedPath)}` : requestedPath;
+    const detectedLanguage = languageFromFilename(typedName);
+    if (!detectedLanguage && /(^|[\\/])[^\\/]+\.[^\\/.]+$/.test(typedName)) return;
+    const withExtension = detectedLanguage ? typedName : `${typedName}.cpp`;
+    const occupied = new Set(occupiedNames);
     const filename = mexFilename(withExtension, occupied);
+    if (entryParentDirectory) updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(entryParentDirectory)); return next; });
     const fileLanguage = languageFromFilename(filename) || "cpp";
-    const title = filename.replace(/\.[^.]+$/, "");
+    const title = explorerBasename(filename).replace(/\.[^.]+$/, "");
     const createdAt = new Date();
     const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title, url: "", now: createdAt });
     const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename, title, url: "", now: createdAt });
@@ -1022,7 +1159,8 @@ function App() {
   const cancelProblemImport = () => {
     setAtCoderOpen(false);
     if (newFileImportPending) {
-      setBlankFilename(defaultFilename(savedFiles.length + tabs.length));
+      setEntryParentDirectory("");
+      setBlankFilename(nextDefaultFilename([...savedFiles, ...tabs].map((file) => file.filename)));
       setBlankFilenameOpen(true);
     }
     setNewFileImportPending(false);
@@ -1041,6 +1179,7 @@ function App() {
     void createBlankProblem(blankFilename);
     setBlankFilenameOpen(false);
     setBlankFilename("");
+    setEntryParentDirectory("");
   };
 
   const closeProblem = (id: string) => {
@@ -1584,6 +1723,17 @@ function App() {
   }, [workspacePath]);
 
   useEffect(() => {
+    if (!workspacePath) setCollapsedDirectories(new Set());
+    else {
+      try {
+        const stored = JSON.parse(localStorage.getItem(`mild-collapsed-directories:${workspacePath}`) || "[]");
+        setCollapsedDirectories(new Set(Array.isArray(stored) ? stored.filter((path): path is string => typeof path === "string") : []));
+      } catch { setCollapsedDirectories(new Set()); }
+    }
+    void refreshWorkspaceDirectories(workspacePath);
+  }, [workspacePath]);
+
+  useEffect(() => {
     if (!workspacePath) return;
     localStorage.setItem("mild-last-open-tabs", JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
   }, [activeTab?.filename, tabs, workspacePath]);
@@ -1977,8 +2127,10 @@ function App() {
       else if (appCloseConfirm) setAppCloseConfirm(false);
       else if (closeConfirmTabId) setCloseConfirmTabId(null);
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
+      else if (deleteConfirmDirectory) setDeleteConfirmDirectory(null);
       else if (sourceFile) setSourceFile(null);
       else if (renameFile) setRenameFile(null);
+      else if (folderNameOpen) setFolderNameOpen(false);
       else if (blankFilenameOpen) setBlankFilenameOpen(false);
       else if (importCollision) setImportCollision(null);
       else if (settingsOpen) setSettingsOpen(false);
@@ -1989,7 +2141,7 @@ function App() {
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerMenu, hasFileStatusError, importCollision, renameFile, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, importCollision, renameFile, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -2019,7 +2171,7 @@ function App() {
         return;
       }
       if (event.defaultPrevented) return;
-      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || sourceFile || renameFile || blankFilenameOpen || importCollision || atCoderOpen)) return;
+      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || deleteConfirmDirectory || sourceFile || renameFile || folderNameOpen || blankFilenameOpen || importCollision || atCoderOpen)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (appCloseConfirm) {
@@ -2029,10 +2181,14 @@ function App() {
         setCloseConfirmTabId(null);
       } else if (deleteConfirmFile) {
         void deleteSavedFile();
+      } else if (deleteConfirmDirectory) {
+        void deleteWorkspaceFolder();
       } else if (sourceFile) {
         void updateProblemSource();
       } else if (renameFile) {
         void renameWorkspaceFile();
+      } else if (folderNameOpen) {
+        void createWorkspaceFolder();
       } else if (blankFilenameOpen) {
         confirmBlankProblem();
       } else if (importCollision) {
@@ -2045,7 +2201,7 @@ function App() {
     };
     window.addEventListener("keydown", handleConfirm, true);
     return () => window.removeEventListener("keydown", handleConfirm, true);
-  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, hasFileStatusError, importCollision, renameFile, sourceFile, sourceUrlValue, sourceValue]);
+  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, renameFile, sourceFile, sourceUrlValue, sourceValue]);
 
   const showTestPanel = testPanelVisible && tabs.length > 0;
   const showExplorer = explorerVisible && Boolean(workspacePath);
@@ -2065,6 +2221,34 @@ function App() {
     const worst = finalVerdicts.find((verdict) => verdict !== "ac" && tests.some((test) => test.status === verdict));
     return `${accepted} / ${tests.length} AC${worst ? ` · ${verdictLabels[worst]}` : ""}`;
   }, [running, tests]);
+
+  const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => nodes.flatMap((node) => {
+    if (node.kind === "directory") {
+      const collapsed = collapsedDirectories.has(fileKey(node.path));
+      return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
+        <button className="explorer-directory" style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={() => updateCollapsedDirectories((items) => {
+          const next = new Set(items);
+          const key = fileKey(node.path);
+          if (next.has(key)) next.delete(key); else next.add(key);
+          return next;
+        })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
+          <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg><span>{node.name}</span>
+        </button>
+        {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
+      </div>];
+    }
+    const tab = node.file;
+    const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
+    return [<div className="explorer-file-row" key={tab.id} style={{ paddingLeft: `${14 + depth * 14}px` }}>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} onClick={() => openSavedFile(tab)} onFocus={() => setSelectedExplorerFilename(tab.filename)} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+        <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
+        <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
+        {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
+        {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
+      </button>
+      {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>}
+    </div>];
+  });
 
   return (
     <main
@@ -2252,28 +2436,17 @@ function App() {
             <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
             <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
           </div>
-          <div className="explorer-files">
-            {!explorerFiles.length && <div className="explorer-empty">{t("noFiles")}</div>}
-            {explorerFiles.map((tab) => {
-              const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
-              return (
-              <div className="explorer-file-row" key={tab.id}>
-                <button
-                  className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`}
-                  onClick={() => openSavedFile(tab)}
-                  onFocus={() => setSelectedExplorerFilename(tab.filename)}
-                  onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }}
-                  title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}
-                >
-                  <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
-                  <span className="explorer-file-name">{tab.filename}</span>
-                  {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
-                  {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
-                </button>
-                {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>}
-              </div>
-              );
-            })}
+          <div className="explorer-create-actions">
+            <button onClick={() => beginBlankFile()} title={t("newFile")} aria-label={t("newFile")}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l4 4v9H3v-13Zm1 1v11h8V6H8.5V2.5H4Zm5.5.7V5H11.3L9.5 3.2ZM7.5 7v2H5.5v1h2v2h1v-2h2V9h-2V7h-1Z" /></svg></button>
+            <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Zm5 3v2h-2v1h2v2h1v-2h2V9h-2V7h-1Z" /></svg></button>
+          </div>
+          <div className="explorer-files" onContextMenu={(event) => {
+            if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-delete, .explorer-metadata"))) return;
+            event.preventDefault();
+            setExplorerMenu({ x: event.clientX, y: event.clientY });
+          }}>
+            {!explorerFiles.length && !workspaceDirectories.length && <div className="explorer-empty">{t("noFiles")}</div>}
+            {renderExplorerTree(explorerTree)}
             {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
           </div>
         </aside></>}
@@ -2286,12 +2459,26 @@ function App() {
       </section>}
 
       {explorerMenu && <div className="explorer-context-menu" style={{ left: explorerMenu.x, top: explorerMenu.y }} role="menu">
-        <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file); setExplorerMenu(null); }}>import test cases</button>
-        <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file); setExplorerMenu(null); }}>open file location</button>
-        <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file); setExplorerMenu(null); }}>duplicate file</button>
-        <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file); setExplorerMenu(null); }}>set problem source</button>
-        <button role="menuitem" onClick={() => { setRenameValue(explorerMenu.file.filename); setRenameFile(explorerMenu.file); setExplorerMenu(null); }}>rename file</button>
-        <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file); setExplorerMenu(null); }}>delete file</button>
+        {explorerMenu.file ? <>
+          <button role="menuitem" onClick={() => beginBlankFile(explorerParent(explorerMenu.file!.filename))}>{t("newFile")}</button>
+          <button role="menuitem" onClick={() => beginFolderCreation(explorerParent(explorerMenu.file!.filename))}>{t("newFolder")}</button>
+          <div className="explorer-menu-separator" />
+          <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file!); setExplorerMenu(null); }}>import test cases</button>
+          <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>open file location</button>
+          <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>duplicate file</button>
+          <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>set problem source</button>
+          <button role="menuitem" onClick={() => { setRenameValue(explorerMenu.file!.filename); setRenameFile(explorerMenu.file!); setExplorerMenu(null); }}>rename file</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>delete file</button>
+        </> : explorerMenu.directory ? <>
+          <button role="menuitem" onClick={() => beginBlankFile(explorerMenu.directory!)}>{t("newFile")}</button>
+          <button role="menuitem" onClick={() => beginFolderCreation(explorerMenu.directory!)}>{t("newFolder")}</button>
+          <div className="explorer-menu-separator" />
+          <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>open folder location</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>delete folder</button>
+        </> : <>
+          <button role="menuitem" onClick={() => beginBlankFile()}>{t("newFile")}</button>
+          <button role="menuitem" onClick={() => beginFolderCreation()}>{t("newFolder")}</button>
+        </>}
       </div>}
 
       {closeConfirmTabId && (() => {
@@ -2470,9 +2657,27 @@ function App() {
       {blankFilenameOpen && <div className="modal-backdrop close-confirm" role="presentation">
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="blank-file-title">
           <span className="eyebrow">new file</span>
-          <h2 id="blank-file-title">Choose a file name</h2>
-          <input className="atcoder-url" value={blankFilename} onChange={(event) => setBlankFilename(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); confirmBlankProblem(); } }} autoFocus spellCheck={false} />
+          <h2 id="blank-file-title">Choose a file name{entryParentDirectory ? ` in ${entryParentDirectory}` : ""}</h2>
+          <input className="atcoder-url" value={blankFilename} onChange={(event) => setBlankFilename(event.target.value)} autoFocus spellCheck={false} />
           <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setBlankFilenameOpen(false)}>cancel</button><button className="primary-button" onClick={confirmBlankProblem}>create</button></footer>
+        </section>
+      </div>}
+
+      {deleteConfirmDirectory && <div className="modal-backdrop close-confirm" role="presentation">
+        <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-folder-confirm-title">
+          <span className="eyebrow">delete folder</span>
+          <h2 id="delete-folder-confirm-title">Delete {deleteConfirmDirectory}?</h2>
+          <p>This permanently deletes the folder, every file inside it, and their saved test cases.</p>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setDeleteConfirmDirectory(null)}>cancel</button><button className="danger-button" onClick={() => void deleteWorkspaceFolder()}>delete folder</button></footer>
+        </section>
+      </div>}
+
+      {folderNameOpen && <div className="modal-backdrop close-confirm" role="presentation">
+        <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-name-title">
+          <span className="eyebrow">{t("newFolder")}</span>
+          <h2 id="folder-name-title">Choose a folder name{entryParentDirectory ? ` in ${entryParentDirectory}` : ""}</h2>
+          <input className="atcoder-url" value={folderName} onChange={(event) => setFolderName(event.target.value)} autoFocus spellCheck={false} />
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setFolderNameOpen(false)}>{t("cancel")}</button><button className="primary-button" onClick={() => void createWorkspaceFolder()}>create</button></footer>
         </section>
       </div>}
 
@@ -2507,8 +2712,10 @@ function App() {
         <span className="wordmark">mild editor <small>v{APP_VERSION}</small></span>
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
-        <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
-        <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
+        <span className="status-services">
+          <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
+          <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
+        </span>
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={language} onChange={(event) => {
           const next = event.target.value as Language;

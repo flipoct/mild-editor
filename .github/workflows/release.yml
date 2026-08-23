@@ -66,12 +66,15 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.2.7
+            ## What's changed in v1.3.0
 
-            - Explorer now keeps its highlight synchronized with the file currently shown in the editor, including tab switches and `Ctrl+W`.
-            - Settings → Online Judge now has a themed scrollbar when its contents exceed the available height.
+            - Existing C++ and Python files are now discovered recursively when opening a workspace; unsupported extensions are ignored.
+            - Explorer now supports nested folders, persistent expand/collapse state, recursive deletion, and file/folder location actions.
+            - Files and folders can be created directly in the selected Explorer directory or through its context menu.
+            - Nested paths, active-file synchronization, uppercase source extensions, and new-problem naming are more reliable.
+            - Live Codeforces and AtCoder importing has been improved.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.2.7/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.3.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false

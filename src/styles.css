@@ -186,9 +186,13 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .explorer-controls { display: grid; gap: 4px; padding: 7px 8px; border-bottom: 1px solid #353631; }
 .explorer-controls label { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 5px; color: #777970; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
 .explorer-controls select { min-width: 0; width: 100%; height: 24px; padding: 0 5px; font-size: 9px; }
+.explorer-create-actions { height: 30px; display: flex; justify-content: flex-end; align-items: center; gap: 2px; padding: 0 7px; border-bottom: 1px solid #353631; }
+.explorer-create-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8d8e86; cursor: pointer; }
+.explorer-create-actions button:hover { background: #35362f; color: #d0cdc3; }
+.explorer-create-actions svg { width: 14px; height: 14px; fill: currentColor; }
 .explorer-empty { padding: 18px 10px; color: #777970; font-size: 9px; text-align: center; }
 .explorer-files { min-height: 0; flex: 1; padding: 4px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #50514b transparent; }
-.explorer-file-row { min-width: 0; height: 29px; display: flex; align-items: center; }
+.explorer-file-row { min-width: 0; height: 29px; display: flex; align-items: center; padding-left: 14px; }
 .explorer-file, .explorer-metadata { width: 100%; height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 25px; border: 0; background: transparent; color: #96978f; text-align: left; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
 .explorer-file { min-width: 0; flex: 1; cursor: pointer; }
 .explorer-file:hover { background: #30312d; color: #c5c2b8; }
@@ -201,6 +205,12 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .file-icon.python { color: #d0b676; }
 .file-icon.json { color: #aaa477; }
 .explorer-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-directory { width: 100%; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 9px 0 14px; border: 0; background: transparent; color: #96978f; text-align: left; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; user-select: none; }
+.explorer-directory:hover { background: #30312d; color: #c5c2b8; }
+.explorer-directory svg { width: 13px; height: 13px; fill: currentColor; opacity: .8; }
+.explorer-directory > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-directory-chevron { width: 8px; color: #777970; font-size: 13px; transform-origin: center; transition: transform .12s ease; }
+.explorer-directory-chevron.open { transform: rotate(90deg); }
 .explorer-file kbd { min-width: 15px; height: 15px; display: grid; place-items: center; border: 1px solid #444640; border-radius: 3px; color: #6f7169; background: #292a26; font: 8px "Cascadia Code", monospace; }
 .explorer-metadata { opacity: .62; }
 .explorer-context-menu { position: fixed; z-index: 1100; width: 166px; padding: 4px; border: 1px solid #505149; border-radius: 7px; background: #292a26; box-shadow: 0 12px 32px #0d0e0b88; }
@@ -208,6 +218,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .explorer-context-menu button:hover { background: #383933; color: #dedbd2; }
 .explorer-context-menu .menu-danger { color: #d4a19b; }
 .explorer-context-menu .menu-danger:hover { background: #493735; color: #e8b5ae; }
+.explorer-menu-separator { height: 1px; margin: 4px 3px; background: #45463f; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #11120f99; backdrop-filter: blur(4px); }
 .settings-dialog { width: min(720px, 92vw); height: min(610px, 84vh); display: flex; flex-direction: column; padding: 20px; border: 1px solid #505149; border-radius: 12px; background: #292a26; box-shadow: 0 24px 80px #090a0877; }
@@ -310,7 +321,8 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .wordmark small { margin-left: 4px; color: #74766e; font: 9px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
 .status-copy { color: #a09b87; }
 .file-status { color: #777a71; max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lsp-status { height: 22px; margin-left: auto; display: flex; align-items: center; gap: 5px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: #777a71; font: 9px "Cascadia Code", monospace; cursor: pointer; }
+.status-services { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.lsp-status { height: 22px; display: flex; align-items: center; gap: 5px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: #777a71; font: 9px "Cascadia Code", monospace; cursor: pointer; }
 .lsp-status:hover { background: #30312d; color: #b8b5aa; }
 .lsp-status > span, .lsp-dot { width: 6px; height: 6px; border-radius: 50%; background: #777972; }
 .lsp-status.ready > span, .lsp-state.ready .lsp-dot { background: #91b49a; }
@@ -329,7 +341,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .problem-tab.active, :root[data-theme] .test-card.open, :root[data-theme] .snippet-item.active, :root[data-theme] .explorer-file.active { background: var(--bg-3); color: var(--text); }
 :root[data-theme] .problem-tab.active { box-shadow: inset 0 2px var(--accent); }
 :root[data-theme] .editor-area { background: var(--bg-editor); }
-:root[data-theme] .titlebar-tools, :root[data-theme] .problem-tabs, :root[data-theme] .problem-tab, :root[data-theme] .panel-heading, :root[data-theme] .test-card, :root[data-theme] .test-actions, :root[data-theme] .file-explorer, :root[data-theme] .explorer-folder, :root[data-theme] .explorer-controls, :root[data-theme] .explorer-context-menu, :root[data-theme] .settings-pages, :root[data-theme] .snippet-item, :root[data-theme] .new-snippet { border-color: var(--border); }
+:root[data-theme] .titlebar-tools, :root[data-theme] .problem-tabs, :root[data-theme] .problem-tab, :root[data-theme] .panel-heading, :root[data-theme] .test-card, :root[data-theme] .test-actions, :root[data-theme] .file-explorer, :root[data-theme] .explorer-folder, :root[data-theme] .explorer-controls, :root[data-theme] .explorer-create-actions, :root[data-theme] .explorer-context-menu, :root[data-theme] .settings-pages, :root[data-theme] .snippet-item, :root[data-theme] .new-snippet { border-color: var(--border); }
 :root[data-theme] .settings-dialog, :root[data-theme] .atcoder-dialog, :root[data-theme] .confirm-dialog, :root[data-theme] .explorer-context-menu { background: var(--bg-2); border-color: var(--border); color: var(--text); }
 :root[data-theme] textarea, :root[data-theme] input, :root[data-theme] select, :root[data-theme] .template-monaco, :root[data-theme] .snippet-monaco, :root[data-theme] .appearance-group pre { background: var(--field); border-color: var(--border); color: var(--text); }
 :root[data-theme] select option, :root[data-theme] select optgroup { background-color: var(--field); color: var(--text); }
@@ -359,8 +371,9 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .file-icon.cpp { color: var(--cpp); }
 :root[data-theme] .file-icon.python { color: var(--python); }
 :root[data-theme] .file-icon.json { color: var(--json); }
-:root[data-theme] .explorer-file, :root[data-theme] .explorer-metadata, :root[data-theme] .explorer-empty, :root[data-theme] .explorer-controls label, :root[data-theme] .explorer-chevron { color: var(--muted); }
+:root[data-theme] .explorer-file, :root[data-theme] .explorer-directory, :root[data-theme] .explorer-metadata, :root[data-theme] .explorer-empty, :root[data-theme] .explorer-controls label, :root[data-theme] .explorer-chevron, :root[data-theme] .explorer-directory-chevron, :root[data-theme] .explorer-create-actions button { color: var(--muted); }
 :root[data-theme] .explorer-file.active { box-shadow: inset 2px 0 var(--accent); }
+:root[data-theme] .explorer-menu-separator { background: var(--border); }
 :root[data-theme] .explorer-file kbd { background: var(--bg-2); border-color: var(--border); color: var(--muted); }
 :root[data-theme] .settings-pages button { color: var(--muted); }
 :root[data-theme] .settings-pages button.active { border-bottom-color: var(--accent); color: var(--accent); }
@@ -376,7 +389,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .welcome-screen .eyebrow, :root[data-theme] .welcome-actions kbd, :root[data-theme] .status-copy, :root[data-theme] .status-language { color: var(--accent); }
 :root[data-theme] .modal-backdrop { background: var(--overlay); }
 :root[data-theme] .settings-dialog, :root[data-theme] .atcoder-dialog, :root[data-theme] .confirm-dialog { box-shadow: 0 24px 80px var(--shadow); }
-:root[data-theme] .file-actions button:hover, :root[data-theme] .window-controls button:hover, :root[data-theme] .explorer-context-menu button:hover, :root[data-theme] .explorer-file:hover, :root[data-theme] .status-settings:hover, :root[data-theme] .lsp-status:hover { background: var(--bg-3); color: var(--text); }
+:root[data-theme] .file-actions button:hover, :root[data-theme] .window-controls button:hover, :root[data-theme] .explorer-context-menu button:hover, :root[data-theme] .explorer-file:hover, :root[data-theme] .explorer-directory:hover, :root[data-theme] .explorer-create-actions button:hover, :root[data-theme] .status-settings:hover, :root[data-theme] .lsp-status:hover { background: var(--bg-3); color: var(--text); }
 :root[data-theme] .titlebar-logo, :root[data-theme] .panel-run { background: var(--bg-3); border-color: var(--border); color: var(--accent); }
 :root[data-theme] .titlebar-name, :root[data-theme] .wordmark, :root[data-theme] .panel-heading, :root[data-theme] .test-toggle, :root[data-theme] .settings-header h2, :root[data-theme] .theme-option strong { color: var(--text); }
 :root[data-theme] .titlebar-file, :root[data-theme] .file-status, :root[data-theme] .settings-help, :root[data-theme] .theme-option small, :root[data-theme] .test-fields label, :root[data-theme] .explorer-folder { color: var(--muted); }

@@ -193,17 +193,77 @@ struct ListWorkspaceFilesRequest {
     folder_path: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWorkspaceFolderRequest {
+    folder_path: String,
+    name: String,
+    #[serde(default)]
+    parent_directory: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteWorkspaceFolderRequest {
+    folder_path: String,
+    directory: String,
+}
+
 #[tauri::command]
 fn list_workspace_source_filenames(request: ListWorkspaceFilesRequest) -> Result<Vec<String>, String> {
     let folder = std::path::PathBuf::from(request.folder_path);
-    let mut filenames = fs::read_dir(&folder)
-        .map_err(|error| format!("Could not read workspace folder: {error}"))?
-        .flatten()
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .filter(|filename| workspace_source_filename(filename).is_ok())
-        .collect::<Vec<_>>();
+    let mut filenames = Vec::new();
+    collect_workspace_sources(&folder, &folder, &mut filenames)?;
     filenames.sort_by_key(|filename| filename_key(filename));
     Ok(filenames)
+}
+
+#[tauri::command]
+fn list_workspace_directories(request: ListWorkspaceFilesRequest) -> Result<Vec<String>, String> {
+    let folder = std::path::PathBuf::from(request.folder_path);
+    let mut directories = Vec::new();
+    collect_workspace_directories(&folder, &folder, &mut directories)?;
+    directories.sort_by_key(|name| filename_key(name));
+    Ok(directories)
+}
+
+#[tauri::command]
+fn create_workspace_folder(request: CreateWorkspaceFolderRequest) -> Result<String, String> {
+    let folder = std::path::PathBuf::from(request.folder_path);
+    let parent = workspace_directory_path(&request.parent_directory)?;
+    let parent_path = folder.join(&parent);
+    if !parent_path.is_dir() { return Err("The parent folder does not exist.".into()); }
+    let requested = request.name.trim();
+    let requested_path = Path::new(requested);
+    if requested.is_empty() || requested_path.file_name().and_then(|value| value.to_str()) != Some(requested) || matches!(requested, "." | "..") {
+        return Err("Enter a valid folder name.".into());
+    }
+    let mut name = requested.to_string();
+    for number in 1.. {
+        if !parent_path.join(&name).exists() { break; }
+        name = format!("{requested} ({number})");
+    }
+    fs::create_dir(parent_path.join(&name)).map_err(|error| format!("Could not create folder: {error}"))?;
+    Ok(if parent.as_os_str().is_empty() { name } else { parent.join(name).to_string_lossy().replace('\\', "/") })
+}
+
+#[tauri::command]
+fn delete_workspace_folder(request: DeleteWorkspaceFolderRequest) -> Result<Vec<String>, String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?;
+    if directory.as_os_str().is_empty() { return Err("The workspace root cannot be deleted.".into()); }
+    let target = folder.join(&directory);
+    if !target.is_dir() { return Err("Workspace folder does not exist.".into()); }
+    let prefix = format!("{}/", directory.to_string_lossy().replace('\\', "/"));
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("Could not read workspace metadata: {error}"))
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
+    let removed = metadata.problems.iter().filter(|problem| filename_key(&problem.filename).starts_with(&filename_key(&prefix))).map(|problem| problem.filename.clone()).collect::<Vec<_>>();
+    fs::remove_dir_all(&target).map_err(|error| format!("Could not delete folder: {error}"))?;
+    metadata.problems.retain(|problem| !filename_key(&problem.filename).starts_with(&filename_key(&prefix)));
+    fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(removed)
 }
 
 #[derive(Deserialize)]
@@ -775,43 +835,119 @@ fn load_problem(path: String) -> Result<LoadedProblem, String> {
 }
 
 fn safe_filename(filename: &str, language: &str) -> Result<String, String> {
-    let path = Path::new(filename);
-    if filename.trim().is_empty()
-        || path.file_name().and_then(|value| value.to_str()) != Some(filename)
-    {
-        return Err(format!("Invalid filename: {filename}"));
-    }
+    let (filename, detected_language) = workspace_source_filename(filename)?;
+    let path = Path::new(&filename);
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
     let valid_extension = match language {
-        "cpp" => ["cpp", "cc", "cxx"].contains(
-            &path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or(""),
-        ),
-        "python" => path.extension().and_then(|value| value.to_str()) == Some("py"),
+        "cpp" => ["cpp", "cc", "cxx"].contains(&extension.as_str()),
+        "python" => extension == "py",
         _ => false,
     };
     if !valid_extension {
         return Err(format!("The language does not match the file extension: {filename}"));
     }
+    if detected_language != language { return Err(format!("The language does not match the file extension: {filename}")); }
     Ok(filename.to_string())
 }
 
 fn workspace_source_filename(filename: &str) -> Result<(String, String), String> {
-    let path = Path::new(filename);
-    if filename.trim().is_empty() || path.file_name().and_then(|value| value.to_str()) != Some(filename) {
-        return Err("Invalid workspace filename.".into());
-    }
+    let normalized = workspace_relative_filename(filename)?;
+    let path = Path::new(&normalized);
     let language = match path.extension().and_then(|value| value.to_str()).map(|value| value.to_ascii_lowercase()).as_deref() {
         Some("cpp") | Some("cc") | Some("cxx") => "cpp",
         Some("py") => "python",
         _ => return Err("Workspace files must use .cpp, .cc, .cxx, or .py.".into()),
     };
-    Ok((filename.to_string(), language.to_string()))
+    Ok((normalized, language.to_string()))
+}
+
+fn workspace_relative_filename(filename: &str) -> Result<String, String> {
+    let normalized = filename.trim().replace('\\', "/");
+    let path = Path::new(&normalized);
+    if normalized.is_empty() || path.is_absolute() || path.components().any(|component| !matches!(component, std::path::Component::Normal(_))) {
+        return Err("Invalid workspace filename.".into());
+    }
+    Ok(normalized)
+}
+
+fn workspace_directory_path(directory: &str) -> Result<std::path::PathBuf, String> {
+    let normalized = directory.trim().replace('\\', "/");
+    if normalized.is_empty() { return Ok(std::path::PathBuf::new()); }
+    let path = Path::new(&normalized);
+    if path.is_absolute() || path.components().any(|component| !matches!(component, std::path::Component::Normal(_))) {
+        return Err("Invalid workspace folder path.".into());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn ignored_workspace_directory(name: &str) -> bool {
+    name.starts_with('.') || matches!(name.to_ascii_lowercase().as_str(), "node_modules" | "target" | "dist" | "build" | "venv" | "__pycache__")
+}
+
+fn workspace_relative_path(folder: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(folder).ok().map(|relative| relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn collect_workspace_sources(folder: &Path, current: &Path, output: &mut Vec<String>) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|error| format!("Could not read workspace folder: {error}"))?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !ignored_workspace_directory(&name) { collect_workspace_sources(folder, &path, output)?; }
+        } else if let Some(relative) = workspace_relative_path(folder, &path) {
+            if workspace_source_filename(&relative).is_ok() { output.push(relative); }
+        }
+    }
+    Ok(())
+}
+
+fn collect_workspace_directories(folder: &Path, current: &Path, output: &mut Vec<String>) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|error| format!("Could not read workspace folder: {error}"))?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ignored_workspace_directory(&name) { continue; }
+        if let Some(relative) = workspace_relative_path(folder, &path) { output.push(relative); }
+        collect_workspace_directories(folder, &path, output)?;
+    }
+    Ok(())
+}
+
+fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) -> Result<(), String> {
+    let mut filenames = Vec::new();
+    collect_workspace_sources(folder, folder, &mut filenames)?;
+    let mut disk_files = filenames.into_iter().filter_map(|filename| {
+        let (_, language) = workspace_source_filename(&filename).ok()?;
+        let path = folder.join(&filename);
+        Some((filename, language, path))
+    }).collect::<Vec<_>>();
+    disk_files.sort_by_key(|(filename, _, _)| filename_key(filename));
+    let disk_keys = disk_files.iter().map(|(filename, _, _)| filename_key(filename)).collect::<std::collections::HashSet<_>>();
+    metadata.problems.retain(|problem| disk_keys.contains(&filename_key(&problem.filename)));
+    for (filename, language, source_path) in disk_files {
+        if let Some(problem) = metadata.problems.iter_mut().find(|problem| filename_key(&problem.filename) == filename_key(&filename)) {
+            problem.filename = filename;
+            problem.language = language;
+            problem.modified_at = file_modified_at(&source_path);
+        } else {
+            metadata.problems.push(WorkspaceProblemMetadata {
+                title: Path::new(&filename).file_stem().and_then(|value| value.to_str()).unwrap_or(&filename).to_string(),
+                filename,
+                language,
+                tests: Vec::new(),
+                source: Some("other".into()),
+                source_url: None,
+                judge_status: None,
+                modified_at: file_modified_at(&source_path),
+            });
+        }
+    }
+    metadata.problems.sort_by_key(|problem| filename_key(&problem.filename));
+    Ok(())
 }
 
 fn filename_key(filename: &str) -> String {
-    filename.trim().to_lowercase()
+    filename.trim().replace('\\', "/").to_lowercase()
 }
 
 fn strip_copy_suffix(stem: &str) -> &str {
@@ -828,9 +964,7 @@ fn strip_copy_suffix(stem: &str) -> &str {
 fn unique_workspace_filename(folder: &Path, requested: &str, metadata: &WorkspaceMetadata, exclude: Option<&str>) -> String {
     let excluded = exclude.map(filename_key);
     let mut occupied = metadata.problems.iter().map(|problem| problem.filename.clone()).collect::<Vec<_>>();
-    if let Ok(entries) = fs::read_dir(folder) {
-        occupied.extend(entries.flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string)));
-    }
+    if let Ok(files) = list_workspace_source_filenames(ListWorkspaceFilesRequest { folder_path: folder.to_string_lossy().into_owned() }) { occupied.extend(files); }
     let occupied = occupied.into_iter()
         .filter(|filename| excluded.as_ref().map_or(true, |excluded| filename_key(filename) != *excluded))
         .map(|filename| filename_key(&filename))
@@ -838,11 +972,13 @@ fn unique_workspace_filename(folder: &Path, requested: &str, metadata: &Workspac
     if !occupied.contains(&filename_key(requested)) { return requested.to_string(); }
 
     let path = Path::new(requested);
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty());
     let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or(requested);
     let base = strip_copy_suffix(stem);
     let extension = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{value}")).unwrap_or_default();
     for number in 1.. {
-        let candidate = format!("{base} ({number}){extension}");
+        let leaf = format!("{base} ({number}){extension}");
+        let candidate = parent.map(|parent| parent.join(&leaf).to_string_lossy().replace('\\', "/")).unwrap_or(leaf);
         if !occupied.contains(&filename_key(&candidate)) { return candidate; }
     }
     unreachable!()
@@ -857,11 +993,15 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
     fs::create_dir_all(&folder)
         .map_err(|error| format!("Could not create the workspace folder: {error}"))?;
     let mut new_filenames = std::collections::HashSet::new();
-    for problem in &request.problems {
-        let filename = safe_filename(&problem.filename, &problem.language)?;
+    let mut supported_problems = Vec::new();
+    for problem in request.problems {
+        let normalized = workspace_relative_filename(&problem.filename)?;
+        if workspace_source_filename(&normalized).is_err() { continue; }
+        let filename = safe_filename(&normalized, &problem.language)?;
         if !new_filenames.insert(filename_key(&filename)) {
             return Err(format!("Duplicate filename: {filename}"));
         }
+        supported_problems.push((problem, filename));
     }
     let previous_metadata = fs::read_to_string(workspace_metadata_path(&folder))
         .ok()
@@ -869,8 +1009,8 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
         .unwrap_or(WorkspaceMetadata { version: 2, problems: Vec::new() });
     let mut metadata_problems = previous_metadata.problems;
     let mut outputs = Vec::new();
-    for problem in request.problems {
-        let filename = safe_filename(&problem.filename, &problem.language)?;
+    for (problem, filename) in supported_problems {
+        if let Some(parent) = folder.join(&filename).parent() { fs::create_dir_all(parent).map_err(|error| format!("Could not create source folder: {error}"))?; }
         fs::write(folder.join(&filename), &problem.code)
             .map_err(|error| format!("Could not save {filename}: {error}"))?;
         let modified_at = file_modified_at(&folder.join(&filename));
@@ -974,9 +1114,38 @@ fn open_workspace_file_location(request: DeleteWorkspaceFileRequest) -> Result<(
     Ok(())
 }
 
+#[tauri::command]
+fn open_workspace_folder_location(request: DeleteWorkspaceFolderRequest) -> Result<(), String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?;
+    if directory.as_os_str().is_empty() { return Err("Select a workspace folder.".into()); }
+    let target = folder.join(directory);
+    if !target.is_dir() { return Err("Workspace folder does not exist.".into()); }
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        std::os::windows::process::CommandExt::raw_arg(&mut command, windows_explorer_select_argument(&target));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&target);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(target.parent().unwrap_or(&folder));
+        command
+    };
+    command.spawn().map_err(|error| format!("Could not open folder location: {error}"))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn windows_explorer_select_argument(source: &Path) -> String {
-    format!("/select,\"{}\"", source.to_string_lossy())
+    format!("/select,\"{}\"", source.to_string_lossy().replace('/', "\\"))
 }
 
 #[tauri::command]
@@ -1037,60 +1206,35 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             .to_path_buf()
     };
     let metadata_path = workspace_metadata_path(&folder);
-    if !metadata_path.exists() {
-        let loaded = load_problem(selected.to_string_lossy().into_owned())?;
-        let filename = selected
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                if loaded.language == "python" {
-                    "main.py".into()
-                } else {
-                    "main.cpp".into()
+    let mut metadata: WorkspaceMetadata = if metadata_path.exists() {
+        let json = fs::read_to_string(&metadata_path)
+            .map_err(|error| format!("Could not read workspace metadata: {error}"))?;
+        match serde_json::from_str(&json) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                let old: ProblemMetadata = serde_json::from_str(&json)
+                    .map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?;
+                WorkspaceMetadata {
+                    version: 2,
+                    problems: vec![WorkspaceProblemMetadata {
+                        filename: if old.language == "python" { "main.py".into() } else { "main.cpp".into() },
+                        title: old.title,
+                        language: old.language,
+                        tests: old.tests,
+                        source: None,
+                        source_url: None,
+                        judge_status: None,
+                        modified_at: 0,
+                    }],
                 }
-            });
-        return Ok(LoadedWorkspace {
-            folder_path: loaded.folder_path,
-            problems: vec![WorkspaceProblemOutput {
-                filename,
-                title: loaded.title,
-                language: loaded.language,
-                code: loaded.code,
-                tests: loaded.tests,
-                source: None,
-                source_url: None,
-                judge_status: None,
-                modified_at: file_modified_at(&selected),
-            }],
-        });
-    }
-    let json = fs::read_to_string(&metadata_path)
-        .map_err(|error| format!("Could not read workspace metadata: {error}"))?;
-    let metadata: WorkspaceMetadata = match serde_json::from_str(&json) {
-        Ok(metadata) => metadata,
-        Err(_) => {
-            let old: ProblemMetadata = serde_json::from_str(&json)
-                .map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?;
-            WorkspaceMetadata {
-                version: 2,
-                problems: vec![WorkspaceProblemMetadata {
-                    filename: if old.language == "python" {
-                        "main.py".into()
-                    } else {
-                        "main.cpp".into()
-                    },
-                    title: old.title,
-                    language: old.language,
-                    tests: old.tests,
-                    source: None,
-                    source_url: None,
-                    judge_status: None,
-                    modified_at: 0,
-                }],
             }
         }
+    } else {
+        WorkspaceMetadata { version: 2, problems: Vec::new() }
     };
+    sync_workspace_source_files(&folder, &mut metadata)?;
+    fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
     let mut problems = Vec::new();
     for problem in metadata.problems {
         let source_path = folder.join(&problem.filename);
@@ -1119,6 +1263,7 @@ fn parse_atcoder_samples(html: &str) -> Vec<SavedTestCase> {
     let english_heading_selector =
         scraper::Selector::parse("#task-statement .lang-en h3").unwrap();
     let fallback_heading_selector = scraper::Selector::parse("#task-statement h3").unwrap();
+    let pre_selector = scraper::Selector::parse("pre").unwrap();
     let mut inputs: Vec<(String, String)> = Vec::new();
     let mut outputs: Vec<(String, String)> = Vec::new();
     // AtCoder sends both the Japanese and English statements even with
@@ -1149,8 +1294,14 @@ fn parse_atcoder_samples(html: &str) -> Vec<SavedTestCase> {
         let mut sibling = heading.next_sibling();
         while let Some(node) = sibling {
             if let Some(element) = scraper::ElementRef::wrap(node) {
-                if element.value().name() == "pre" {
-                    let value = element
+                if element.value().name() == "h3" { break; }
+                let sample = if element.value().name() == "pre" {
+                    Some(element)
+                } else {
+                    element.select(&pre_selector).next()
+                };
+                if let Some(sample) = sample {
+                    let value = sample
                         .text()
                         .collect::<String>()
                         .replace("\r\n", "\n")
@@ -1282,6 +1433,23 @@ fn parse_codeforces_html(html: &str) -> Option<(String, Vec<SavedTestCase>)> {
     (!tests.is_empty()).then_some((title, tests))
 }
 
+/// Parse the live contest table first, as Competitive Companion does in the browser.
+/// The public problemset API can lag behind while a round is still running.
+fn parse_codeforces_contest_urls(html: &str, base_url: &reqwest::Url) -> Vec<String> {
+    let document = scraper::Html::parse_document(html);
+    let link_selector = scraper::Selector::parse(".problems > tbody > tr > td:first-child > a, ._ProblemsPage_problems > table > tbody > tr > td:first-child > a").unwrap();
+    let mut urls = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for link in document.select(&link_selector) {
+        let Some(href) = link.value().attr("href") else { continue };
+        let Ok(problem_url) = base_url.join(href) else { continue };
+        if !problem_url.path().contains("/problem/") { continue; }
+        let key = problem_url.path().trim_end_matches('/').to_ascii_lowercase();
+        if seen.insert(key) { urls.push(problem_url.to_string()); }
+    }
+    urls
+}
+
 fn parse_codeforces_markdown(markdown: &str) -> Option<(String, Vec<SavedTestCase>)> {
     let title = markdown.lines().find_map(|line| line.strip_prefix("Title: ")).unwrap_or("Codeforces problem").trim().to_string();
     let lines = markdown.lines().collect::<Vec<_>>();
@@ -1343,18 +1511,25 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
     } else {
         (segments.get(marker.wrapping_sub(1)).copied().ok_or("Missing contest ID.")?, segments.get(marker + 1).copied().ok_or("Missing problem ID.")?)
     };
-    let direct_url = format!("https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en");
-    if let Ok(html) = client.get(&direct_url)
-        .timeout(Duration::from_secs(6))
-        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
-        .send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
-        if let Some((title, tests)) = parse_codeforces_html(&html) {
-            return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+    let mut live_url = parsed.clone();
+    live_url.query_pairs_mut().append_pair("locale", "en");
+    let direct_urls = [
+        live_url.to_string(),
+        format!("https://codeforces.com/contest/{contest}/problem/{letter}?locale=en"),
+        format!("https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
+    ];
+    let mut seen_direct_urls = std::collections::HashSet::new();
+    for direct_url in direct_urls {
+        if !seen_direct_urls.insert(direct_url.clone()) { continue; }
+        if let Ok(html) = client.get(&direct_url).timeout(Duration::from_secs(8)).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
+            if let Some((title, tests)) = parse_codeforces_html(&html) {
+                return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+            }
         }
     }
     let reader_urls = [
-        format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
         format!("https://r.jina.ai/https://codeforces.com/contest/{contest}/problem/{letter}?locale=en"),
+        format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
         format!("https://r.jina.ai/http://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
         format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}"),
     ];
@@ -1411,14 +1586,50 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
     let mut urls = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
+    // Prefer the exact contest page. It contains the live problem table before
+    // the global problemset API has necessarily published the round.
+    let mut live_page = parsed.clone();
+    live_page.query_pairs_mut().append_pair("locale", "en");
+    let contest_pages = [
+        live_page,
+        reqwest::Url::parse(&format!("https://codeforces.com/contest/{contest}/problems?locale=en")).unwrap(),
+    ];
+    for page_url in contest_pages {
+        let Ok(html) = client.get(page_url.clone()).timeout(Duration::from_secs(8)).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) else { continue };
+        for problem_url in parse_codeforces_contest_urls(&html, &page_url) {
+            let Some((_, index)) = codeforces_problem_key(&problem_url) else { continue };
+            if seen.insert(index) { urls.push(problem_url); }
+        }
+        if !urls.is_empty() { break; }
+    }
+
     let contest_id = contest.parse::<i64>().map_err(|_| "Invalid Codeforces contest ID.")?;
-    if let Ok(value) = client.get("https://codeforces.com/api/problemset.problems").send().and_then(|response| response.error_for_status()).and_then(|response| response.json::<serde_json::Value>()) {
-        if value.get("status").and_then(|status| status.as_str()) == Some("OK") {
-            if let Some(problems) = value.pointer("/result/problems").and_then(|problems| problems.as_array()) {
-                for problem in problems {
-                    if problem.get("contestId").and_then(|value| value.as_i64()) != Some(contest_id) { continue; }
-                    if let Some(index) = problem.get("index").and_then(|index| index.as_str()) {
-                        if seen.insert(index.to_ascii_uppercase()) { urls.push(format!("{prefix}{index}")); }
+    if urls.is_empty() {
+        let mut standings_url = reqwest::Url::parse("https://codeforces.com/api/contest.standings").unwrap();
+        // Codeforces rejects pagination parameters for anonymous non-gym
+        // standings requests, so only pass the contest id.
+        standings_url.query_pairs_mut().append_pair("contestId", contest);
+        if let Ok(value) = client.get(standings_url).send().and_then(|response| response.error_for_status()).and_then(|response| response.json::<serde_json::Value>()) {
+            if value.get("status").and_then(|status| status.as_str()) == Some("OK") {
+                if let Some(problems) = value.pointer("/result/problems").and_then(|problems| problems.as_array()) {
+                    for problem in problems {
+                        if let Some(index) = problem.get("index").and_then(|index| index.as_str()) {
+                            if seen.insert(index.to_ascii_uppercase()) { urls.push(format!("{prefix}{index}")); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if urls.is_empty() {
+        if let Ok(value) = client.get("https://codeforces.com/api/problemset.problems").send().and_then(|response| response.error_for_status()).and_then(|response| response.json::<serde_json::Value>()) {
+            if value.get("status").and_then(|status| status.as_str()) == Some("OK") {
+                if let Some(problems) = value.pointer("/result/problems").and_then(|problems| problems.as_array()) {
+                    for problem in problems {
+                        if problem.get("contestId").and_then(|value| value.as_i64()) != Some(contest_id) { continue; }
+                        if let Some(index) = problem.get("index").and_then(|index| index.as_str()) {
+                            if seen.insert(index.to_ascii_uppercase()) { urls.push(format!("{prefix}{index}")); }
+                        }
                     }
                 }
             }
@@ -1455,7 +1666,13 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("MildEditor/1.2.4")
+            .user_agent(format!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 MildEditor/{}", env!("CARGO_PKG_VERSION")))
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_static("text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"));
+                headers.insert(reqwest::header::ACCEPT_LANGUAGE, reqwest::header::HeaderValue::from_static("en-US,en;q=0.9"));
+                headers
+            })
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|error| error.to_string())?;
@@ -1591,7 +1808,7 @@ fn fetch_atcoder_submissions(
 
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MildEditor/1.2.4")
+        .user_agent(concat!("MildEditor/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| error.to_string())?;
@@ -1940,8 +2157,12 @@ pub fn run() {
             create_workspace,
             save_workspace,
             list_workspace_source_filenames,
+            list_workspace_directories,
+            create_workspace_folder,
+            delete_workspace_folder,
             delete_workspace_file,
             open_workspace_file_location,
+            open_workspace_folder_location,
             duplicate_workspace_file,
             rename_workspace_file,
             load_workspace,
@@ -2020,6 +2241,8 @@ mod tests {
     fn explorer_select_argument_keeps_switch_outside_quoted_path() {
         let path = Path::new(r"C:\contest folder\A.cpp");
         assert_eq!(windows_explorer_select_argument(path), r#"/select,"C:\contest folder\A.cpp""#);
+        let nested = Path::new("C:/contest folder/round/A.cpp");
+        assert_eq!(windows_explorer_select_argument(nested), r#"/select,"C:\contest folder\round\A.cpp""#);
     }
 
     #[test]
@@ -2034,6 +2257,8 @@ mod tests {
         assert_eq!(unique_workspace_filename(directory.path(), "A (2).cpp", &metadata, None), "A (1).cpp");
         assert_eq!(unique_workspace_filename(directory.path(), "A.py", &metadata, None), "A (1).py");
         assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, Some("A.cpp")), "A.cpp");
+        assert_eq!(safe_filename("346.CPP", "cpp").unwrap(), "346.CPP");
+        assert_eq!(safe_filename("script.PY", "python").unwrap(), "script.PY");
     }
 
     #[test]
@@ -2068,6 +2293,69 @@ mod tests {
         assert_eq!(metadata.problems[0].filename, "B copy.cpp");
         assert_eq!(metadata.problems[0].source.as_deref(), Some("codeforces"));
         assert_eq!(metadata.problems[0].source_url.as_deref(), Some("https://codeforces.com/contest/2231/problem/C"));
+    }
+
+    #[test]
+    fn workspace_load_registers_external_sources_and_removes_missing_ones() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        fs::write(directory.path().join("external.cpp"), "int main() { return 0; }").unwrap();
+        fs::write(directory.path().join("script.py"), "print(1)").unwrap();
+        fs::create_dir(directory.path().join("round-1")).unwrap();
+        fs::write(directory.path().join("round-1").join("B.cpp"), "int main() {}").unwrap();
+        fs::write(directory.path().join("notes.txt"), "ignore me").unwrap();
+
+        let loaded = load_workspace(folder_path.clone()).expect("load workspace");
+        assert_eq!(loaded.problems.iter().map(|problem| problem.filename.as_str()).collect::<Vec<_>>(), vec!["external.cpp", "round-1/B.cpp", "script.py"]);
+        let metadata: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).unwrap()).unwrap();
+        assert_eq!(metadata.problems.len(), 3);
+
+        fs::remove_file(directory.path().join("external.cpp")).unwrap();
+        let loaded = load_workspace(folder_path).expect("reload workspace");
+        assert_eq!(loaded.problems.len(), 2);
+        assert_eq!(loaded.problems[0].filename, "round-1/B.cpp");
+    }
+
+    #[test]
+    fn workspace_folder_creation_uses_first_free_suffix() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        fs::create_dir(directory.path().join("solutions")).unwrap();
+        let created = create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "solutions".into(), parent_directory: String::new() }).unwrap();
+        assert_eq!(created, "solutions (1)");
+        let nested = create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: "solutions".into() }).unwrap();
+        assert_eq!(nested, "solutions/round");
+        assert_eq!(list_workspace_directories(ListWorkspaceFilesRequest { folder_path }).unwrap(), vec!["solutions", "solutions (1)", "solutions/round"]);
+    }
+
+    #[test]
+    fn deleting_workspace_folder_removes_nested_sources_and_metadata() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
+        create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
+            filename: "round/A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+        }] }).unwrap();
+
+        let removed = delete_workspace_folder(DeleteWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "round".into() }).unwrap();
+        assert_eq!(removed, vec!["round/A.cpp"]);
+        assert!(!directory.path().join("round").exists());
+        let metadata: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).unwrap()).unwrap();
+        assert!(metadata.problems.is_empty());
+    }
+
+    #[test]
+    fn workspace_save_skips_unsupported_extensions() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
+        let saved = save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
+            filename: "notes.txt".into(), title: "notes".into(), language: "cpp".into(), code: "ignored".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+        }] }).unwrap();
+        assert!(saved.problems.is_empty());
+        assert!(!directory.path().join("notes.txt").exists());
     }
 
     #[test]
@@ -2125,6 +2413,15 @@ mod tests {
     }
 
     #[test]
+    fn atcoder_samples_support_nested_live_statement_markup() {
+        let html = r#"<div id="task-statement"><span class="lang-en"><h3>Sample Input 1</h3><div class="sample"><pre>2 3</pre></div><h3>Sample Output 1</h3><div class="sample"><pre>5</pre></div></span></div>"#;
+        let tests = parse_atcoder_samples(html);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].input, "2 3");
+        assert_eq!(tests[0].expected, "5");
+    }
+
+    #[test]
     #[ignore = "requires access to codeforces.com through r.jina.ai"]
     fn fetches_codeforces_problem_and_contest_samples() {
         let client = reqwest::blocking::Client::builder()
@@ -2172,6 +2469,13 @@ mod tests {
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].input, "5\n3 2 4");
         assert_eq!(tests[0].expected, "3\n11");
+    }
+
+    #[test]
+    fn parses_live_codeforces_contest_problem_links() {
+        let html = r#"<table class="problems"><tbody><tr><td><a href="/contest/9999/problem/A">A</a></td></tr><tr><td><a href="/contest/9999/problem/B2">B2</a></td></tr></tbody></table>"#;
+        let base = reqwest::Url::parse("https://codeforces.com/contest/9999?locale=en").unwrap();
+        assert_eq!(parse_codeforces_contest_urls(html, &base), vec!["https://codeforces.com/contest/9999/problem/A".to_string(), "https://codeforces.com/contest/9999/problem/B2".to_string()]);
     }
 
     #[test]
