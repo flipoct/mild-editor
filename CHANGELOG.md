@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- Add an interactive panel that runs the solution as a live process so you can play the interactor yourself, typing each response by hand.
+- Stream program output as it is produced, including prompts printed without a trailing newline, and send EOF on demand.
+- Remember the panel last used in each workspace in `.mild-editor.json`, defaulting to test cases.
+- Reuse one compile step for both the test runner and interactive runs.
+
 ## 1.3.0
 
 - Discover existing C++ and Python source files recursively when a workspace is opened, while silently ignoring unsupported extensions.

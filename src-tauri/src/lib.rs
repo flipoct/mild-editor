@@ -1,4 +1,5 @@
 mod companion;
+mod interactive;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 
@@ -325,6 +326,9 @@ struct WorkspaceProblemMetadata {
 #[serde(rename_all = "camelCase")]
 struct WorkspaceMetadata {
     version: u8,
+    /// "tests" or "interactive"; absent in workspaces saved before the interactive panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    panel_mode: Option<String>,
     problems: Vec<WorkspaceProblemMetadata>,
 }
 
@@ -346,6 +350,8 @@ struct WorkspaceProblemOutput {
 #[serde(rename_all = "camelCase")]
 struct LoadedWorkspace {
     folder_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    panel_mode: Option<String>,
     problems: Vec<WorkspaceProblemOutput>,
 }
 
@@ -536,7 +542,7 @@ fn execute_with_cancel(
 }
 
 #[cfg(windows)]
-trait CommandExtHidden {
+pub(crate) trait CommandExtHidden {
     fn creation_flags(&mut self, flags: u32) -> &mut Self;
 }
 
@@ -549,7 +555,7 @@ impl CommandExtHidden for Command {
 }
 
 #[cfg(not(windows))]
-trait CommandExtHidden {
+pub(crate) trait CommandExtHidden {
     fn creation_flags(&mut self, _flags: u32) -> &mut Self;
 }
 
@@ -557,6 +563,72 @@ trait CommandExtHidden {
 impl CommandExtHidden for Command {
     fn creation_flags(&mut self, _flags: u32) -> &mut Self {
         self
+    }
+}
+
+/// Compiles (C++) or locates (Python) the program under test inside `cwd` and returns the
+/// command line that runs it. `unbuffered` only matters for interactive runs, where the
+/// interpreter must not hold a prompt in its own buffer.
+pub(crate) enum PreparedProgram {
+    Ready { command: std::path::PathBuf, args: Vec<String> },
+    CompileError(RunResult),
+}
+
+pub(crate) fn prepare_program(
+    language: &str,
+    code: &str,
+    atcoder_library_path: Option<&str>,
+    cwd: &Path,
+    unbuffered: bool,
+) -> Result<PreparedProgram, String> {
+    if language == "cpp" {
+        let compiler = which::which("g++").map_err(|_| {
+            "g++ was not found. Install MinGW or GCC and add it to PATH.".to_string()
+        })?;
+        let source = cwd.join("main.cpp");
+        let binary = cwd.join(if cfg!(windows) { "main.exe" } else { "main" });
+        fs::write(&source, code).map_err(|error| error.to_string())?;
+
+        let mut compile = None;
+        for standard in ["c++20", "c++17", "c++1z", "c++14"] {
+            let compile_args = vec![
+                format!("-std={standard}"),
+                "-O2".into(),
+                "-pipe".into(),
+                atcoder_library_path.filter(|path| !path.trim().is_empty()).map(|path| format!("-I{path}")).unwrap_or_default(),
+                source.to_string_lossy().into_owned(),
+                "-o".into(),
+                binary.to_string_lossy().into_owned(),
+            ].into_iter().filter(|argument| !argument.is_empty()).collect::<Vec<_>>();
+            let result = execute(&compiler, &compile_args, cwd, "", Duration::from_secs(10));
+            let unsupported = result.stderr.contains("unrecognized command line option");
+            compile = Some(result);
+            if compile.as_ref().is_some_and(|value| value.ok) || !unsupported {
+                break;
+            }
+        }
+        let compile = compile.expect("compile attempt");
+        if !compile.ok {
+            return Ok(PreparedProgram::CompileError(RunResult {
+                stdout: String::new(),
+                stderr: format!("Compile error\n{}", compile.stderr),
+                verdict: Verdict::Ce,
+                ..compile
+            }));
+        }
+        Ok(PreparedProgram::Ready { command: binary, args: Vec::new() })
+    } else {
+        let python = which::which("python")
+            .or_else(|_| which::which("python3"))
+            .map_err(|_| "Python was not found. Install Python 3 and add it to PATH.".to_string())?;
+        let source = cwd.join("main.py");
+        fs::write(&source, code).map_err(|error| error.to_string())?;
+        let mut args = vec!["-I".to_string()];
+        if unbuffered {
+            args.push("-u".into());
+        }
+        args.push(source.to_string_lossy().into_owned());
+        Ok(PreparedProgram::Ready { command: python, args })
     }
 }
 
@@ -580,59 +652,21 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
         .map_err(|error| error.to_string())?;
     let cwd = directory.path();
 
-    let (command, args) = if request.language == "cpp" {
-        let compiler = which::which("g++").map_err(|_| {
-            "g++ was not found. Install MinGW or GCC and add it to PATH.".to_string()
-        })?;
-        let source = cwd.join("main.cpp");
-        let binary = cwd.join(if cfg!(windows) { "main.exe" } else { "main" });
-        fs::write(&source, &request.code).map_err(|error| error.to_string())?;
-
-        let mut compile = None;
-        for standard in ["c++20", "c++17", "c++1z", "c++14"] {
-            let compile_args = vec![
-                format!("-std={standard}"),
-                "-O2".into(),
-                "-pipe".into(),
-                request.atcoder_library_path.as_ref().filter(|path| !path.trim().is_empty()).map(|path| format!("-I{path}")).unwrap_or_default(),
-                source.to_string_lossy().into_owned(),
-                "-o".into(),
-                binary.to_string_lossy().into_owned(),
-            ].into_iter().filter(|argument| !argument.is_empty()).collect::<Vec<_>>();
-            let result = execute(&compiler, &compile_args, cwd, "", Duration::from_secs(10));
-            let unsupported = result.stderr.contains("unrecognized command line option");
-            compile = Some(result);
-            if compile.as_ref().is_some_and(|value| value.ok) || !unsupported {
-                break;
-            }
-        }
-        let compile = compile.expect("compile attempt");
-        if !compile.ok {
-            let result = RunResult {
-                stdout: String::new(),
-                stderr: format!("Compile error\n{}", compile.stderr),
-                verdict: Verdict::Ce,
-                ..compile
-            };
+    let (command, args) = match prepare_program(
+        &request.language,
+        &request.code,
+        request.atcoder_library_path.as_deref(),
+        cwd,
+        false,
+    )? {
+        PreparedProgram::Ready { command, args } => (command, args),
+        PreparedProgram::CompileError(result) => {
             let results = request.tests.iter().enumerate().map(|(index, _)| {
                 let _ = app.emit("test-result", TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone() });
                 result.clone()
             }).collect();
             return Ok(RunResponse { results });
         }
-        (binary, Vec::new())
-    } else {
-        let python = which::which("python")
-            .or_else(|_| which::which("python3"))
-            .map_err(|_| {
-                "Python was not found. Install Python 3 and add it to PATH.".to_string()
-            })?;
-        let source = cwd.join("main.py");
-        fs::write(&source, &request.code).map_err(|error| error.to_string())?;
-        (
-            python,
-            vec!["-I".into(), source.to_string_lossy().into_owned()],
-        )
     };
 
     let mut results = Vec::new();
@@ -1006,7 +1040,8 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
     let previous_metadata = fs::read_to_string(workspace_metadata_path(&folder))
         .ok()
         .and_then(|json| serde_json::from_str::<WorkspaceMetadata>(&json).ok())
-        .unwrap_or(WorkspaceMetadata { version: 2, problems: Vec::new() });
+        .unwrap_or(WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() });
+    let panel_mode = previous_metadata.panel_mode;
     let mut metadata_problems = previous_metadata.problems;
     let mut outputs = Vec::new();
     for (problem, filename) in supported_problems {
@@ -1044,6 +1079,7 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
     }
     let metadata = WorkspaceMetadata {
         version: 2,
+        panel_mode: panel_mode.clone(),
         problems: metadata_problems,
     };
     let json = serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?;
@@ -1051,8 +1087,35 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
         .map_err(|error| format!("Could not save workspace metadata: {error}"))?;
     Ok(LoadedWorkspace {
         folder_path: folder.to_string_lossy().into_owned(),
+        panel_mode,
         problems: outputs,
     })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavePanelModeRequest {
+    folder_path: String,
+    panel_mode: String,
+}
+
+#[tauri::command]
+fn save_workspace_panel_mode(request: SavePanelModeRequest) -> Result<(), String> {
+    if !matches!(request.panel_mode.as_str(), "tests" | "interactive") {
+        return Err("Unknown panel mode.".into());
+    }
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let metadata_path = workspace_metadata_path(&folder);
+    let json = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("Could not read workspace metadata: {error}"))?;
+    let mut metadata: WorkspaceMetadata = serde_json::from_str(&json)
+        .map_err(|error| format!("Invalid workspace metadata: {error}"))?;
+    if metadata.panel_mode.as_deref() == Some(request.panel_mode.as_str()) {
+        return Ok(());
+    }
+    metadata.panel_mode = Some(request.panel_mode);
+    fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Could not save workspace metadata: {error}"))
 }
 
 #[tauri::command]
@@ -1063,9 +1126,9 @@ fn create_workspace(request: CreateWorkspaceRequest) -> Result<LoadedWorkspace, 
     if metadata_path.exists() {
         return Err(".mild-editor.json already exists in this folder. Use Open instead.".into());
     }
-    let metadata = WorkspaceMetadata { version: 2, problems: Vec::new() };
+    let metadata = WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() };
     fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not create project metadata: {error}"))?;
-    Ok(LoadedWorkspace { folder_path: folder.to_string_lossy().into_owned(), problems: Vec::new() })
+    Ok(LoadedWorkspace { folder_path: folder.to_string_lossy().into_owned(), panel_mode: None, problems: Vec::new() })
 }
 
 #[tauri::command]
@@ -1216,6 +1279,7 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                     .map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?;
                 WorkspaceMetadata {
                     version: 2,
+                    panel_mode: None,
                     problems: vec![WorkspaceProblemMetadata {
                         filename: if old.language == "python" { "main.py".into() } else { "main.cpp".into() },
                         title: old.title,
@@ -1230,8 +1294,9 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             }
         }
     } else {
-        WorkspaceMetadata { version: 2, problems: Vec::new() }
+        WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() }
     };
+    let panel_mode = metadata.panel_mode.clone();
     sync_workspace_source_files(&folder, &mut metadata)?;
     fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
         .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
@@ -1254,6 +1319,7 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
     }
     Ok(LoadedWorkspace {
         folder_path: folder.to_string_lossy().into_owned(),
+        panel_mode,
         problems,
     })
 }
@@ -2132,6 +2198,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .manage(ClangdState::default())
         .manage(RunState::default())
+        .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
         .plugin(tauri_plugin_dialog::init());
 
@@ -2147,6 +2214,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_run,
+            interactive::start_interactive,
+            interactive::send_interactive,
+            interactive::close_interactive_input,
+            interactive::stop_interactive,
             close_app,
             read_font_file,
             read_image_file,
@@ -2156,6 +2227,7 @@ pub fn run() {
             load_problem,
             create_workspace,
             save_workspace,
+            save_workspace_panel_mode,
             list_workspace_source_filenames,
             list_workspace_directories,
             create_workspace_folder,
@@ -2190,6 +2262,7 @@ pub fn run() {
                             let _ = process.child.wait();
                         }
                     };
+                    interactive::stop_session(&window.state::<interactive::InteractiveState>());
                     companion::stop(&window.state::<companion::CompanionState>());
                 }
                 _ => {}
@@ -2251,7 +2324,7 @@ mod tests {
         fs::write(directory.path().join("A.cpp"), "").unwrap();
         fs::write(directory.path().join("A (2).CPP"), "").unwrap();
         fs::write(directory.path().join("A.py"), "").unwrap();
-        let metadata = WorkspaceMetadata { version: 2, problems: Vec::new() };
+        let metadata = WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() };
 
         assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, None), "A (1).cpp");
         assert_eq!(unique_workspace_filename(directory.path(), "A (2).cpp", &metadata, None), "A (1).cpp");

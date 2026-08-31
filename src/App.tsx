@@ -44,6 +44,10 @@ type NativeRunResult = {
   verdict: Verdict;
 };
 
+type PanelMode = "tests" | "interactive";
+type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
+type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
+type InteractiveExitEvent = { sessionId: string; code: number | null; timeMs: number; stopped: boolean };
 type TestResultEvent = { runId: string; index: number; result: NativeRunResult };
 
 type ProblemTab = {
@@ -71,6 +75,7 @@ type LoadedProblem = {
 
 type LoadedWorkspace = {
   folderPath: string;
+  panelMode?: PanelMode;
   problems: Array<{
     filename: string;
     title: string;
@@ -339,6 +344,10 @@ const messages = {
     companionHelp: "Install the Competitive Companion browser extension, open a problem, and press its button. Mild Editor creates the file and sample tests automatically. Contest parses arrive as one batch.",
     companionListening: "listening", companionOff: "off", companionPortInUse: "port unavailable",
     diff: "diff", showDiff: "compare", showRaw: "raw output", diffExpected: "expected", diffActual: "output", diffWhitespace: "whitespace only",
+    interactive: "interactive", interactiveStart: "start interactive run", interactiveSend: "send", interactiveEof: "end input",
+    interactiveHint: "Run the solution, then answer it yourself: read what the program prints and type the interactor's reply. Enter sends a line, Shift+Enter adds one.",
+    interactiveReply: "your reply", interactiveStarted: "program started", interactiveStopped: "stopped", interactiveExited: "exited with code",
+    interactiveEofSent: "input closed (EOF)", interactiveIdle: "not running",
   },
   ko: {
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
@@ -360,6 +369,10 @@ const messages = {
     companionHelp: "Competitive Companion 브라우저 확장을 설치하고 문제 페이지에서 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 대회 페이지에서는 문제 전체가 한 번에 들어옵니다.",
     companionListening: "수신 중", companionOff: "꺼짐", companionPortInUse: "포트를 사용할 수 없음",
     diff: "비교", showDiff: "비교 보기", showRaw: "원본 출력", diffExpected: "예상", diffActual: "출력", diffWhitespace: "공백만 다름",
+    interactive: "인터렉티브", interactiveStart: "인터렉티브 실행", interactiveSend: "보내기", interactiveEof: "입력 종료",
+    interactiveHint: "풀이를 실행한 뒤 출제자 역할을 직접 하세요. 프로그램의 출력을 보고 답변을 입력합니다. Enter는 한 줄 전송, Shift+Enter는 줄바꿈입니다.",
+    interactiveReply: "보낼 응답", interactiveStarted: "프로그램 실행됨", interactiveStopped: "중지됨", interactiveExited: "종료 코드",
+    interactiveEofSent: "입력 종료(EOF) 전송됨", interactiveIdle: "실행 중 아님",
   },
 } as const;
 
@@ -463,6 +476,15 @@ function App() {
   const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
   const [companionError, setCompanionError] = useState("");
   const [rawOutputTests, setRawOutputTests] = useState<number[]>([]);
+  const [panelMode, setPanelMode] = useState<PanelMode>("tests");
+  const [interactiveLog, setInteractiveLog] = useState<InteractiveEntry[]>([]);
+  const [interactiveDraft, setInteractiveDraft] = useState("");
+  const [interactiveRunning, setInteractiveRunning] = useState(false);
+  const [interactiveStarting, setInteractiveStarting] = useState(false);
+  const interactiveSessionRef = useRef<string | null>(null);
+  const interactiveEntryIdRef = useRef(0);
+  const interactiveLogRef = useRef<HTMLDivElement | null>(null);
+  const interactiveInputRef = useRef<HTMLTextAreaElement | null>(null);
   const companionBatchRef = useRef<{ id: string; size: number; problems: ImportedAtCoderProblem[]; timer: number } | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
@@ -1672,6 +1694,7 @@ function App() {
         source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, modifiedAt: problem.modifiedAt,
       }));
       setWorkspacePath(loaded.folderPath);
+      setPanelMode(loaded.panelMode === "interactive" ? "interactive" : "tests");
       setTabs([]);
       setSavedFiles(loadedTabs);
       clearDiagnostics();
@@ -1705,6 +1728,7 @@ function App() {
       const restoredTabs = restoredFilenames.map((filename) => loadedTabs.find((tab) => fileKey(tab.filename) === fileKey(filename))).filter((tab): tab is ProblemTab => Boolean(tab));
       const restoredActive = restoredTabs.find((tab) => fileKey(tab.filename) === fileKey(restoredActiveFilename)) || restoredTabs[0];
       setWorkspacePath(loaded.folderPath);
+      setPanelMode(loaded.panelMode === "interactive" ? "interactive" : "tests");
       setTabs(restoredTabs);
       setSavedFiles(loadedTabs);
       clearDiagnostics();
@@ -2020,6 +2044,122 @@ function App() {
     }
   };
 
+  const appendInteractive = (kind: InteractiveEntry["kind"], text: string) => {
+    if (!text) return;
+    setInteractiveLog((entries) => {
+      const last = entries[entries.length - 1];
+      // Output arrives in chunks that rarely line up with lines, so a run of the same
+      // stream is kept as one entry and the transcript stays readable.
+      const merged = last && last.kind === kind && kind !== "info"
+        ? [...entries.slice(0, -1), { ...last, text: last.text + text }]
+        : [...entries, { id: interactiveEntryIdRef.current++, kind, text }];
+      return merged.length > 400 ? merged.slice(merged.length - 400) : merged;
+    });
+  };
+
+  const startInteractive = async () => {
+    if (!activeTab || interactiveStarting) return;
+    if (!(await saveProblem())) return;
+    clearDiagnostics();
+    const sessionId = crypto.randomUUID();
+    setInteractiveLog([]);
+    setInteractiveDraft("");
+    setInteractiveStarting(true);
+    interactiveSessionRef.current = sessionId;
+    setInteractiveRunning(true);
+    // Logged before the call resolves so that a program which exits at once still shows
+    // its start and exit lines in the order they happened.
+    appendInteractive("info", t("interactiveStarted"));
+    try {
+      await invoke("start_interactive", {
+        request: {
+          language,
+          code: codes[language],
+          sessionId,
+          atcoderLibraryPath: atcoderLibraryPath || null,
+        },
+      });
+      interactiveInputRef.current?.focus();
+    } catch (error) {
+      interactiveSessionRef.current = null;
+      setInteractiveRunning(false);
+      appendInteractive("stderr", error instanceof Error ? error.message : String(error));
+    } finally {
+      setInteractiveStarting(false);
+    }
+  };
+
+  const sendInteractive = async () => {
+    const sessionId = interactiveSessionRef.current;
+    if (!interactiveRunning || !sessionId) return;
+    const text = interactiveDraft.endsWith("\n") ? interactiveDraft : `${interactiveDraft}\n`;
+    setInteractiveDraft("");
+    appendInteractive("input", text);
+    try {
+      await invoke("send_interactive", { request: { sessionId, text } });
+    } catch (error) {
+      appendInteractive("stderr", `${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  const endInteractiveInput = async () => {
+    if (!interactiveRunning) return;
+    try {
+      await invoke("close_interactive_input");
+      appendInteractive("info", t("interactiveEofSent"));
+    } catch (error) {
+      appendInteractive("stderr", `${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  const stopInteractive = () => {
+    if (!interactiveRunning) return;
+    void invoke("stop_interactive");
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    const stops: Array<() => void> = [];
+    const track = (stop: () => void) => (disposed ? stop() : stops.push(stop));
+    void listen<InteractiveOutputEvent>("interactive-output", (event) => {
+      if (event.payload.sessionId !== interactiveSessionRef.current) return;
+      appendInteractive(event.payload.stream === "stderr" ? "stderr" : "stdout", event.payload.text);
+    }).then(track);
+    void listen<InteractiveExitEvent>("interactive-exit", (event) => {
+      if (event.payload.sessionId !== interactiveSessionRef.current) return;
+      interactiveSessionRef.current = null;
+      setInteractiveRunning(false);
+      const { code, timeMs, stopped } = event.payload;
+      appendInteractive("info", stopped
+        ? `${t("interactiveStopped")} · ${timeMs} ms`
+        : `${t("interactiveExited")} ${code ?? "?"} · ${timeMs} ms`);
+    }).then(track);
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  }, [uiLocale]);
+
+  useEffect(() => {
+    const log = interactiveLogRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [interactiveLog]);
+
+  useEffect(() => {
+    if (!workspacePath) return;
+    void invoke("save_workspace_panel_mode", { request: { folderPath: workspacePath, panelMode } })
+      .catch(() => undefined);
+  }, [panelMode, workspacePath]);
+
+  // A session belongs to the file it was started from, so leaving that file ends it.
+  useEffect(() => {
+    if (!interactiveSessionRef.current) return;
+    interactiveSessionRef.current = null;
+    setInteractiveRunning(false);
+    setInteractiveLog([]);
+    setInteractiveDraft("");
+    void invoke("stop_interactive");
+  }, [activeTab?.id]);
+
+  useEffect(() => () => { void invoke("stop_interactive"); }, []);
+
   const stopRun = () => {
     if (!running) return;
     runCancelledRef.current = true;
@@ -2239,8 +2379,8 @@ function App() {
     }
     const tab = node.file;
     const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
-    return [<div className="explorer-file-row" key={tab.id} style={{ paddingLeft: `${14 + depth * 14}px` }}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} onClick={() => openSavedFile(tab)} onFocus={() => setSelectedExplorerFilename(tab.filename)} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+    return [<div className="explorer-file-row" key={tab.id}>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={() => openSavedFile(tab)} onFocus={() => setSelectedExplorerFilename(tab.filename)} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
         <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
@@ -2333,13 +2473,24 @@ function App() {
       <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
           {showTestPanel && <><aside className="test-panel">
             <div className="panel-heading">
-              <span>{t("testCases")}</span>
-              <span className="count">{tests.length}</span>
-              <button className="panel-run" onClick={run} disabled={running} aria-label="run all tests" title="run tests">
-                {running ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
-              </button>
-              {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running">■</button>}
+              <div className="panel-modes">
+                <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
+                <button className={panelMode === "interactive" ? "active" : ""} aria-pressed={panelMode === "interactive"} onClick={() => setPanelMode("interactive")}>{t("interactive")}</button>
+              </div>
+              {panelMode === "tests" ? <>
+                <span className="count">{tests.length}</span>
+                <button className="panel-run" onClick={run} disabled={running} aria-label="run all tests" title="run tests">
+                  {running ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
+                </button>
+                {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running">■</button>}
+              </> : <>
+                <button className="panel-run" onClick={() => void startInteractive()} disabled={interactiveStarting} aria-label="start interactive run" title={t("interactiveStart")}>
+                  {interactiveStarting ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
+                </button>
+                {interactiveRunning && <button className="panel-stop" onClick={stopInteractive} aria-label="stop interactive run" title="stop running">■</button>}
+              </>}
             </div>
+            {panelMode === "tests" ? <>
             <div className="test-list">
               {tests.map((test) => (
                 <article className={`test-card ${test.open ? "open" : ""}`} key={test.id}>
@@ -2377,6 +2528,34 @@ function App() {
               ))}
             </div>
             <div className="test-actions"><button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case">＋</button></div>
+            </> : <div className="interactive-panel">
+              <div className="interactive-log" ref={interactiveLogRef}>
+                {interactiveLog.length
+                  ? interactiveLog.map((entry) => <pre className={`interactive-entry ${entry.kind}`} key={entry.id}>{entry.text}</pre>)
+                  : <p className="interactive-hint">{t("interactiveHint")}</p>}
+              </div>
+              <div className="interactive-compose">
+                <textarea
+                  ref={interactiveInputRef}
+                  value={interactiveDraft}
+                  onChange={(event) => setInteractiveDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendInteractive();
+                    }
+                  }}
+                  placeholder={interactiveRunning ? t("interactiveReply") : t("interactiveIdle")}
+                  disabled={!interactiveRunning}
+                  spellCheck={false}
+                  rows={2}
+                />
+                <div className="interactive-buttons">
+                  <button className="subtle-button" onClick={() => void sendInteractive()} disabled={!interactiveRunning}>{t("interactiveSend")}</button>
+                  <button className="subtle-button" onClick={() => void endInteractiveInput()} disabled={!interactiveRunning}>{t("interactiveEof")}</button>
+                </div>
+              </div>
+            </div>}
           </aside>
           <div className="panel-resizer test-resizer" onPointerDown={(event) => startPanelResize("test", event)} role="separator" aria-label="Resize test case panel" aria-orientation="vertical" /></>}
 
