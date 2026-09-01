@@ -102,6 +102,8 @@ type CodeSnippet = {
 type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[]; contestImport: boolean };
 
 type ExplorerMenu = { file?: ProblemTab; directory?: string; x: number; y: number };
+/** Explorer row the menu bar acts on. Files and folders share one slot. */
+type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory"; path: string } | null;
 type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
 type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
 
@@ -395,7 +397,7 @@ function App() {
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
   const [explorerSort, setExplorerSort] = useState<ExplorerSort>(() => (localStorage.getItem("mild-explorer-sort") as ExplorerSort) || "problem");
   const [explorerSource, setExplorerSource] = useState<ProblemSource | "all">(() => (localStorage.getItem("mild-explorer-source") as ProblemSource | "all") || "all");
-  const [selectedExplorerFilename, setSelectedExplorerFilename] = useState("");
+  const [explorerSelection, setExplorerSelection] = useState<ExplorerSelection>(null);
   const [renameFile, setRenameFile] = useState<ProblemTab | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [sourceFile, setSourceFile] = useState<ProblemTab | null>(null);
@@ -825,7 +827,7 @@ function App() {
   });
 
   const openSavedFile = (file: ProblemTab) => {
-    setSelectedExplorerFilename(file.filename);
+    setExplorerSelection({ kind: "file", filename: file.filename });
     const openTab = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
     if (openTab) {
       activateTab(openTab);
@@ -873,7 +875,7 @@ function App() {
     const isSaved = savedFiles.some((item) => fileKey(item.filename) === fileKey(file.filename)) && !file.dirty;
     if (!isSaved) {
       setSavedFiles((items) => items.filter((item) => fileKey(item.filename) !== fileKey(file.filename)));
-      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(file.filename) ? "" : selected);
+      setExplorerSelection((selected) => selected?.kind === "file" && fileKey(selected.filename) === fileKey(file.filename) ? null : selected);
       closeProblem(file.id);
       setDeleteConfirmFile(null);
       return;
@@ -883,7 +885,7 @@ function App() {
       const index = tabs.findIndex((tab) => fileKey(tab.filename) === fileKey(file.filename));
       const remainingTabs = tabs.filter((tab) => fileKey(tab.filename) !== fileKey(file.filename));
       setSavedFiles((items) => items.filter((tab) => fileKey(tab.filename) !== fileKey(file.filename)));
-      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(file.filename) ? "" : selected);
+      setExplorerSelection((selected) => selected?.kind === "file" && fileKey(selected.filename) === fileKey(file.filename) ? null : selected);
       setTabs(remainingTabs);
       if (activeTab && fileKey(activeTab.filename) === fileKey(file.filename)) {
         const next = remainingTabs[Math.min(Math.max(index, 0), remainingTabs.length - 1)];
@@ -950,7 +952,7 @@ function App() {
       setTabs((items) => items.map(update));
       setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(original.filename) ? { ...update(tab), dirty: false } : tab));
       if (activeTab?.id === original.id) setLanguage(result.language);
-      setSelectedExplorerFilename((selected) => fileKey(selected) === fileKey(original.filename) ? result.filename : selected);
+      setExplorerSelection((selected) => selected?.kind === "file" && fileKey(selected.filename) === fileKey(original.filename) ? { kind: "file", filename: result.filename } : selected);
       setRenameFile(null);
       setFileStatus("saved");
     } catch (error) {
@@ -1026,6 +1028,41 @@ function App() {
     setFolderNameOpen(true);
   };
 
+  // The macOS menu bar has no pointer context, so it acts on the Explorer row that
+  // was last focused or right-clicked. Both lookups re-resolve against live state so
+  // a deleted or renamed entry stops being a target on its own.
+  const selectedExplorerFile = explorerSelection?.kind === "file"
+    ? explorerFiles.find((file) => fileKey(file.filename) === fileKey(explorerSelection.filename))
+    : undefined;
+  const selectedExplorerDirectory = explorerSelection?.kind === "directory" && workspaceDirectories.some((directory) => fileKey(directory) === fileKey(explorerSelection.path))
+    ? explorerSelection.path
+    : undefined;
+
+  /** Directory a new entry is created in: the selected folder, or the selected file's own. */
+  const explorerCreationParent = () => selectedExplorerDirectory ?? (selectedExplorerFile ? explorerParent(selectedExplorerFile.filename) : "");
+
+  // Only files can be renamed; the backend has no folder-rename command.
+  const beginRenameSelection = () => {
+    if (!workspacePath || !selectedExplorerFile || renameFile) return;
+    setExplorerMenu(null);
+    setRenameValue(selectedExplorerFile.filename);
+    setRenameFile(selectedExplorerFile);
+  };
+
+  const deleteExplorerSelection = () => {
+    if (!workspacePath) return;
+    setExplorerMenu(null);
+    if (selectedExplorerDirectory) setDeleteConfirmDirectory(selectedExplorerDirectory);
+    else if (selectedExplorerFile) setDeleteConfirmFile(selectedExplorerFile);
+  };
+
+  const revealExplorerSelection = () => {
+    if (!workspacePath) return;
+    setExplorerMenu(null);
+    if (selectedExplorerDirectory) void openFolderLocation(selectedExplorerDirectory);
+    else if (selectedExplorerFile) void openFileLocation(selectedExplorerFile);
+  };
+
   const createWorkspaceFolder = async () => {
     if (!workspacePath || !folderName.trim()) return;
     try {
@@ -1049,7 +1086,12 @@ function App() {
       const remainingTabs = tabs.filter((tab) => !removedKeys.has(fileKey(tab.filename)));
       setTabs(remainingTabs);
       setSavedFiles((files) => files.filter((file) => !removedKeys.has(fileKey(file.filename))));
-      setSelectedExplorerFilename((filename) => removedKeys.has(fileKey(filename)) ? "" : filename);
+      setExplorerSelection((selected) => {
+        if (selected?.kind === "file") return removedKeys.has(fileKey(selected.filename)) ? null : selected;
+        if (selected?.kind !== "directory") return selected;
+        const removedRoot = fileKey(directory);
+        return fileKey(selected.path) === removedRoot || fileKey(selected.path).startsWith(`${removedRoot}/`) ? null : selected;
+      });
       updateCollapsedDirectories((items) => new Set([...items].filter((path) => path !== fileKey(directory) && !path.startsWith(`${fileKey(directory)}/`))));
       if (activeTab && removedKeys.has(fileKey(activeTab.filename))) {
         const next = remainingTabs[0];
@@ -1074,7 +1116,7 @@ function App() {
       setSavedFiles([]);
       setWorkspaceDirectories([]);
       setActiveTabId("");
-      setSelectedExplorerFilename("");
+      setExplorerSelection(null);
       clearDiagnostics();
       setFileStatus("project created");
     } catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
@@ -2042,6 +2084,10 @@ function App() {
         case "app:settings": openSettings(); break;
         case "app:quit": requestApplicationClose(); break;
         case "file:new": newProblem(); break;
+        case "file:new-folder": beginFolderCreation(explorerCreationParent()); break;
+        case "file:rename": beginRenameSelection(); break;
+        case "file:reveal": revealExplorerSelection(); break;
+        case "file:delete": deleteExplorerSelection(); break;
         case "file:open": void openProblem(); break;
         case "file:save": void saveProblem(); break;
         case "file:import": beginImport(); break;
@@ -2080,7 +2126,8 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        newProblem();
+        if (event.shiftKey) beginFolderCreation(explorerCreationParent());
+        else newProblem();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "t") {
         event.preventDefault();
@@ -2101,15 +2148,19 @@ function App() {
           activateTab(tab);
         }
       }
-      if (event.key === "F2" && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        const focusedInExplorer = document.activeElement instanceof Element && Boolean(document.activeElement.closest(".explorer-file"));
-        const selected = explorerFiles.find((file) => fileKey(file.filename) === fileKey(selectedExplorerFilename));
-        if (focusedInExplorer && selected && workspacePath && !renameFile) {
-          event.preventDefault();
-          setRenameValue(selected.filename);
-          setRenameFile(selected);
-          setExplorerMenu(null);
-        }
+      // Everything below belongs to the Explorer, so it stays behind a focus check:
+      // Return and Cmd+Backspace have to keep their editing meaning inside the editor.
+      const explorerRowFocused = document.activeElement instanceof Element && Boolean(document.activeElement.closest(".explorer-file, .explorer-directory"));
+      if (!explorerRowFocused || !workspacePath) return;
+      // Finder renames with Return; Windows and Linux keep F2.
+      const renameRequested = event.key === "F2" || (isMac && event.key === "Enter");
+      if (renameRequested && !event.ctrlKey && !event.metaKey && !event.altKey && selectedExplorerFile && !renameFile) {
+        event.preventDefault();
+        beginRenameSelection();
+      }
+      if (isMac && event.metaKey && !event.altKey && event.key === "Backspace") {
+        event.preventDefault();
+        deleteExplorerSelection();
       }
     };
     window.addEventListener("keydown", handleRunShortcut);
@@ -2231,7 +2282,7 @@ function App() {
           const key = fileKey(node.path);
           if (next.has(key)) next.delete(key); else next.add(key);
           return next;
-        })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
+        })} onFocus={() => setExplorerSelection({ kind: "directory", path: node.path })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "directory", path: node.path }); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
           <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg><span>{node.name}</span>
         </button>
         {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
@@ -2240,7 +2291,7 @@ function App() {
     const tab = node.file;
     const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
     return [<div className="explorer-file-row" key={tab.id} style={{ paddingLeft: `${14 + depth * 14}px` }}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} onClick={() => openSavedFile(tab)} onFocus={() => setSelectedExplorerFilename(tab.filename)} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setSelectedExplorerFilename(tab.filename); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} onClick={() => openSavedFile(tab)} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
         <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
