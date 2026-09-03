@@ -2235,7 +2235,7 @@ function App() {
         case "view:toggle-explorer": setExplorerVisible((visible) => !visible); break;
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
         case "run:tests": void run(); break;
-        case "run:stop": stopRun(); break;
+        case "run:stop": stopRun(); stopInteractive(); break;
       }
     };
   });
