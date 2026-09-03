@@ -84,9 +84,10 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘T` | Import problem |
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch to tab |
-| `⌘↵` / `⌘.` | Run tests / Stop |
+| `⌘↵` / `⌘.` | Run the panel on screen (tests, or interactive when that panel is showing) / Stop |
 | `⌘⇧↵` | Start an interactive run |
 | `⌘⌥1` / `⌘⌥2` | Show the test cases / interactive panel |
+| `⌘=` / `⌘-` / `⌘0` | Zoom the interface in / out / back to 100% |
 | `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
 | `⌘⇧N` | New folder in the selected Explorer directory |
 | `⌥⌘R` | Reveal the selected file or folder in Finder |
@@ -94,6 +95,8 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘⌫` | Delete the selected Explorer file or folder |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
+
+The interface scale is also in **Settings → appearance**, and the same `Ctrl` shortcuts work on Windows and Linux. The default language for imported problems and new files is in **Settings → online judge**; while no file is open, the language menu in the status bar changes it too.
 
 Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` closes the program's input the way it would in a terminal.
 

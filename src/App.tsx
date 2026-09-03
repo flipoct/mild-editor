@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ClangdClient, type ClangdInfo } from "./clangd";
@@ -155,6 +156,11 @@ const fallbackEditorFont = knownEditorFonts.find((font) => font.id === defaultEd
 const loadCustomFonts = (): EditorFontOption[] => {
   try { return JSON.parse(localStorage.getItem("mild-custom-fonts") || "[]"); } catch { return []; }
 };
+const UI_ZOOM_MIN = 50;
+const UI_ZOOM_MAX = 200;
+const UI_ZOOM_STEP = 10;
+const clampUiZoom = (value: number) => Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, Math.round(value / UI_ZOOM_STEP) * UI_ZOOM_STEP));
+
 const storedBoundedNumber = (key: string, fallback: number, minimum: number, maximum: number) => {
   const stored = localStorage.getItem(key);
   if (stored === null) return fallback;
@@ -328,10 +334,10 @@ const APP_VERSION = packageInfo.version;
 const messages = {
   en: {
     appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
-    preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean",
+    preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean", interfaceScale: "interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. The existing ${...} syntax remains supported.",
     local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", contestImportExtension: "contest import files", contestImportExtensionHelp: "Used when a contest URL imports every problem. Single-problem imports keep their own flow.",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
@@ -353,10 +359,10 @@ const messages = {
   },
   ko: {
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
-    preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어",
+    preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 기존 ${...} 문법도 계속 지원됩니다.",
     local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
-    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", contestImportExtension: "대회 전체 파일 형식", contestImportExtensionHelp: "대회 URL로 모든 문제를 가져올 때 사용합니다. 단일 문제 가져오기는 기존 흐름을 유지합니다.",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
@@ -408,6 +414,7 @@ function App() {
   const [appCloseConfirm, setAppCloseConfirm] = useState(false);
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<ProblemTab | null>(null);
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
+  const explorerMenuRef = useRef<HTMLDivElement | null>(null);
   const [explorerSort, setExplorerSort] = useState<ExplorerSort>(() => (localStorage.getItem("mild-explorer-sort") as ExplorerSort) || "problem");
   const [explorerSource, setExplorerSource] = useState<ProblemSource | "all">(() => (localStorage.getItem("mild-explorer-source") as ProblemSource | "all") || "all");
   const [explorerSelection, setExplorerSelection] = useState<ExplorerSelection>(null);
@@ -437,7 +444,10 @@ function App() {
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
   const [codeforcesHandle, setCodeforcesHandle] = useState(() => localStorage.getItem("mild-codeforces-handle") || "");
   const [dojHandle, setDojHandle] = useState(() => localStorage.getItem("mild-doj-handle") || "");
-  const [contestImportLanguage, setContestImportLanguage] = useState<Language>(() => (localStorage.getItem("mild-contest-import-language") as Language) || "cpp");
+  // Language for every file the editor creates on its own: contest and single imports,
+  // Competitive Companion, and blank files typed without an extension. The old key only
+  // covered contest imports, so it seeds the new one for existing installs.
+  const [defaultLanguage, setDefaultLanguage] = useState<Language>(() => (localStorage.getItem("mild-default-language") || localStorage.getItem("mild-contest-import-language")) as Language || "cpp");
   const [atcoderLibraryPath, setAtcoderLibraryPath] = useState(() => localStorage.getItem("mild-atcoder-library-path") || "");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
@@ -446,6 +456,7 @@ function App() {
   const [backgroundImageError, setBackgroundImageError] = useState("");
   const [acrylicOpacity, setAcrylicOpacity] = useState(() => storedBoundedNumber("mild-acrylic-opacity", 82, 0, 100));
   const [acrylicBlur, setAcrylicBlur] = useState(() => storedBoundedNumber("mild-acrylic-blur", 14, 0, 32));
+  const [uiZoom, setUiZoom] = useState(() => storedBoundedNumber("mild-ui-zoom", 100, UI_ZOOM_MIN, UI_ZOOM_MAX));
   const [wallpaperLayout, setWallpaperLayout] = useState<WallpaperLayout>(storedWallpaperLayout);
   const [wallpaperScale, setWallpaperScale] = useState(() => storedBoundedNumber("mild-wallpaper-scale", 100, 25, 300));
   const [wallpaperPositionX, setWallpaperPositionX] = useState(() => storedBoundedNumber("mild-wallpaper-position-x", 50, 0, 100));
@@ -611,9 +622,10 @@ function App() {
     const appWindow = getCurrentWindow();
     const sync = () => void appWindow.isFullscreen().then(setFullscreen).catch(() => undefined);
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     sync();
-    void appWindow.onResized(sync).then((stopListening) => { unlisten = stopListening; });
-    return () => unlisten?.();
+    void appWindow.onResized(sync).then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   useEffect(() => {
@@ -623,6 +635,15 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-explorer-visible", explorerVisible ? "1" : "0");
   }, [explorerVisible]);
+
+  // Native webview zoom scales Monaco and every panel together and keeps pointer
+  // coordinates honest, which CSS zoom does not. The CSS form only serves the
+  // browser preview.
+  useEffect(() => {
+    localStorage.setItem("mild-ui-zoom", String(uiZoom));
+    if ("__TAURI_INTERNALS__" in window) void getCurrentWebview().setZoom(uiZoom / 100).catch(() => undefined);
+    else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
+  }, [uiZoom]);
 
   useEffect(() => {
     localStorage.setItem("mild-test-panel-visible", testPanelVisible ? "1" : "0");
@@ -727,8 +748,8 @@ function App() {
     localStorage.setItem("mild-atcoder-handle", atcoderHandle.trim());
     localStorage.setItem("mild-codeforces-handle", codeforcesHandle.trim());
     localStorage.setItem("mild-doj-handle", dojHandle.trim());
-    localStorage.setItem("mild-contest-import-language", contestImportLanguage);
-  }, [atcoderHandle, codeforcesHandle, contestImportLanguage, dojHandle]);
+    localStorage.setItem("mild-default-language", defaultLanguage);
+  }, [atcoderHandle, codeforcesHandle, defaultLanguage, dojHandle]);
 
   useEffect(() => {
     localStorage.setItem("mild-atcoder-library-path", atcoderLibraryPath.trim());
@@ -1039,7 +1060,7 @@ function App() {
     const parent = normalizedExplorerPath(parentDirectory);
     const siblingNames = [...savedFiles, ...tabs].filter((file) => fileKey(explorerParent(file.filename)) === fileKey(parent)).map((file) => explorerBasename(file.filename));
     setEntryParentDirectory(parent);
-    setBlankFilename(nextDefaultFilename(siblingNames));
+    setBlankFilename(nextDefaultFilename(siblingNames, defaultLanguage));
     setBlankFilenameOpen(true);
   };
 
@@ -1049,6 +1070,21 @@ function App() {
     setFolderName("");
     setFolderNameOpen(true);
   };
+
+  // The menu opens at the pointer, which near the right or bottom edge would push
+  // part of it off screen. Measured after layout, before paint, and folded back into
+  // the same state so a re-render cannot undo the correction.
+  useLayoutEffect(() => {
+    const menu = explorerMenuRef.current;
+    if (!menu || !explorerMenu) return;
+    const { width, height } = menu.getBoundingClientRect();
+    const margin = 6;
+    let x = explorerMenu.x;
+    let y = explorerMenu.y;
+    if (x + width + margin > window.innerWidth) x = Math.max(margin, explorerMenu.x - width);
+    if (y + height + margin > window.innerHeight) y = Math.max(margin, explorerMenu.y - height);
+    if (x !== explorerMenu.x || y !== explorerMenu.y) setExplorerMenu({ ...explorerMenu, x, y });
+  }, [explorerMenu]);
 
   // The macOS menu bar has no pointer context, so it acts on the Explorer row that
   // was last focused or right-clicked. Both lookups re-resolve against live state so
@@ -1169,15 +1205,15 @@ function App() {
   const createBlankProblem = async (requestedFilename: string) => {
     const diskFiles = workspacePath ? await invoke<string[]>("list_workspace_source_filenames", { request: { folderPath: workspacePath } }) : [];
     const occupiedNames = [...savedFiles.map((tab) => tab.filename), ...tabs.map((tab) => tab.filename), ...diskFiles];
-    const requestedPath = requestedFilename.trim() || nextDefaultFilename(occupiedNames);
+    const requestedPath = requestedFilename.trim() || nextDefaultFilename(occupiedNames, defaultLanguage);
     const typedName = entryParentDirectory ? `${entryParentDirectory}/${explorerBasename(requestedPath)}` : requestedPath;
     const detectedLanguage = languageFromFilename(typedName);
     if (!detectedLanguage && /(^|[\\/])[^\\/]+\.[^\\/.]+$/.test(typedName)) return;
-    const withExtension = detectedLanguage ? typedName : `${typedName}.cpp`;
+    const withExtension = detectedLanguage ? typedName : filenameForLanguage(`${typedName}.cpp`, defaultLanguage);
     const occupied = new Set(occupiedNames);
     const filename = mexFilename(withExtension, occupied);
     if (entryParentDirectory) updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(entryParentDirectory)); return next; });
-    const fileLanguage = languageFromFilename(filename) || "cpp";
+    const fileLanguage = languageFromFilename(filename) || defaultLanguage;
     const title = explorerBasename(filename).replace(/\.[^.]+$/, "");
     const createdAt = new Date();
     const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title, url: "", now: createdAt });
@@ -1224,7 +1260,7 @@ function App() {
     setAtCoderOpen(false);
     if (newFileImportPending) {
       setEntryParentDirectory("");
-      setBlankFilename(nextDefaultFilename([...savedFiles, ...tabs].map((file) => file.filename)));
+      setBlankFilename(nextDefaultFilename([...savedFiles, ...tabs].map((file) => file.filename), defaultLanguage));
       setBlankFilenameOpen(true);
     }
     setNewFileImportPending(false);
@@ -1821,7 +1857,7 @@ function App() {
       setFileStatus("saved");
       return;
     }
-    const importLanguage = contestImport ? contestImportLanguage : "cpp";
+    const importLanguage = defaultLanguage;
     const requestedNames = new Map(candidates.map((problem) => [problem.sourceUrl, importedFilename(problem.title, problem.suggestedFilename, importLanguage)]));
     const collision = candidates.find((problem) => existingFiles.some((file) => fileKey(file.filename) === fileKey(requestedNames.get(problem.sourceUrl) || problem.suggestedFilename)));
     if (collision && !renameDuplicates && !contestImport) {
@@ -1955,9 +1991,10 @@ function App() {
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     void listen<CompanionProblem>("companion-problem", (event) => companionHandlerRef.current(event.payload))
-      .then((stopListening) => { unlisten = stopListening; });
-    return () => unlisten?.();
+      .then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   const refreshSubmissionStatuses = async (silent = false) => {
@@ -2166,6 +2203,14 @@ function App() {
     void startInteractive();
   };
 
+  const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
+
+  /** Runs what the user is looking at: the interactive panel when it is showing, otherwise the tests. */
+  const runActivePanel = () => {
+    if (testPanelVisible && tabs.length > 0 && panelMode === "interactive") beginInteractiveRun();
+    else void run();
+  };
+
   useEffect(() => {
     let disposed = false;
     const stops: Array<() => void> = [];
@@ -2217,10 +2262,14 @@ function App() {
 
   useEffect(() => { runRef.current = () => void run(); }, [run]);
 
+  // Subscriptions resolve asynchronously, so a cleanup that runs first (StrictMode
+  // does this in development) has nothing to call yet; without the flag the first
+  // listener leaks and every event arrives twice.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("native-close-requested", () => requestApplicationClose()).then((stopListening) => { unlisten = stopListening; });
-    return () => unlisten?.();
+    let disposed = false;
+    void listen("native-close-requested", () => requestApplicationClose()).then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   // The macOS menu bar drives the same handlers as the toolbar; only the entry point differs.
@@ -2243,6 +2292,10 @@ function App() {
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
         case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
+        case "view:zoom-in": adjustUiZoom(UI_ZOOM_STEP); break;
+        case "view:zoom-out": adjustUiZoom(-UI_ZOOM_STEP); break;
+        case "view:zoom-reset": setUiZoom(100); break;
+        case "run:active": runActivePanel(); break;
         case "run:tests": void run(); break;
         case "run:interactive": beginInteractiveRun(); break;
         case "run:stop": stopRun(); stopInteractive(); break;
@@ -2253,9 +2306,10 @@ function App() {
   useEffect(() => {
     if (!isMac || !("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     void listen<string>("menu", (event) => menuHandlerRef.current(event.payload))
-      .then((stopListening) => { unlisten = stopListening; });
-    return () => unlisten?.();
+      .then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   useEffect(() => {
@@ -2264,12 +2318,12 @@ function App() {
       // handling them here as well would run every command twice.
       if (isMac && "__TAURI_INTERNALS__" in window) {
         const key = event.key.toLowerCase();
-        if ((event.metaKey || event.ctrlKey) && ["enter", "s", "n", "t", "o", "w", "b", ",", "."].includes(key)) return;
+        if ((event.metaKey || event.ctrlKey) && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
         if (event.shiftKey) beginInteractiveRun();
-        else void run();
+        else runActivePanel();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -2291,6 +2345,18 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
         event.preventDefault();
         if (activeTab) requestCloseProblem(activeTab.id);
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && ["=", "+"].includes(event.key)) {
+        event.preventDefault();
+        adjustUiZoom(UI_ZOOM_STEP);
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && ["-", "_"].includes(event.key)) {
+        event.preventDefault();
+        adjustUiZoom(-UI_ZOOM_STEP);
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === "0") {
+        event.preventDefault();
+        setUiZoom(100);
       }
       // Cmd+Alt+1/2 selects a side-panel mode, so plain tab switching ignores Alt.
       if ((event.ctrlKey || event.metaKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
@@ -2367,6 +2433,8 @@ function App() {
   useEffect(() => {
     const handleConfirm = (event: KeyboardEvent) => {
       if (event.key !== "Enter") return;
+      // An IME commits its composition with Enter; that keystroke must not also submit.
+      if (event.isComposing || event.keyCode === 229) return;
       if (hasFileStatusError) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -2404,7 +2472,9 @@ function App() {
     };
     window.addEventListener("keydown", handleConfirm, true);
     return () => window.removeEventListener("keydown", handleConfirm, true);
-  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, renameFile, sourceFile, sourceUrlValue, sourceValue]);
+  // Every value a confirm handler reads has to be listed here, or Enter submits
+  // what the field held when the dialog opened rather than what it holds now.
+  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, renameFile, renameValue, sourceFile, sourceUrlValue, sourceValue]);
 
   const showTestPanel = testPanelVisible && tabs.length > 0;
   const showExplorer = explorerVisible && Boolean(workspacePath);
@@ -2705,7 +2775,7 @@ function App() {
         <footer><button className="error-confirm" onClick={() => setFileStatus("ready")}>confirm</button></footer>
       </section>}
 
-      {explorerMenu && <div className="explorer-context-menu" style={{ left: explorerMenu.x, top: explorerMenu.y }} role="menu">
+      {explorerMenu && <div className="explorer-context-menu" ref={explorerMenuRef} style={{ left: explorerMenu.x, top: explorerMenu.y }} role="menu">
         {explorerMenu.file ? <>
           <button role="menuitem" onClick={() => beginBlankFile(explorerParent(explorerMenu.file!.filename))}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerParent(explorerMenu.file!.filename))}>{t("newFolder")}</button>
@@ -2803,6 +2873,11 @@ function App() {
             </div>
             {settingsPage === "appearance" ? <div className="appearance-settings">
               <div className="appearance-group"><label>{t("interfaceLanguage")}<select value={uiLocale} onChange={(event) => setUiLocale(event.target.value as UiLocale)}><option value="en">{t("english")}</option><option value="ko">{t("korean")}</option></select></label></div>
+              <div className="appearance-group">
+                <label className="appearance-range"><span>{t("interfaceScale")}</span><input type="range" min={UI_ZOOM_MIN} max={UI_ZOOM_MAX} step={UI_ZOOM_STEP} value={uiZoom} onChange={(event) => setUiZoom(clampUiZoom(Number(event.target.value)))} aria-label={t("interfaceScale")} /><output>{uiZoom}%</output></label>
+                <div className="wallpaper-layout-actions"><button className="subtle-button" onClick={() => adjustUiZoom(-UI_ZOOM_STEP)} disabled={uiZoom <= UI_ZOOM_MIN} aria-label="zoom out">−</button><button className="subtle-button" onClick={() => adjustUiZoom(UI_ZOOM_STEP)} disabled={uiZoom >= UI_ZOOM_MAX} aria-label="zoom in">＋</button><button className="subtle-button" onClick={() => setUiZoom(100)} disabled={uiZoom === 100}>{t("reset")}</button></div>
+              </div>
+              <p className="settings-help">{t("interfaceScaleHelp")}</p>
               <p className="settings-help">{t("appearanceHelp")}</p>
               <div className="appearance-group"><span>theme</span><div className="theme-options">
                 <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>pastel dusk</strong><small>muted Sublime-inspired</small></button>
@@ -2883,8 +2958,8 @@ function App() {
                 <label className="companion-toggle"><input type="checkbox" checked={companionEnabled} onChange={(event) => setCompanionEnabled(event.target.checked)} />{t("companionEnable")}</label>
                 <label className="clangd-path-label">{t("companionPort")}<input type="number" min={1024} max={65535} value={companionPort} onChange={(event) => setCompanionPort(Math.min(65535, Math.max(1024, Number(event.target.value) || 10043)))} /></label>
               </div>
-              <label className="clangd-path-label">{t("contestImportExtension")}<select value={contestImportLanguage} onChange={(event) => setContestImportLanguage(event.target.value as Language)}><option value="cpp">C++ (.cpp)</option><option value="python">Python (.py)</option></select></label>
-              <p className="settings-help">{t("contestImportExtensionHelp")}</p>
+              <label className="clangd-path-label">{t("defaultLanguage")}<select value={defaultLanguage} onChange={(event) => setDefaultLanguage(event.target.value as Language)}><option value="cpp">C++ (.cpp)</option><option value="python">Python (.py)</option></select></label>
+              <p className="settings-help">{t("defaultLanguageHelp")}</p>
               <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
@@ -2964,10 +3039,11 @@ function App() {
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
-        <select className="status-language" value={language} onChange={(event) => {
+        <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;
-          void changeActiveLanguage(next);
-        }} aria-label="Select language"><option value="cpp">C++</option><option value="python">Python 3</option></select>
+          if (activeTab) void changeActiveLanguage(next);
+          else setDefaultLanguage(next);
+        }} aria-label="Select language" title={activeTab ? "language of the open file" : t("defaultLanguage")}><option value="cpp">C++</option><option value="python">Python 3</option></select>
       </footer>
     </main>
   );

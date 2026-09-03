@@ -115,6 +115,16 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .accelerator("CmdOrCtrl+Alt+2")
         .build(app)?;
 
+    let zoom_in = MenuItemBuilder::with_id("view:zoom-in", "Zoom In")
+        .accelerator("CmdOrCtrl+=")
+        .build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("view:zoom-out", "Zoom Out")
+        .accelerator("CmdOrCtrl+-")
+        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("view:zoom-reset", "Actual Size")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
+
     let view = SubmenuBuilder::new(app, "View")
         .item(&toggle_explorer)
         .item(&toggle_tests)
@@ -122,12 +132,19 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .item(&panel_tests)
         .item(&panel_interactive)
         .separator()
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&zoom_reset)
+        .separator()
         .fullscreen()
         .build()?;
 
-    let run_tests = MenuItemBuilder::with_id("run:tests", "Run Tests")
+    // Cmd+Return follows the panel on screen: tests, or the interactive runner when
+    // that panel is showing. The two explicit items stay for when the other one is wanted.
+    let run_active = MenuItemBuilder::with_id("run:active", "Run")
         .accelerator("CmdOrCtrl+Enter")
         .build(app)?;
+    let run_tests = MenuItemBuilder::with_id("run:tests", "Run Tests").build(app)?;
     let run_interactive = MenuItemBuilder::with_id("run:interactive", "Start Interactive Run")
         .accelerator("CmdOrCtrl+Shift+Enter")
         .build(app)?;
@@ -136,6 +153,7 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .build(app)?;
 
     let run = SubmenuBuilder::new(app, "Run")
+        .item(&run_active)
         .item(&run_tests)
         .item(&run_interactive)
         .separator()
