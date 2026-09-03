@@ -49,6 +49,18 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let new_file = MenuItemBuilder::with_id("file:new", "New File")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
+    let new_folder = MenuItemBuilder::with_id("file:new-folder", "New Folder")
+        .accelerator("CmdOrCtrl+Shift+N")
+        .build(app)?;
+    // Rename and Delete deliberately carry no accelerator. A menu accelerator is
+    // claimed application-wide, so binding Return or Cmd+Backspace here would take
+    // them away from the code editor, where they insert a line and delete to the
+    // start of one. The frontend binds both keys only while the Explorer has focus.
+    let rename = MenuItemBuilder::with_id("file:rename", "Rename…").build(app)?;
+    let reveal = MenuItemBuilder::with_id("file:reveal", "Reveal in Finder")
+        .accelerator("CmdOrCtrl+Alt+R")
+        .build(app)?;
+    let delete = MenuItemBuilder::with_id("file:delete", "Delete").build(app)?;
     let open = MenuItemBuilder::with_id("file:open", "Open…")
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
@@ -64,8 +76,13 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
 
     let file = SubmenuBuilder::new(app, "File")
         .item(&new_file)
+        .item(&new_folder)
         .item(&open)
         .item(&save)
+        .separator()
+        .item(&rename)
+        .item(&reveal)
+        .item(&delete)
         .separator()
         .item(&import)
         .separator()

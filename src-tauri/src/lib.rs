@@ -22,6 +22,85 @@ const MAX_OUTPUT: u64 = 1_000_001;
 const WORKSPACE_METADATA_FILENAME: &str = ".mild-editor.json";
 const LEGACY_WORKSPACE_METADATA_FILENAME: &str = "mild-editor.json";
 
+/// Extra directories searched for developer tools.
+///
+/// launchd hands a GUI-launched `.app` the bare `/usr/bin:/bin:/usr/sbin:/sbin`,
+/// so a toolchain installed by Homebrew or MacPorts is invisible to the editor
+/// even though the same command works in the user's terminal. Windows and Linux
+/// inherit a usable `PATH` from the desktop session and need no extras.
+#[cfg(target_os = "macos")]
+const EXTRA_TOOL_DIRECTORIES: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
+
+#[cfg(not(target_os = "macos"))]
+const EXTRA_TOOL_DIRECTORIES: &[&str] = &[];
+
+#[cfg(target_os = "macos")]
+const MISSING_COMPILER: &str = "g++ was not found. Install the Xcode Command Line Tools with `xcode-select --install`, or GCC with `brew install gcc`.";
+
+#[cfg(windows)]
+const MISSING_COMPILER: &str = "g++ was not found. Install MinGW or GCC and add it to PATH.";
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const MISSING_COMPILER: &str = "g++ was not found. Install GCC with your package manager and add it to PATH.";
+
+#[cfg(target_os = "macos")]
+const MISSING_PYTHON: &str = "Python was not found. Install Python 3 from python.org or with `brew install python`.";
+
+#[cfg(not(target_os = "macos"))]
+const MISSING_PYTHON: &str = "Python was not found. Install Python 3 and add it to PATH.";
+
+#[cfg(target_os = "macos")]
+const MISSING_CLANGD: &str = "clangd was not found. Install it with `brew install llvm`, or configure its path in Settings.";
+
+#[cfg(not(target_os = "macos"))]
+const MISSING_CLANGD: &str = "clangd was not found. Install LLVM clangd or configure its path in Settings.";
+
+/// The inherited `PATH` with [`EXTRA_TOOL_DIRECTORIES`] appended.
+///
+/// Entries already present keep their original priority, so a tool the session
+/// exposes still wins over the same tool in a fallback directory.
+fn tool_search_path() -> std::ffi::OsString {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries: Vec<std::path::PathBuf> = std::env::split_paths(&inherited).collect();
+    for extra in EXTRA_TOOL_DIRECTORIES {
+        let extra = std::path::PathBuf::from(extra);
+        if !entries.contains(&extra) {
+            entries.push(extra);
+        }
+    }
+    std::env::join_paths(entries).unwrap_or(inherited)
+}
+
+/// Resolves `name` against [`tool_search_path`], falling back to the active
+/// Xcode toolchain where `clangd` and friends ship inside the developer
+/// directory rather than on `PATH`.
+fn find_tool(name: &str) -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    if let Ok(path) = which::which_in(name, Some(tool_search_path()), cwd) {
+        return Some(path);
+    }
+    toolchain_tool(name)
+}
+
+/// Asks `xcrun` for a tool inside the selected Xcode or Command Line Tools
+/// installation. Returns `None` when neither is installed.
+#[cfg(target_os = "macos")]
+fn toolchain_tool(name: &str) -> Option<std::path::PathBuf> {
+    let output = Command::new("/usr/bin/xcrun").arg("--find").arg(name).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.is_file().then_some(path)
+}
+
+/// Only macOS hides tools behind a developer directory; elsewhere `PATH` is the
+/// whole story.
+#[cfg(not(target_os = "macos"))]
+fn toolchain_tool(_name: &str) -> Option<std::path::PathBuf> {
+    None
+}
+
 fn workspace_metadata_path(folder: &Path) -> std::path::PathBuf {
     let hidden = folder.join(WORKSPACE_METADATA_FILENAME);
     if hidden.exists() { hidden } else {
@@ -444,6 +523,7 @@ fn execute_with_cancel(
     let mut child = match Command::new(command)
         .args(args)
         .current_dir(cwd)
+        .env("PATH", tool_search_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -582,9 +662,7 @@ pub(crate) fn prepare_program(
     unbuffered: bool,
 ) -> Result<PreparedProgram, String> {
     if language == "cpp" {
-        let compiler = which::which("g++").map_err(|_| {
-            "g++ was not found. Install MinGW or GCC and add it to PATH.".to_string()
-        })?;
+        let compiler = find_tool("g++").ok_or_else(|| MISSING_COMPILER.to_string())?;
         let source = cwd.join("main.cpp");
         let binary = cwd.join(if cfg!(windows) { "main.exe" } else { "main" });
         fs::write(&source, code).map_err(|error| error.to_string())?;
@@ -618,9 +696,13 @@ pub(crate) fn prepare_program(
         }
         Ok(PreparedProgram::Ready { command: binary, args: Vec::new() })
     } else {
-        let python = which::which("python")
-            .or_else(|_| which::which("python3"))
-            .map_err(|_| "Python was not found. Install Python 3 and add it to PATH.".to_string())?;
+        // Windows keeps `python` first because its `python3` is usually the
+        // Microsoft Store execution alias, which opens the Store instead of running.
+        let candidates = if cfg!(windows) { ["python", "python3"] } else { ["python3", "python"] };
+        let python = candidates
+            .iter()
+            .find_map(|name| find_tool(name))
+            .ok_or_else(|| MISSING_PYTHON.to_string())?;
         let source = cwd.join("main.py");
         fs::write(&source, code).map_err(|error| error.to_string())?;
         let mut args = vec!["-I".to_string()];
@@ -2007,9 +2089,7 @@ fn resolve_clangd(configured_path: Option<String>) -> Result<std::path::PathBuf,
         }
         return Err("The configured clangd executable was not found.".into());
     }
-    which::which("clangd").map_err(|_| {
-        "clangd was not found. Install LLVM clangd or configure its path in Settings.".into()
-    })
+    find_tool("clangd").ok_or_else(|| MISSING_CLANGD.to_string())
 }
 
 #[tauri::command]
@@ -2018,6 +2098,7 @@ fn clangd_info(configured_path: Option<String>) -> ClangdInfo {
         Ok(path) => {
             let version = Command::new(&path)
                 .arg("--version")
+                .env("PATH", tool_search_path())
                 .creation_flags(0x08000000)
                 .output()
                 .ok()
@@ -2087,7 +2168,7 @@ fn start_clangd(
         "--header-insertion=never".to_string(),
         "--log=error".to_string(),
     ];
-    if let Ok(compiler) = which::which("g++") {
+    if let Some(compiler) = find_tool("g++") {
         clangd_args.push(format!("--query-driver={}", compiler.to_string_lossy()));
         if let Some(workspace_path) = workspace_path {
             let config_path = Path::new(&workspace_path).join(".clangd");
@@ -2104,6 +2185,7 @@ fn start_clangd(
     }
     let mut child = Command::new(&path)
         .args(&clangd_args)
+        .env("PATH", tool_search_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2130,6 +2212,7 @@ fn start_clangd(
     *process_guard = Some(ClangdProcess { child, stdin });
     let version = Command::new(&path)
         .arg("--version")
+        .env("PATH", tool_search_path())
         .creation_flags(0x08000000)
         .output()
         .ok()
@@ -2307,6 +2390,29 @@ mod tests {
         assert_eq!(serde_json::to_string(&Verdict::Ce).unwrap(), "\"ce\"");
         assert_eq!(serde_json::to_string(&Verdict::Tle).unwrap(), "\"tle\"");
         assert_eq!(serde_json::to_string(&Verdict::Stopped).unwrap(), "\"stopped\"");
+    }
+
+    #[test]
+    fn tool_search_path_appends_fallbacks_after_the_inherited_path() {
+        let entries: Vec<std::path::PathBuf> = std::env::split_paths(&tool_search_path()).collect();
+        let inherited: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+            .map(|value| std::env::split_paths(&value).collect())
+            .unwrap_or_default();
+        assert!(entries.starts_with(&inherited), "inherited PATH must keep its priority");
+        for extra in EXTRA_TOOL_DIRECTORIES {
+            assert!(entries.iter().any(|entry| entry == std::path::Path::new(extra)), "{extra} is missing from the search path");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "requires a POSIX shell")]
+    fn find_tool_resolves_an_executable_on_the_search_path() {
+        assert!(find_tool("sh").is_some());
+    }
+
+    #[test]
+    fn find_tool_reports_a_missing_executable() {
+        assert!(find_tool("mild-editor-nonexistent-tool").is_none());
     }
 
     #[test]

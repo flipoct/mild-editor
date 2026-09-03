@@ -21,6 +21,8 @@ npm run quick
 
 Install `g++` and Python 3 and make both commands available on PATH to execute local tests.
 
+On macOS the bundled app is started by launchd, which hands it only `/usr/bin:/bin:/usr/sbin:/sbin`. Mild Editor therefore also searches `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin`, and falls back to `xcrun --find`, so a toolchain installed through Homebrew, MacPorts, or the Xcode Command Line Tools is found without editing PATH.
+
 ## Workspace format and saving
 
 Create a workspace once, then create or import files inside it. File operations, test cases, language changes, and workspace metadata are saved automatically. Source-body edits remain marked as modified until you press `Save` / `Ctrl+S` or run the tests.
@@ -84,8 +86,14 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘1`–`⌘9` | Switch to tab |
 | `⌘↵` / `⌘.` | Run tests / Stop |
 | `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
+| `⌘⇧N` | New folder in the selected Explorer directory |
+| `⌥⌘R` | Reveal the selected file or folder in Finder |
+| `↩` | Rename the selected Explorer file |
+| `⌘⌫` | Delete the selected Explorer file or folder |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
+
+`↩` and `⌘⌫` apply only while an Explorer row has focus, so the editor keeps them for inserting a line and deleting to the start of one. The File menu lists Rename, Reveal in Finder, and Delete without accelerators for the same reason. Windows and Linux keep `F2` for renaming.
 
 The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
 
