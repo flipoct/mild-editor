@@ -66,15 +66,13 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.3.0
+            ## What's changed in v1.4.0
 
-            - Existing C++ and Python files are now discovered recursively when opening a workspace; unsupported extensions are ignored.
-            - Explorer now supports nested folders, persistent expand/collapse state, recursive deletion, and file/folder location actions.
-            - Files and folders can be created directly in the selected Explorer directory or through its context menu.
-            - Nested paths, active-file synchronization, uppercase source extensions, and new-problem naming are more reliable.
-            - Live Codeforces and AtCoder importing has been improved.
+            - The test panel now has an interactive mode: the solution runs as a live process and you answer it yourself, playing the interactor.
+            - Program output is streamed as it is produced, so prompts without a trailing newline appear right away; EOF can be sent on demand.
+            - Each workspace remembers whether it was last used in test-case or interactive mode.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.3.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.4.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false
