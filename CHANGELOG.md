@@ -6,6 +6,9 @@
 - Stream program output as it is produced, including prompts printed without a trailing newline, and send EOF on demand.
 - Remember the panel last used in each workspace in `.mild-editor.json`, defaulting to test cases.
 - Reuse one compile step for both the test runner and interactive runs.
+- Add the v1.3.0 Explorer commands to the native macOS menu bar: New Folder, Rename, Reveal in Finder, and Delete, with Return and Cmd+Backspace bound while an Explorer row has focus.
+- Find toolchains on macOS that a GUI-launched app cannot see: `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin` are searched and `xcrun --find` is used as a fallback, so Homebrew, MacPorts, and Xcode installs of g++, Python, and clangd work without editing PATH.
+- Let the Stop menu item end an interactive run as well as a test run.
 
 ## 1.3.0
 

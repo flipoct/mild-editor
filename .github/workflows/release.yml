@@ -71,6 +71,8 @@ jobs:
             - The test panel now has an interactive mode: the solution runs as a live process and you answer it yourself, playing the interactor.
             - Program output is streamed as it is produced, so prompts without a trailing newline appear right away; EOF can be sent on demand.
             - Each workspace remembers whether it was last used in test-case or interactive mode.
+            - macOS: the File menu now carries the Explorer commands added in v1.3.0 — New Folder, Rename, Reveal in Finder, and Delete — with Return and Cmd+Backspace bound while an Explorer row has focus.
+            - macOS: toolchains installed through Homebrew, MacPorts, or the Xcode Command Line Tools are found without editing PATH, so the run button and the language server work in a GUI-launched app.
 
             See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.4.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
