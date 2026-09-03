@@ -110,6 +110,8 @@ type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[
 type ExplorerMenu = { file?: ProblemTab; directory?: string; x: number; y: number };
 /** Explorer row the menu bar acts on. Files and folders share one slot. */
 type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory"; path: string } | null;
+/** Explorer row whose name is being edited in place. */
+type ExplorerRename = { kind: "file"; filename: string } | { kind: "directory"; path: string };
 type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
 type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
 
@@ -418,8 +420,11 @@ function App() {
   const [explorerSort, setExplorerSort] = useState<ExplorerSort>(() => (localStorage.getItem("mild-explorer-sort") as ExplorerSort) || "problem");
   const [explorerSource, setExplorerSource] = useState<ProblemSource | "all">(() => (localStorage.getItem("mild-explorer-source") as ProblemSource | "all") || "all");
   const [explorerSelection, setExplorerSelection] = useState<ExplorerSelection>(null);
-  const [renameFile, setRenameFile] = useState<ProblemTab | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  const [explorerRename, setExplorerRename] = useState<ExplorerRename | null>(null);
+  const [explorerRenameValue, setExplorerRenameValue] = useState("");
+  // Set once a rename has been committed or cancelled, so the blur that follows the
+  // input unmounting cannot commit it a second time.
+  const explorerRenameSettledRef = useRef(false);
   const [sourceFile, setSourceFile] = useState<ProblemTab | null>(null);
   const [sourceValue, setSourceValue] = useState<ProblemSource>("other");
   const [sourceUrlValue, setSourceUrlValue] = useState("");
@@ -474,6 +479,7 @@ function App() {
   const browserBackgroundUrlRef = useRef("");
   const pendingTemplateCursorRef = useRef<{ tabId: string; language: Language; offset: number } | null>(null);
   const runRef = useRef<() => void>(() => {});
+  const interactiveRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const diagnosticDecorationsRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -971,8 +977,12 @@ function App() {
     if (!workspacePath) return;
     const typed = requestedFilename.trim();
     if (!typed) return;
-    const originalExtension = original.filename.match(/\.(cpp|cc|cxx|py)$/i)?.[0] || ".cpp";
-    const requested = languageFromFilename(typed) ? typed : `${typed}${originalExtension}`;
+    if (!languageFromFilename(typed) && /\.[^./\\]+$/.test(explorerBasename(typed))) {
+      setFileStatus("Use a .cpp, .cc, .cxx or .py extension, or leave it off.");
+      return;
+    }
+    // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
+    const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
     if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return;
     const occupied = [...savedFiles, ...tabs]
       .filter((file) => file.id !== original.id && fileKey(file.filename) !== fileKey(original.filename))
@@ -982,7 +992,6 @@ function App() {
       const nextLanguage = languageFromFilename(filename);
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename, title: filename.replace(/\.[^.]+$/, ""), language: nextLanguage || tab.language, dirty: false } : tab));
       if (activeTab?.id === original.id && nextLanguage) setLanguage(nextLanguage);
-      setRenameFile(null);
       setFileStatus("saved");
       setAutoSaveRevision((revision) => revision + 1);
       return;
@@ -996,18 +1005,12 @@ function App() {
       setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(original.filename) ? { ...update(tab), dirty: false } : tab));
       if (activeTab?.id === original.id) setLanguage(result.language);
       setExplorerSelection((selected) => selected?.kind === "file" && fileKey(selected.filename) === fileKey(original.filename) ? { kind: "file", filename: result.filename } : selected);
-      setRenameFile(null);
       setFileStatus("saved");
     } catch (error) {
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename: original.filename, language: original.language } : tab));
       if (activeTab?.id === original.id) setLanguage(original.language);
       setFileStatus(error instanceof Error ? error.message : String(error));
     }
-  };
-
-  const renameWorkspaceFile = async () => {
-    if (!renameFile) return;
-    await commitWorkspaceRename(renameFile, renameValue);
   };
 
   const beginSourceEdit = (file: ProblemTab) => {
@@ -1099,12 +1102,60 @@ function App() {
   /** Directory a new entry is created in: the selected folder, or the selected file's own. */
   const explorerCreationParent = () => selectedExplorerDirectory ?? (selectedExplorerFile ? explorerParent(selectedExplorerFile.filename) : "");
 
-  // Only files can be renamed; the backend has no folder-rename command.
-  const beginRenameSelection = () => {
-    if (!workspacePath || !selectedExplorerFile || renameFile) return;
+  const beginExplorerRename = (target: ExplorerRename) => {
+    if (!workspacePath) return;
     setExplorerMenu(null);
-    setRenameValue(selectedExplorerFile.filename);
-    setRenameFile(selectedExplorerFile);
+    explorerRenameSettledRef.current = false;
+    setExplorerRenameValue(explorerBasename(target.kind === "file" ? target.filename : target.path));
+    setExplorerRename(target);
+  };
+
+  const beginRenameSelection = () => {
+    if (explorerRename) return;
+    if (selectedExplorerDirectory) beginExplorerRename({ kind: "directory", path: selectedExplorerDirectory });
+    else if (selectedExplorerFile) beginExplorerRename({ kind: "file", filename: selectedExplorerFile.filename });
+  };
+
+  const cancelExplorerRename = () => {
+    explorerRenameSettledRef.current = true;
+    setExplorerRename(null);
+  };
+
+  const renameWorkspaceFolder = async (directory: string, newName: string) => {
+    if (!workspacePath) return;
+    try {
+      const result = await invoke<{ directory: string; renamed: Array<[string, string]> }>("rename_workspace_folder", { request: { folderPath: workspacePath, directory, newName } });
+      const renamedFiles = new Map(result.renamed.map(([from, to]) => [fileKey(from), to]));
+      const repoint = (tab: ProblemTab): ProblemTab => { const next = renamedFiles.get(fileKey(tab.filename)); return next ? { ...tab, filename: next } : tab; };
+      setTabs((items) => items.map(repoint));
+      setSavedFiles((items) => items.map(repoint));
+      const oldKey = fileKey(directory);
+      const movePath = (path: string) => fileKey(path) === oldKey ? result.directory : fileKey(path).startsWith(`${oldKey}/`) ? `${result.directory}${path.slice(directory.length)}` : path;
+      updateCollapsedDirectories((items) => new Set([...items].map((key) => fileKey(movePath(key)))));
+      setExplorerSelection((selected) => selected?.kind === "directory" ? { kind: "directory", path: movePath(selected.path) } : selected?.kind === "file" ? { kind: "file", filename: renamedFiles.get(fileKey(selected.filename)) || selected.filename } : selected);
+      await refreshWorkspaceDirectories(workspacePath);
+      setFileStatus("saved");
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const commitExplorerRename = async () => {
+    const target = explorerRename;
+    if (!target || explorerRenameSettledRef.current) return;
+    explorerRenameSettledRef.current = true;
+    const typed = explorerRenameValue.trim();
+    if (!typed || /[\\/]/.test(typed)) { setExplorerRename(null); return; }
+    if (target.kind === "directory") {
+      setExplorerRename(null);
+      if (typed !== explorerBasename(target.path)) await renameWorkspaceFolder(target.path, typed);
+      return;
+    }
+    const original = [...tabs, ...savedFiles].find((file) => fileKey(file.filename) === fileKey(target.filename));
+    setExplorerRename(null);
+    if (!original) return;
+    const parent = explorerParent(original.filename);
+    await commitWorkspaceRename(original, parent ? `${parent}/${typed}` : typed);
   };
 
   const deleteExplorerSelection = () => {
@@ -1425,7 +1476,12 @@ function App() {
     monacoRef.current = monaco;
     editor.updateOptions({ stickyScroll: { enabled: false } });
     diagnosticDecorationsRef.current = editor.createDecorationsCollection();
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runRef.current());
+    // Monaco binds these to insert-line-after/before, which would swallow the run
+    // shortcuts while the editor has focus. They must run the command here: once
+    // Monaco has called preventDefault on the keystroke, WebKit no longer offers it
+    // to the native menu bar, so the accelerator there never fires in this case.
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => interactiveRef.current());
     if (language === "cpp") void connectClangd(editor, monaco);
   };
 
@@ -2260,7 +2316,8 @@ function App() {
     void invoke("stop_run");
   };
 
-  useEffect(() => { runRef.current = () => void run(); }, [run]);
+  // Refreshed every render so Monaco's bindings see the current panel state.
+  useEffect(() => { runRef.current = runActivePanel; interactiveRef.current = beginInteractiveRun; });
 
   // Subscriptions resolve asynchronously, so a cleanup that runs first (StrictMode
   // does this in development) has nothing to call yet; without the flag the first
@@ -2372,7 +2429,7 @@ function App() {
       if (!explorerRowFocused || !workspacePath) return;
       // Finder renames with Return; Windows and Linux keep F2.
       const renameRequested = event.key === "F2" || (isMac && event.key === "Enter");
-      if (renameRequested && !event.ctrlKey && !event.metaKey && !event.altKey && selectedExplorerFile && !renameFile) {
+      if (renameRequested && !event.ctrlKey && !event.metaKey && !event.altKey && (selectedExplorerFile || selectedExplorerDirectory) && !explorerRename) {
         event.preventDefault();
         beginRenameSelection();
       }
@@ -2398,7 +2455,7 @@ function App() {
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
       else if (deleteConfirmDirectory) setDeleteConfirmDirectory(null);
       else if (sourceFile) setSourceFile(null);
-      else if (renameFile) setRenameFile(null);
+      else if (explorerRename) cancelExplorerRename();
       else if (folderNameOpen) setFolderNameOpen(false);
       else if (blankFilenameOpen) setBlankFilenameOpen(false);
       else if (importCollision) setImportCollision(null);
@@ -2410,7 +2467,7 @@ function App() {
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, importCollision, renameFile, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -2442,7 +2499,7 @@ function App() {
         return;
       }
       if (event.defaultPrevented) return;
-      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || deleteConfirmDirectory || sourceFile || renameFile || folderNameOpen || blankFilenameOpen || importCollision || atCoderOpen)) return;
+      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || deleteConfirmDirectory || sourceFile || folderNameOpen || blankFilenameOpen || importCollision || atCoderOpen)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (appCloseConfirm) {
@@ -2456,8 +2513,6 @@ function App() {
         void deleteWorkspaceFolder();
       } else if (sourceFile) {
         void updateProblemSource();
-      } else if (renameFile) {
-        void renameWorkspaceFile();
       } else if (folderNameOpen) {
         void createWorkspaceFolder();
       } else if (blankFilenameOpen) {
@@ -2474,7 +2529,7 @@ function App() {
     return () => window.removeEventListener("keydown", handleConfirm, true);
   // Every value a confirm handler reads has to be listed here, or Enter submits
   // what the field held when the dialog opened rather than what it holds now.
-  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, renameFile, renameValue, sourceFile, sourceUrlValue, sourceValue]);
+  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
   const showTestPanel = testPanelVisible && tabs.length > 0;
   const showExplorer = explorerVisible && Boolean(workspacePath);
@@ -2495,16 +2550,49 @@ function App() {
     return `${accepted} / ${tests.length} AC${worst ? ` · ${verdictLabels[worst]}` : ""}`;
   }, [running, tests]);
 
+  // Rows focus themselves on click: WebKit leaves buttons unfocused after a mouse
+  // click, which would otherwise keep every Explorer shortcut from ever applying on
+  // macOS. The row's own element is swapped for an input, VS Code style. The input sits
+  // outside `.explorer-file` / `.explorer-directory` on purpose: the global key
+  // handler only treats those as Explorer rows, so Return and Cmd+Backspace stay
+  // ordinary text editing while the name is being typed.
+  const renameInput = (
+    <input
+      className="explorer-rename-input"
+      value={explorerRenameValue}
+      autoFocus
+      spellCheck={false}
+      aria-label="new name"
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setExplorerRenameValue(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); void commitExplorerRename(); }
+        else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelExplorerRename(); }
+      }}
+      onBlur={() => void commitExplorerRename()}
+    />
+  );
+  const renamingDirectory = (path: string) => explorerRename?.kind === "directory" && fileKey(explorerRename.path) === fileKey(path);
+  const renamingFile = (filename: string) => explorerRename?.kind === "file" && fileKey(explorerRename.filename) === fileKey(filename);
+
   const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => nodes.flatMap((node) => {
     if (node.kind === "directory") {
       const collapsed = collapsedDirectories.has(fileKey(node.path));
+      if (renamingDirectory(node.path)) {
+        return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
+          <div className="explorer-rename-row explorer-directory-rename" style={{ paddingLeft: `${10 + depth * 14}px` }}>
+            <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg>{renameInput}
+          </div>
+          {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
+        </div>];
+      }
       return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
-        <button className="explorer-directory" style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={() => updateCollapsedDirectories((items) => {
+        <button className="explorer-directory" style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
           const next = new Set(items);
           const key = fileKey(node.path);
           if (next.has(key)) next.delete(key); else next.add(key);
           return next;
-        })} onFocus={() => setExplorerSelection({ kind: "directory", path: node.path })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "directory", path: node.path }); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
+        }); }} onFocus={() => setExplorerSelection({ kind: "directory", path: node.path })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "directory", path: node.path }); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
           <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg><span>{node.name}</span>
         </button>
         {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
@@ -2512,8 +2600,13 @@ function App() {
     }
     const tab = node.file;
     const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
+    if (renamingFile(tab.filename)) {
+      return [<div className="explorer-file-row" key={tab.id}>
+        <div className="explorer-rename-row" style={{ paddingLeft: `${14 + depth * 14}px` }}><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>{renameInput}</div>
+      </div>];
+    }
     return [<div className="explorer-file-row" key={tab.id}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={() => openSavedFile(tab)} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
         <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
@@ -2784,13 +2877,14 @@ function App() {
           <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>open file location</button>
           <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>duplicate file</button>
           <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>set problem source</button>
-          <button role="menuitem" onClick={() => { setRenameValue(explorerMenu.file!.filename); setRenameFile(explorerMenu.file!); setExplorerMenu(null); }}>rename file</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>rename file</button>
           <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>delete file</button>
         </> : explorerMenu.directory ? <>
           <button role="menuitem" onClick={() => beginBlankFile(explorerMenu.directory!)}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerMenu.directory!)}>{t("newFolder")}</button>
           <div className="explorer-menu-separator" />
           <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>open folder location</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>rename folder</button>
           <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>delete folder</button>
         </> : <>
           <button role="menuitem" onClick={() => beginBlankFile()}>{t("newFile")}</button>
@@ -2828,14 +2922,6 @@ function App() {
         </section>
       </div>}
 
-      {renameFile && <div className="modal-backdrop close-confirm" role="presentation">
-        <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-file-title">
-          <span className="eyebrow">rename saved file</span>
-          <h2 id="rename-file-title">Rename file</h2>
-          <input className="atcoder-url" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void renameWorkspaceFile(); } }} autoFocus spellCheck={false} />
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setRenameFile(null)}>cancel</button><button className="primary-button" onClick={() => void renameWorkspaceFile()}>rename</button></footer>
-        </section>
-      </div>}
 
       {sourceFile && <div className="modal-backdrop close-confirm" role="presentation">
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="source-file-title">

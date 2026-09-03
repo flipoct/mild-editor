@@ -91,7 +91,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
 | `⌘⇧N` | New folder in the selected Explorer directory |
 | `⌥⌘R` | Reveal the selected file or folder in Finder |
-| `↩` | Rename the selected Explorer file |
+| `↩` | Rename the selected Explorer file or folder in place |
 | `⌘⌫` | Delete the selected Explorer file or folder |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
@@ -101,6 +101,8 @@ The interface scale is also in **Settings → appearance**, and the same `Ctrl` 
 Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` closes the program's input the way it would in a terminal.
 
 `↩` and `⌘⌫` apply only while an Explorer row has focus, so the editor keeps them for inserting a line and deleting to the start of one. The File menu lists Rename, Reveal in Finder, and Delete without accelerators for the same reason. Windows and Linux keep `F2` for renaming.
+
+Renaming happens in the row itself: the name turns into a text field with everything selected, `↩` commits, `Esc` cancels, and a name typed without an extension takes the default language's. Folders rename the same way and carry their files along.
 
 The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
 
