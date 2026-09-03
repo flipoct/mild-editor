@@ -85,6 +85,8 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch to tab |
 | `⌘↵` / `⌘.` | Run tests / Stop |
+| `⌘⇧↵` | Start an interactive run |
+| `⌘⌥1` / `⌘⌥2` | Show the test cases / interactive panel |
 | `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
 | `⌘⇧N` | New folder in the selected Explorer directory |
 | `⌥⌘R` | Reveal the selected file or folder in Finder |
@@ -92,6 +94,8 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘⌫` | Delete the selected Explorer file or folder |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
+
+Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` closes the program's input the way it would in a terminal.
 
 `↩` and `⌘⌫` apply only while an Explorer row has focus, so the editor keeps them for inserting a line and deleting to the start of one. The File menu lists Rename, Reveal in Finder, and Delete without accelerators for the same reason. Windows and Linux keep `F2` for renaming.
 

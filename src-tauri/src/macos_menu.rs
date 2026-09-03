@@ -105,10 +105,22 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let toggle_tests = MenuItemBuilder::with_id("view:toggle-tests", "Toggle Test Panel")
         .accelerator("CmdOrCtrl+Shift+B")
         .build(app)?;
+    // The side panel holds two modes and the menu bar is the only place a keyboard
+    // user can reach the second one. Cmd+1..9 already switches editor tabs, so these
+    // take the Option variant rather than a plain number.
+    let panel_tests = MenuItemBuilder::with_id("view:panel-tests", "Test Cases")
+        .accelerator("CmdOrCtrl+Alt+1")
+        .build(app)?;
+    let panel_interactive = MenuItemBuilder::with_id("view:panel-interactive", "Interactive")
+        .accelerator("CmdOrCtrl+Alt+2")
+        .build(app)?;
 
     let view = SubmenuBuilder::new(app, "View")
         .item(&toggle_explorer)
         .item(&toggle_tests)
+        .separator()
+        .item(&panel_tests)
+        .item(&panel_interactive)
         .separator()
         .fullscreen()
         .build()?;
@@ -116,12 +128,17 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let run_tests = MenuItemBuilder::with_id("run:tests", "Run Tests")
         .accelerator("CmdOrCtrl+Enter")
         .build(app)?;
+    let run_interactive = MenuItemBuilder::with_id("run:interactive", "Start Interactive Run")
+        .accelerator("CmdOrCtrl+Shift+Enter")
+        .build(app)?;
     let stop = MenuItemBuilder::with_id("run:stop", "Stop")
         .accelerator("CmdOrCtrl+Period")
         .build(app)?;
 
     let run = SubmenuBuilder::new(app, "Run")
         .item(&run_tests)
+        .item(&run_interactive)
+        .separator()
         .item(&stop)
         .build()?;
 

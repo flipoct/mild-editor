@@ -12,7 +12,7 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
-use crate::{prepare_program, CommandExtHidden, PreparedProgram};
+use crate::{prepare_program, tool_search_path, CommandExtHidden, PreparedProgram};
 
 const MAX_CODE: usize = 100_000;
 const MAX_STREAM_OUTPUT: usize = 1_000_000;
@@ -172,6 +172,10 @@ fn spawn_session(app: tauri::AppHandle, request: StartInteractiveRequest) -> Res
     let mut child = Command::new(&command)
         .args(&args)
         .current_dir(cwd)
+        // The test runner widens PATH the same way; without it an interactive run
+        // launched from a macOS `.app` sees only launchd's bare PATH and cannot
+        // reach anything the solution shells out to.
+        .env("PATH", tool_search_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

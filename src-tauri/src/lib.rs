@@ -59,7 +59,7 @@ const MISSING_CLANGD: &str = "clangd was not found. Install LLVM clangd or confi
 ///
 /// Entries already present keep their original priority, so a tool the session
 /// exposes still wins over the same tool in a fallback directory.
-fn tool_search_path() -> std::ffi::OsString {
+pub(crate) fn tool_search_path() -> std::ffi::OsString {
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let mut entries: Vec<std::path::PathBuf> = std::env::split_paths(&inherited).collect();
     for extra in EXTRA_TOOL_DIRECTORIES {
