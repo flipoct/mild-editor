@@ -108,6 +108,27 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .panel-run .spinner { width: 11px; height: 11px; border-width: 2px; }
 .panel-stop { width: 25px; height: 25px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 1px solid #794f4c; border-radius: 5px; background: #442f2d; color: #e2a39d; font-size: 10px; cursor: pointer; }
 .panel-stop:hover { background: #563735; color: #f0b8b1; }
+/* Segmented control: one recessed track, the active half raised out of it. */
+.panel-modes { min-width: 0; display: flex; margin-right: auto; padding: 2px; border: 1px solid #3b3c37; border-radius: 8px; background: #232420; }
+.panel-modes button { min-width: 0; padding: 4px 9px; border: 0; border-radius: 6px; background: transparent; color: #85867e; font: inherit; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; transition: background .14s, color .14s; }
+.panel-modes button:hover:not(.active) { color: #c7c4ba; }
+.panel-modes button.active { background: #3a3b34; color: #ddc58b; box-shadow: 0 1px 2px #1415113d; }
+
+.interactive-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.interactive-log { min-height: 0; flex: 1; overflow: auto; padding: 9px 11px; scrollbar-width: thin; scrollbar-color: #50514b transparent; }
+.interactive-hint { margin: 4px 2px; color: #86877f; font-size: 11px; line-height: 1.55; }
+.interactive-entry { margin: 0; padding: 1px 0; font-family: "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.interactive-entry.stdout { color: #c7c4ba; }
+/* The user's own replies are indented and tinted so a transcript reads as a dialogue. */
+.interactive-entry.input { padding-left: 12px; border-left: 2px solid #605c4d; color: #ddc58b; }
+.interactive-entry.stderr { color: #d98f8a; }
+.interactive-entry.info { padding: 4px 0; color: #86877f; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.interactive-compose { display: grid; gap: 6px; padding: 8px 9px; border-top: 1px solid #3c3d38; background: #292a26; }
+.interactive-compose textarea { min-height: 46px; resize: vertical; font-family: "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.interactive-compose textarea:disabled { opacity: .55; }
+.interactive-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+.interactive-buttons button { height: 26px; padding: 0 10px; font-size: 11px; }
+
 .test-list { min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #50514b transparent; }
 .test-card { border-bottom: 1px solid #3c3d38; }
 .test-card.open { background: #2d2e2a; }
@@ -192,7 +213,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .explorer-create-actions svg { width: 14px; height: 14px; fill: currentColor; }
 .explorer-empty { padding: 18px 10px; color: #777970; font-size: 9px; text-align: center; }
 .explorer-files { min-height: 0; flex: 1; padding: 4px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #50514b transparent; }
-.explorer-file-row { min-width: 0; height: 29px; display: flex; align-items: center; padding-left: 14px; }
+.explorer-file-row { min-width: 0; height: 29px; display: flex; align-items: center; }
 .explorer-file, .explorer-metadata { width: 100%; height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 25px; border: 0; background: transparent; color: #96978f; text-align: left; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
 .explorer-file { min-width: 0; flex: 1; cursor: pointer; }
 .explorer-file:hover { background: #30312d; color: #c5c2b8; }
@@ -361,6 +382,16 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .test-fields textarea.has-error, :root[data-theme] .diagnostic-inline.error { color: var(--danger); }
 :root[data-theme] .diagnostic-inline.warning, :root[data-theme] .time { color: var(--warning); }
 :root[data-theme] .signal, :root[data-theme] .lsp-status > span, :root[data-theme] .lsp-dot { background: var(--idle); }
+:root[data-theme] .interactive-log { scrollbar-color: var(--border) transparent; }
+:root[data-theme] .panel-modes { background: var(--bg-2); border-color: var(--border); }
+:root[data-theme] .panel-modes button { color: var(--muted); }
+:root[data-theme] .panel-modes button:hover:not(.active) { color: var(--text); }
+:root[data-theme] .panel-modes button.active { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+:root[data-theme] .interactive-compose { background: var(--bg-1); border-color: var(--border); }
+:root[data-theme] .interactive-entry.stdout { color: var(--text); }
+:root[data-theme] .interactive-entry.input { border-color: var(--accent); color: var(--accent); }
+:root[data-theme] .interactive-entry.stderr { color: var(--danger); }
+:root[data-theme] .interactive-entry.info, :root[data-theme] .interactive-hint { color: var(--muted); }
 :root[data-theme] .test-list, :root[data-theme] .explorer-files { scrollbar-color: var(--border) transparent; }
 :root[data-theme] .tab-edit input { background: transparent; border-color: transparent; color: var(--text); }
 :root[data-theme] .tab-edit input:focus { background: var(--field); border-color: var(--accent); }
@@ -455,6 +486,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .app-shell[data-wallpaper] .window-titlebar,
 .app-shell[data-wallpaper] .problem-tabs,
 .app-shell[data-wallpaper] .statusbar,
+.app-shell[data-wallpaper] .interactive-compose,
 .app-shell[data-wallpaper] .test-panel,
 .app-shell[data-wallpaper] .file-explorer,
 .app-shell[data-wallpaper] .editor-area {
