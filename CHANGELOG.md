@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0
+
+- Update from inside the app: Mild Editor checks the latest release when it starts, and one click downloads, verifies, installs, and restarts into the new version. Settings → updates has a manual check and the release notes.
+- Run the development build as "Mild Editor Dev" with its own settings store and a dev badge, so it is never confused with an installed release.
+- Show the version the running binary carries in the status bar and the updates page.
+- Sign release artifacts and publish latest.json so installed copies can find and verify updates; macOS builds now produce the updater bundle alongside the dmg.
+
 ## 1.5.0
 
 - Add a default language for imported problems, including Competitive Companion, and for new files created without an extension; the status-bar language menu edits it while no file is open.

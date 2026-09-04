@@ -70,17 +70,14 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.5.0
+            ## What's changed in v1.6.0
 
-            - Add a default language for imported problems, including Competitive Companion, and for new files created without an extension; the status-bar language menu edits it while no file is open.
-            - Rename files and folders in place in the Explorer: Return (macOS) or F2 turns the row into a text field with the name selected, and a bare name takes the default language's extension.
-            - Run whatever panel is showing with Cmd/Ctrl+Return — the test cases or the interactive runner — including from inside the editor.
-            - Keep the Explorer context menu on screen when it opens near the right or bottom edge.
-            - Add an interface scale from 50% to 200% in Settings → appearance and on Cmd/Ctrl+= / − / 0, with matching macOS View menu items.
-            - macOS: keep the title bar at its native height under interface zoom and centre the traffic lights in it.
-            - macOS: Explorer rows take focus on click, so Return, F2, Cmd+Backspace, and Reveal in Finder act on the clicked row.
+            - Update from inside the app: Mild Editor checks the latest release when it starts, and one click downloads, verifies, installs, and restarts into the new version. Settings → updates has a manual check and the release notes.
+            - Run the development build as "Mild Editor Dev" with its own settings store and a dev badge, so it is never confused with an installed release.
+            - Show the version the running binary carries in the status bar and the updates page.
+            - Sign release artifacts and publish latest.json so installed copies can find and verify updates; macOS builds now produce the updater bundle alongside the dmg.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.5.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.6.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
