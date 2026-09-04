@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
+import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -456,6 +457,9 @@ function App() {
   const importInFlightRef = useRef(false);
   const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates">("template");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: UPDATES_SUPPORTED ? "idle" : "unavailable" });
+  // The version the binary actually carries, which is what the updater compares
+  // against; package.json is only the fallback for the browser preview.
+  const [appVersion, setAppVersion] = useState(APP_VERSION);
   const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
   const pendingUpdateRef = useRef<AppUpdate | null>(null);
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
@@ -666,6 +670,11 @@ function App() {
     if ("__TAURI_INTERNALS__" in window) void getCurrentWebview().setZoom(uiZoom / 100).catch(() => undefined);
     else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
   }, [uiZoom]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void getAppVersion().then(setAppVersion).catch(() => undefined);
+  }, []);
 
   // One check per launch, a few seconds in so it never competes with opening the workspace.
   useEffect(() => {
@@ -3136,7 +3145,7 @@ function App() {
             </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
               <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
                 <span className="lsp-dot" />
-                <div><strong>mild editor v{APP_VERSION}</strong><small>{updateStatusLine}</small></div>
+                <div><strong>mild editor v{appVersion}</strong><small>{updateStatusLine}</small></div>
               </div>
               <p className="settings-help">{t("updatesHelp")}</p>
               <div className="companion-controls">
@@ -3213,7 +3222,7 @@ function App() {
       )}
 
       <footer className="statusbar">
-        <span className="wordmark">mild editor <small>v{APP_VERSION}</small></span>
+        <span className="wordmark">mild editor <small>v{appVersion}</small></span>
         {updateStatus.phase === "available" && <button className="status-update" onClick={() => { setSettingsPage("updates"); setSettingsOpen(true); }} title={`${t("updatesAvailable")} v${updateStatus.version}`}>↑ v{updateStatus.version}</button>}
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
