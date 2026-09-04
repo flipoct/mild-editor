@@ -233,6 +233,15 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .explorer-directory { width: 100%; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 9px 0 14px; border: 0; background: transparent; color: #96978f; text-align: left; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; user-select: none; }
 .explorer-directory:hover { background: #30312d; color: #c5c2b8; }
 .explorer-directory svg { width: 13px; height: 13px; fill: currentColor; opacity: .8; }
+.titlebar-dev { flex: 0 0 auto; padding: 1px 5px; border: 1px solid #b39a68; border-radius: 4px; color: #dec58e; font: 700 8px/1.4 "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.status-update { height: 20px; padding: 0 7px; border: 1px solid #b39a68; border-radius: 4px; background: #35362f; color: #dec58e; font: 700 9px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+.status-update:hover { filter: brightness(1.15); }
+.update-notice { position: fixed; z-index: 1900; right: 14px; top: 44px; width: min(360px, calc(100vw - 28px)); display: grid; gap: 8px; padding: 12px 14px; border: 1px solid #b39a68; border-radius: 9px; background: #292a26; color: #d0cdc3; box-shadow: 0 12px 32px #0d0e0b88; font-size: 11px; }
+.update-notice strong { font-size: 11px; }
+.update-notice small { color: #93948b; white-space: pre-wrap; }
+.update-notice progress, .updates-settings progress { width: 100%; height: 6px; accent-color: #b39a68; }
+.update-notice-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.update-notes { max-height: 160px; margin: 10px 0 0; padding: 10px; overflow: auto; border: 1px solid #45463f; border-radius: 6px; background: #232420; color: #b7b4aa; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .explorer-rename-row { min-width: 0; flex: 1; height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 25px; color: #c5c2b8; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
 .explorer-directory-rename { height: 28px; gap: 6px; padding: 0 9px 0 14px; }
 .explorer-directory-rename svg { width: 13px; height: 13px; fill: currentColor; opacity: .8; }
@@ -373,6 +382,11 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .titlebar-tools, :root[data-theme] .problem-tabs, :root[data-theme] .problem-tab, :root[data-theme] .panel-heading, :root[data-theme] .test-card, :root[data-theme] .test-actions, :root[data-theme] .file-explorer, :root[data-theme] .explorer-folder, :root[data-theme] .explorer-controls, :root[data-theme] .explorer-create-actions, :root[data-theme] .explorer-context-menu, :root[data-theme] .settings-pages, :root[data-theme] .snippet-item, :root[data-theme] .new-snippet { border-color: var(--border); }
 :root[data-theme] .settings-dialog, :root[data-theme] .atcoder-dialog, :root[data-theme] .confirm-dialog, :root[data-theme] .explorer-context-menu { background: var(--bg-2); border-color: var(--border); color: var(--text); }
 :root[data-theme] .explorer-rename-input { background: var(--field); border-color: var(--accent); color: var(--text); }
+:root[data-theme] .titlebar-dev, :root[data-theme] .status-update { border-color: var(--accent); color: var(--accent); }
+:root[data-theme] .status-update { background: var(--accent-soft); }
+:root[data-theme] .update-notice { background: var(--bg-2); border-color: var(--accent); color: var(--text); }
+:root[data-theme] .update-notes { background: var(--field); border-color: var(--border); color: var(--muted); }
+:root[data-theme] .update-notice progress, :root[data-theme] .updates-settings progress { accent-color: var(--accent); }
 :root[data-theme] textarea, :root[data-theme] input, :root[data-theme] select, :root[data-theme] .template-monaco, :root[data-theme] .snippet-monaco, :root[data-theme] .appearance-group pre { background: var(--field); border-color: var(--border); color: var(--text); }
 :root[data-theme] select option, :root[data-theme] select optgroup { background-color: var(--field); color: var(--text); }
 :root[data-theme] select option:checked { background-color: var(--accent-soft); color: var(--accent); }

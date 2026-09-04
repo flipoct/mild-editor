@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
+import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check as checkForAppUpdate, type Update as AppUpdate } from "@tauri-apps/plugin-updater";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { fileKey, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
@@ -332,9 +335,16 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
 const APP_VERSION = packageInfo.version;
+/** `tauri dev` runs under tauri.dev.conf.json: its own name, identifier, and no updater. */
+const IS_DEV_BUILD = import.meta.env.DEV;
+const UPDATES_SUPPORTED = "__TAURI_INTERNALS__" in window && !IS_DEV_BUILD;
+
+type UpdatePhase = "idle" | "unavailable" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "installed" | "error";
+type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; received?: number; total?: number; error?: string };
 
 const messages = {
   en: {
+    updates: "updates", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "check for updates", updatesIdle: "not checked yet", updatesChecking: "checking…", updatesUpToDate: "up to date", updatesAvailable: "update available:", updatesInstall: "update and restart", updatesDownloading: "downloading update…", updatesInstalling: "installing… the app will restart", updatesInstalled: "update installed — restart the app to finish", updatesError: "update failed", updatesRetry: "retry", updatesLater: "later", updatesDev: "not available in the development build",
     appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
     preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean", interfaceScale: "interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. The existing ${...} syntax remains supported.",
@@ -360,6 +370,7 @@ const messages = {
     interactiveEofSent: "input closed (EOF)", interactiveIdle: "not running",
   },
   ko: {
+    updates: "업데이트", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 기존 ${...} 문법도 계속 지원됩니다.",
@@ -444,7 +455,13 @@ function App() {
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
   const importInFlightRef = useRef(false);
-  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server">("template");
+  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates">("template");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: UPDATES_SUPPORTED ? "idle" : "unavailable" });
+  // The version the binary actually carries, which is what the updater compares
+  // against; package.json is only the fallback for the browser preview.
+  const [appVersion, setAppVersion] = useState(APP_VERSION);
+  const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
+  const pendingUpdateRef = useRef<AppUpdate | null>(null);
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
   const [codeforcesHandle, setCodeforcesHandle] = useState(() => localStorage.getItem("mild-codeforces-handle") || "");
@@ -653,6 +670,19 @@ function App() {
     if ("__TAURI_INTERNALS__" in window) void getCurrentWebview().setZoom(uiZoom / 100).catch(() => undefined);
     else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
   }, [uiZoom]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void getAppVersion().then(setAppVersion).catch(() => undefined);
+  }, []);
+
+  // One check per launch, a few seconds in so it never competes with opening the workspace.
+  useEffect(() => {
+    if (!UPDATES_SUPPORTED) return;
+    const timer = window.setTimeout(() => void checkForUpdates(), 4000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("mild-test-panel-visible", testPanelVisible ? "1" : "0");
@@ -2255,6 +2285,54 @@ function App() {
     void invoke("stop_interactive");
   };
 
+  const checkForUpdates = async () => {
+    if (!UPDATES_SUPPORTED) { setUpdateStatus({ phase: "unavailable" }); return; }
+    setUpdateStatus((current) => ({ ...current, phase: "checking", error: undefined }));
+    try {
+      const update = await checkForAppUpdate({ timeout: 15000 });
+      pendingUpdateRef.current = update;
+      if (update) {
+        setUpdateStatus({ phase: "available", version: update.version, notes: update.body?.trim() || undefined });
+        setUpdateNoticeDismissed(false);
+      } else {
+        setUpdateStatus({ phase: "up-to-date" });
+      }
+    } catch (error) {
+      setUpdateStatus({ phase: "error", error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const installUpdate = async () => {
+    const update = pendingUpdateRef.current;
+    if (!update) return;
+    setUpdateStatus({ phase: "downloading", version: update.version, notes: update.body?.trim() || undefined, received: 0 });
+    try {
+      let received = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") setUpdateStatus((current) => ({ ...current, phase: "downloading", received: 0, total: event.data.contentLength }));
+        else if (event.event === "Progress") { received += event.data.chunkLength; setUpdateStatus((current) => ({ ...current, received })); }
+        else if (event.event === "Finished") setUpdateStatus((current) => ({ ...current, phase: "installing" }));
+      });
+      await relaunch();
+      // Normally the process is gone by now. If it is not, say so instead of
+      // sitting on "installing…" forever.
+      setUpdateStatus({ phase: "installed", version: update.version });
+    } catch (error) {
+      setUpdateStatus({ phase: "error", version: update.version, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const updateStatusLine = updateStatus.phase === "unavailable" ? t("updatesDev")
+    : updateStatus.phase === "idle" ? t("updatesIdle")
+    : updateStatus.phase === "checking" ? t("updatesChecking")
+    : updateStatus.phase === "up-to-date" ? t("updatesUpToDate")
+    : updateStatus.phase === "available" ? `${t("updatesAvailable")} v${updateStatus.version}`
+    : updateStatus.phase === "downloading" ? `${t("updatesDownloading")}${updateStatus.total ? ` ${Math.min(100, Math.round(((updateStatus.received || 0) / updateStatus.total) * 100))}%` : ""}`
+    : updateStatus.phase === "installing" ? t("updatesInstalling")
+    : updateStatus.phase === "installed" ? t("updatesInstalled")
+    : `${t("updatesError")}: ${updateStatus.error || ""}`;
+  const updateBusy = updateStatus.phase === "checking" || updateStatus.phase === "downloading" || updateStatus.phase === "installing";
+
   /** Reveals the panel before running: the interactive run button lives inside it. */
   const beginInteractiveRun = () => {
     setTestPanelVisible(true);
@@ -2636,6 +2714,7 @@ function App() {
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo" aria-hidden="true">m</span>
           <span className="titlebar-name" data-tauri-drag-region>mild editor</span>
+          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
           <span className="titlebar-separator" data-tauri-drag-region>·</span>
           <span className="titlebar-file" data-tauri-drag-region>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
         </div>
@@ -2865,6 +2944,15 @@ function App() {
         </aside></>}
       </section>
 
+      {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
+        <strong>{updateStatus.phase === "error" ? t("updatesError") : updateStatusLine}</strong>
+        {updateStatus.phase === "downloading" && <progress max={updateStatus.total || 1} value={updateStatus.total ? updateStatus.received || 0 : undefined} aria-label={t("updatesDownloading")} />}
+        {updateStatus.phase === "error" && <small>{updateStatus.error}</small>}
+        {(updateStatus.phase === "available" || updateStatus.phase === "error" || updateStatus.phase === "installed") && <span className="update-notice-actions">
+          <button className="subtle-button" onClick={() => setUpdateNoticeDismissed(true)}>{t("updatesLater")}</button>
+          {updateStatus.phase !== "installed" && <button className="primary-button" onClick={() => void installUpdate()}>{updateStatus.phase === "error" ? t("updatesRetry") : t("updatesInstall")}</button>}
+        </span>}
+      </aside>}
       {hasFileStatusError && <section className="error-notice" role="alertdialog" aria-modal="true" aria-labelledby="error-notice-title">
         <header><strong id="error-notice-title">error</strong><button className="error-close" onClick={() => setFileStatus("ready")} aria-label="close error">×</button></header>
         <p>{fileStatus}</p>
@@ -2950,7 +3038,7 @@ function App() {
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <header className="settings-header">
-              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : t("languageServer")}</h2></div>
+              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : t("languageServer")}</h2></div>
               <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
             </header>
             <div className="settings-pages">
@@ -2959,6 +3047,7 @@ function App() {
               <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>{t("snippets")}</button>
               <button className={settingsPage === "judge" ? "active" : ""} onClick={() => setSettingsPage("judge")}>{t("judge")}</button>
               <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>{t("languageServer")}</button>
+              <button className={settingsPage === "updates" ? "active" : ""} onClick={() => setSettingsPage("updates")}>{t("updates")}{updateStatus.phase === "available" ? " •" : ""}</button>
             </div>
             {settingsPage === "appearance" ? <div className="appearance-settings">
               <div className="appearance-group"><label>{t("interfaceLanguage")}<select value={uiLocale} onChange={(event) => setUiLocale(event.target.value as UiLocale)}><option value="en">{t("english")}</option><option value="ko">{t("korean")}</option></select></label></div>
@@ -3053,6 +3142,19 @@ function App() {
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
               <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={() => void refreshSubmissionStatuses()}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
+            </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
+              <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
+                <span className="lsp-dot" />
+                <div><strong>mild editor v{appVersion}</strong><small>{updateStatusLine}</small></div>
+              </div>
+              <p className="settings-help">{t("updatesHelp")}</p>
+              <div className="companion-controls">
+                <button className="subtle-button" onClick={() => void checkForUpdates()} disabled={!UPDATES_SUPPORTED || updateBusy}>{t("updatesCheck")}</button>
+                {updateStatus.phase === "available" && <button className="primary-button" onClick={() => void installUpdate()}>{t("updatesInstall")} · v{updateStatus.version}</button>}
+                {updateStatus.phase === "error" && pendingUpdateRef.current && <button className="subtle-button" onClick={() => void installUpdate()}>{t("updatesRetry")}</button>}
+              </div>
+              {updateStatus.phase === "downloading" && <progress max={updateStatus.total || 1} value={updateStatus.total ? updateStatus.received || 0 : undefined} aria-label={t("updatesDownloading")} />}
+              {updateStatus.notes && <pre className="update-notes">{updateStatus.notes}</pre>}
             </div> : <div className="language-server-settings">
               <div className={`lsp-state ${clangdStatus}`}><span className="lsp-dot" /><div><strong>{clangdStatus === "ready" ? "clangd connected" : clangdStatus === "connecting" ? "connecting…" : clangdStatus === "missing" ? "clangd not found" : clangdStatus === "error" ? "connection failed" : "clangd idle"}</strong><small>{clangdInfo?.version || "C++ semantic completion, diagnostics, hover and signature help"}</small></div></div>
               <label className="clangd-path-label">clangd executable path<input value={clangdPath} onChange={(event) => setClangdPath(event.target.value)} placeholder="Auto-detect from PATH, or C:\\Program Files\\LLVM\\bin\\clangd.exe" spellCheck={false} /></label>
@@ -3120,7 +3222,8 @@ function App() {
       )}
 
       <footer className="statusbar">
-        <span className="wordmark">mild editor <small>v{APP_VERSION}</small></span>
+        <span className="wordmark">mild editor <small>v{appVersion}</small></span>
+        {updateStatus.phase === "available" && <button className="status-update" onClick={() => { setSettingsPage("updates"); setSettingsOpen(true); }} title={`${t("updatesAvailable")} v${updateStatus.version}`}>↑ v{updateStatus.version}</button>}
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">

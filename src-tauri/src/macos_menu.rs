@@ -15,20 +15,23 @@ pub const MENU_EVENT: &str = "menu";
 pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let package = app.package_info();
     let version = package.version.to_string();
+    // "Mild Editor", or "Mild Editor Dev" under tauri.dev.conf.json, so the two builds
+    // can be told apart in the menu bar and the app switcher.
+    let name = package.name.clone();
 
     let settings = MenuItemBuilder::with_id("app:settings", "Settings…")
         .accelerator("CmdOrCtrl+Comma")
         .build(app)?;
     // Routed through the frontend rather than `PredefinedMenuItem::quit` so the
     // unsaved-changes prompt still runs before the app exits.
-    let quit = MenuItemBuilder::with_id("app:quit", "Quit Mild Editor")
+    let quit = MenuItemBuilder::with_id("app:quit", format!("Quit {name}"))
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
 
-    let application = SubmenuBuilder::new(app, "Mild Editor")
+    let application = SubmenuBuilder::new(app, &name)
         .about(Some(
             AboutMetadata {
-                name: Some("Mild Editor".into()),
+                name: Some(name.clone()),
                 version: Some(version),
                 comments: Some("A lightweight competitive programming editor".into()),
                 ..Default::default()

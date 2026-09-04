@@ -2349,7 +2349,9 @@ pub fn run() {
         .manage(RunState::default())
         .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(target_os = "macos")]
     let builder = builder

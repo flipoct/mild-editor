@@ -4,8 +4,8 @@
   "version": "1.5.0",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
-    "quick": "tauri dev",
+    "dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "quick": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
@@ -16,6 +16,8 @@
     "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

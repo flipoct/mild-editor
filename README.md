@@ -10,9 +10,15 @@ Windows releases include both an installer and a portable executable. The portab
 
 On macOS, Mild Editor is ad-hoc signed for direct distribution. On first launch, you may need to approve it in **System Settings → Privacy & Security** because the release is not notarized with a paid Apple Developer account.
 
+## Updates
+
+Mild Editor checks the latest GitHub release a few seconds after it starts. When a newer version exists, a notice offers **update and restart**: the update downloads in the background, is verified against the public key built into the app, and the app relaunches into the new version. **Settings → updates** shows the running version, a manual check, and the release notes. Release assets are signed in CI with `TAURI_SIGNING_PRIVATE_KEY`; the matching public key lives in `src-tauri/tauri.conf.json`.
+
 ## Quick development preview
 
 Run `dev.cmd` or `npm run quick` to open the development app without building an installer. Frontend changes reload automatically. Rust/Tauri changes trigger a backend rebuild and app restart.
+
+The development app runs as **Mild Editor Dev** (`src-tauri/tauri.dev.conf.json`): its own name in the menu bar and app switcher, a `dev` badge in the title bar, a separate settings store, and no update checks, so it never gets mixed up with an installed release.
 
 ```bash
 npm install
