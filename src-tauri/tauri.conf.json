@@ -39,6 +39,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDNDgzNTQ5NTlEMUNCNEQKUldSTnk5RlpTVFZJVEFSdG1XYzd1d0gvdEFoUitSQzRPNFk5UjZxZUFSQW51S0xOZldHbW9kN1kK",
+      "endpoints": [
+        "https://github.com/flipoct/mild-editor/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

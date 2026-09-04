@@ -62,6 +62,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts; the app only installs updates that verify
+          # against the public key in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
@@ -79,7 +83,7 @@ jobs:
             See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.5.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
           releaseAssetNamePattern: Mild-Editor_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
 
