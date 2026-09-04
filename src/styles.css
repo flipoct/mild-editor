@@ -42,6 +42,10 @@ button { color: inherit; }
 :root[data-platform="mac"] .titlebar-identity { padding-left: 78px; }
 :root[data-platform="mac"][data-fullscreen="true"] .titlebar-identity { padding-left: 11px; }
 :root[data-platform="mac"] .titlebar-tools { padding-right: 12px; }
+/* The traffic lights sit at a fixed native position, so the bar they live in must
+   not grow with the interface scale: it undoes the webview zoom and keeps its 34px. */
+:root[data-platform="mac"] .app-shell { grid-template-rows: auto 34px minmax(0, 1fr) 30px; }
+:root[data-platform="mac"] .window-titlebar { height: 34px; zoom: var(--ui-zoom-inverse, 1); }
 :root[data-platform="mac"] { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, ui-sans-serif, system-ui, sans-serif; }
 
 .window-controls { align-self: stretch; display: flex; margin-left: auto; }
@@ -229,6 +233,10 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .explorer-directory { width: 100%; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 9px 0 14px; border: 0; background: transparent; color: #96978f; text-align: left; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; user-select: none; }
 .explorer-directory:hover { background: #30312d; color: #c5c2b8; }
 .explorer-directory svg { width: 13px; height: 13px; fill: currentColor; opacity: .8; }
+.explorer-rename-row { min-width: 0; flex: 1; height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 25px; color: #c5c2b8; font: 10px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
+.explorer-directory-rename { height: 28px; gap: 6px; padding: 0 9px 0 14px; }
+.explorer-directory-rename svg { width: 13px; height: 13px; fill: currentColor; opacity: .8; }
+.explorer-rename-input { min-width: 0; flex: 1; height: 20px; padding: 0 5px; border: 1px solid #b39a68; border-radius: 3px; background: #232420; color: #d0cdc3; font: inherit; outline: none; }
 .explorer-directory > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-directory-chevron { width: 8px; color: #777970; font-size: 13px; transform-origin: center; transition: transform .12s ease; }
 .explorer-directory-chevron.open { transform: rotate(90deg); }
@@ -364,6 +372,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 :root[data-theme] .editor-area { background: var(--bg-editor); }
 :root[data-theme] .titlebar-tools, :root[data-theme] .problem-tabs, :root[data-theme] .problem-tab, :root[data-theme] .panel-heading, :root[data-theme] .test-card, :root[data-theme] .test-actions, :root[data-theme] .file-explorer, :root[data-theme] .explorer-folder, :root[data-theme] .explorer-controls, :root[data-theme] .explorer-create-actions, :root[data-theme] .explorer-context-menu, :root[data-theme] .settings-pages, :root[data-theme] .snippet-item, :root[data-theme] .new-snippet { border-color: var(--border); }
 :root[data-theme] .settings-dialog, :root[data-theme] .atcoder-dialog, :root[data-theme] .confirm-dialog, :root[data-theme] .explorer-context-menu { background: var(--bg-2); border-color: var(--border); color: var(--text); }
+:root[data-theme] .explorer-rename-input { background: var(--field); border-color: var(--accent); color: var(--text); }
 :root[data-theme] textarea, :root[data-theme] input, :root[data-theme] select, :root[data-theme] .template-monaco, :root[data-theme] .snippet-monaco, :root[data-theme] .appearance-group pre { background: var(--field); border-color: var(--border); color: var(--text); }
 :root[data-theme] select option, :root[data-theme] select optgroup { background-color: var(--field); color: var(--text); }
 :root[data-theme] select option:checked { background-color: var(--accent-soft); color: var(--accent); }

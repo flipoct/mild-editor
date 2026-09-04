@@ -327,6 +327,72 @@ fn create_workspace_folder(request: CreateWorkspaceFolderRequest) -> Result<Stri
     Ok(if parent.as_os_str().is_empty() { name } else { parent.join(name).to_string_lossy().replace('\\', "/") })
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameWorkspaceFolderRequest {
+    folder_path: String,
+    directory: String,
+    new_name: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RenamedWorkspaceFolder {
+    directory: String,
+    /// `[old, new]` for every source file the move carried along, so the frontend
+    /// can repoint open tabs without reloading the workspace.
+    renamed: Vec<[String; 2]>,
+}
+
+#[tauri::command]
+fn rename_workspace_folder(request: RenameWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?;
+    if directory.as_os_str().is_empty() { return Err("The workspace root cannot be renamed.".into()); }
+    let source = folder.join(&directory);
+    if !source.is_dir() { return Err("Workspace folder does not exist.".into()); }
+    let new_name = request.new_name.trim();
+    if new_name.is_empty() || Path::new(new_name).file_name().and_then(|value| value.to_str()) != Some(new_name) || matches!(new_name, "." | "..") {
+        return Err("Enter a valid folder name.".into());
+    }
+    let destination_relative = directory.parent().filter(|parent| !parent.as_os_str().is_empty()).map(|parent| parent.join(new_name)).unwrap_or_else(|| std::path::PathBuf::from(new_name));
+    let old_directory = directory.to_string_lossy().replace('\\', "/");
+    let new_directory = destination_relative.to_string_lossy().replace('\\', "/");
+    if old_directory == new_directory { return Ok(RenamedWorkspaceFolder { directory: new_directory, renamed: Vec::new() }); }
+    let destination = folder.join(&destination_relative);
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("Could not read workspace metadata: {error}"))
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
+    if filename_key(&old_directory) == filename_key(&new_directory) {
+        // A case-only rename on a case-insensitive disk has to go through a temporary
+        // name; moving away first also reveals whether a genuinely different folder
+        // already owns the destination.
+        let temporary = folder.join(format!(".mild-rename-{}", std::process::id()));
+        fs::rename(&source, &temporary).map_err(|error| format!("Could not rename folder: {error}"))?;
+        if destination.exists() {
+            let _ = fs::rename(&temporary, &source);
+            return Err("A folder with that name already exists.".into());
+        }
+        fs::rename(&temporary, &destination).map_err(|error| format!("Could not rename folder: {error}"))?;
+    } else {
+        if destination.exists() { return Err("A folder with that name already exists.".into()); }
+        fs::rename(&source, &destination).map_err(|error| format!("Could not rename folder: {error}"))?;
+    }
+    let old_prefix = format!("{old_directory}/");
+    let old_prefix_key = filename_key(&old_prefix);
+    let mut renamed = Vec::new();
+    for problem in &mut metadata.problems {
+        if !filename_key(&problem.filename).starts_with(&old_prefix_key) { continue; }
+        let rest: String = problem.filename.chars().skip(old_prefix.chars().count()).collect();
+        let next = format!("{new_directory}/{rest}");
+        renamed.push([problem.filename.clone(), next.clone()]);
+        problem.filename = next;
+    }
+    fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(RenamedWorkspaceFolder { directory: new_directory, renamed })
+}
+
 #[tauri::command]
 fn delete_workspace_folder(request: DeleteWorkspaceFolderRequest) -> Result<Vec<String>, String> {
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -2314,6 +2380,7 @@ pub fn run() {
             list_workspace_source_filenames,
             list_workspace_directories,
             create_workspace_folder,
+            rename_workspace_folder,
             delete_workspace_folder,
             delete_workspace_file,
             open_workspace_file_location,
@@ -2523,6 +2590,57 @@ mod tests {
         assert!(!directory.path().join("round").exists());
         let metadata: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).unwrap()).unwrap();
         assert!(metadata.problems.is_empty());
+    }
+
+    #[test]
+    fn renaming_workspace_folder_moves_nested_sources_and_metadata() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
+        create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
+        create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "div2".into(), parent_directory: "round".into() }).unwrap();
+        let problem = |filename: &str, language: &str| WorkspaceProblemInput {
+            filename: filename.into(), title: filename.into(), language: language.into(), code: "x".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+        };
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![problem("round/A.cpp", "cpp"), problem("round/div2/B.py", "python"), problem("C.cpp", "cpp")] }).unwrap();
+        let metadata_filenames = || {
+            let metadata: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).unwrap()).unwrap();
+            let mut names: Vec<String> = metadata.problems.iter().map(|problem| problem.filename.clone()).collect();
+            names.sort();
+            names
+        };
+
+        let result = rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "round".into(), new_name: "contest".into() }).unwrap();
+        assert_eq!(result.directory, "contest");
+        let mut moved = result.renamed.clone();
+        moved.sort();
+        assert_eq!(moved, vec![["round/A.cpp".to_string(), "contest/A.cpp".to_string()], ["round/div2/B.py".to_string(), "contest/div2/B.py".to_string()]]);
+        assert!(!directory.path().join("round").exists());
+        assert!(directory.path().join("contest/A.cpp").is_file());
+        assert!(directory.path().join("contest/div2/B.py").is_file());
+        assert_eq!(metadata_filenames(), vec!["C.cpp", "contest/A.cpp", "contest/div2/B.py"]);
+
+        // A nested folder keeps its parent path.
+        let nested = rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "contest/div2".into(), new_name: "hard".into() }).unwrap();
+        assert_eq!(nested.directory, "contest/hard");
+        assert_eq!(nested.renamed, vec![["contest/div2/B.py".to_string(), "contest/hard/B.py".to_string()]]);
+        assert_eq!(metadata_filenames(), vec!["C.cpp", "contest/A.cpp", "contest/hard/B.py"]);
+
+        // Changing only the case works on case-insensitive disks too.
+        let cased = rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "contest".into(), new_name: "Contest".into() }).unwrap();
+        assert_eq!(cased.directory, "Contest");
+        assert!(directory.path().join("Contest").join("A.cpp").is_file());
+        assert_eq!(metadata_filenames(), vec!["C.cpp", "Contest/A.cpp", "Contest/hard/B.py"]);
+
+        // Same name is a no-op, and invalid targets are refused.
+        let unchanged = rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "Contest".into(), new_name: "Contest".into() }).unwrap();
+        assert!(unchanged.renamed.is_empty());
+        assert!(rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: String::new(), new_name: "x".into() }).is_err());
+        assert!(rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "Contest".into(), new_name: "a/b".into() }).is_err());
+        assert!(rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "Contest".into(), new_name: "..".into() }).is_err());
+        create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "taken".into(), parent_directory: String::new() }).unwrap();
+        assert!(rename_workspace_folder(RenameWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "Contest".into(), new_name: "taken".into() }).is_err());
+        assert!(directory.path().join("Contest").join("A.cpp").is_file(), "a refused rename must leave the folder in place");
     }
 
     #[test]
