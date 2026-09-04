@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0
+
+- Add a default language for imported problems, including Competitive Companion, and for new files created without an extension; the status-bar language menu edits it while no file is open.
+- Rename files and folders in place in the Explorer: Return (macOS) or F2 turns the row into a text field with the name selected, and a bare name takes the default language's extension.
+- Run whatever panel is showing with Cmd/Ctrl+Return — the test cases or the interactive runner — including from inside the editor.
+- Keep the Explorer context menu on screen when it opens near the right or bottom edge.
+- Add an interface scale from 50% to 200% in Settings → appearance and on Cmd/Ctrl+= / − / 0, with matching macOS View menu items.
+- macOS: keep the title bar at its native height under interface zoom and centre the traffic lights in it.
+- macOS: Explorer rows take focus on click, so Return, F2, Cmd+Backspace, and Reveal in Finder act on the clicked row.
+
 ## 1.4.0
 
 - Add an interactive panel that runs the solution as a live process so you can play the interactor yourself, typing each response by hand.
