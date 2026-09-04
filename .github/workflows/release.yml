@@ -66,15 +66,17 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.4.0
+            ## What's changed in v1.5.0
 
-            - The test panel now has an interactive mode: the solution runs as a live process and you answer it yourself, playing the interactor.
-            - Program output is streamed as it is produced, so prompts without a trailing newline appear right away; EOF can be sent on demand.
-            - Each workspace remembers whether it was last used in test-case or interactive mode.
-            - macOS: the File menu now carries the Explorer commands added in v1.3.0 — New Folder, Rename, Reveal in Finder, and Delete — with Return and Cmd+Backspace bound while an Explorer row has focus.
-            - macOS: toolchains installed through Homebrew, MacPorts, or the Xcode Command Line Tools are found without editing PATH, so the run button and the language server work in a GUI-launched app.
+            - Add a default language for imported problems, including Competitive Companion, and for new files created without an extension; the status-bar language menu edits it while no file is open.
+            - Rename files and folders in place in the Explorer: Return (macOS) or F2 turns the row into a text field with the name selected, and a bare name takes the default language's extension.
+            - Run whatever panel is showing with Cmd/Ctrl+Return — the test cases or the interactive runner — including from inside the editor.
+            - Keep the Explorer context menu on screen when it opens near the right or bottom edge.
+            - Add an interface scale from 50% to 200% in Settings → appearance and on Cmd/Ctrl+= / − / 0, with matching macOS View menu items.
+            - macOS: keep the title bar at its native height under interface zoom and centre the traffic lights in it.
+            - macOS: Explorer rows take focus on click, so Return, F2, Cmd+Backspace, and Reveal in Finder act on the clicked row.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.4.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.5.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false
