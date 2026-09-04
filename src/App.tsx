@@ -647,6 +647,9 @@ function App() {
   // browser preview.
   useEffect(() => {
     localStorage.setItem("mild-ui-zoom", String(uiZoom));
+    // The macOS title bar counter-scales with this so it keeps its native height and
+    // stays lined up with the traffic lights, which the webview zoom does not move.
+    document.documentElement.style.setProperty("--ui-zoom-inverse", String(100 / uiZoom));
     if ("__TAURI_INTERNALS__" in window) void getCurrentWebview().setZoom(uiZoom / 100).catch(() => undefined);
     else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
   }, [uiZoom]);

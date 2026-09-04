@@ -42,6 +42,10 @@ button { color: inherit; }
 :root[data-platform="mac"] .titlebar-identity { padding-left: 78px; }
 :root[data-platform="mac"][data-fullscreen="true"] .titlebar-identity { padding-left: 11px; }
 :root[data-platform="mac"] .titlebar-tools { padding-right: 12px; }
+/* The traffic lights sit at a fixed native position, so the bar they live in must
+   not grow with the interface scale: it undoes the webview zoom and keeps its 34px. */
+:root[data-platform="mac"] .app-shell { grid-template-rows: auto 34px minmax(0, 1fr) 30px; }
+:root[data-platform="mac"] .window-titlebar { height: 34px; zoom: var(--ui-zoom-inverse, 1); }
 :root[data-platform="mac"] { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, ui-sans-serif, system-ui, sans-serif; }
 
 .window-controls { align-self: stretch; display: flex; margin-left: auto; }
