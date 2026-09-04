@@ -2159,6 +2159,13 @@ function App() {
     void invoke("stop_interactive");
   };
 
+  /** Reveals the panel before running: the interactive run button lives inside it. */
+  const beginInteractiveRun = () => {
+    setTestPanelVisible(true);
+    setPanelMode("interactive");
+    void startInteractive();
+  };
+
   useEffect(() => {
     let disposed = false;
     const stops: Array<() => void> = [];
@@ -2234,7 +2241,10 @@ function App() {
         case "file:close-tab": if (activeTab) requestCloseProblem(activeTab.id); break;
         case "view:toggle-explorer": setExplorerVisible((visible) => !visible); break;
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
+        case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
+        case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
         case "run:tests": void run(); break;
+        case "run:interactive": beginInteractiveRun(); break;
         case "run:stop": stopRun(); stopInteractive(); break;
       }
     };
@@ -2258,7 +2268,8 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
-        void run();
+        if (event.shiftKey) beginInteractiveRun();
+        else void run();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -2281,7 +2292,8 @@ function App() {
         event.preventDefault();
         if (activeTab) requestCloseProblem(activeTab.id);
       }
-      if ((event.ctrlKey || event.metaKey) && /^[1-9]$/.test(event.key)) {
+      // Cmd+Alt+1/2 selects a side-panel mode, so plain tab switching ignores Alt.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
         const tab = tabs[Number(event.key) - 1];
         if (tab) {
           event.preventDefault();
@@ -2594,6 +2606,11 @@ function App() {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       void sendInteractive();
+                    }
+                    // The panel stands in for a terminal, so Ctrl+D closes stdin there too.
+                    if (event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "d") {
+                      event.preventDefault();
+                      void endInteractiveInput();
                     }
                   }}
                   placeholder={interactiveRunning ? t("interactiveReply") : t("interactiveIdle")}
