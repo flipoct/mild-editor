@@ -1,5 +1,6 @@
 mod companion;
 mod interactive;
+mod updates;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 
@@ -16,6 +17,11 @@ use std::{
 use tauri::{Emitter, Manager};
 use wait_timeout::ChildExt;
 
+/// Caps a single TCP handshake. A judge whose hostname resolves to several addresses can
+/// have one of them unreachable from a given network, and the OS spends about 21 seconds
+/// giving up on it — longer than the request timeouts below. Capping each attempt lets the
+/// next address be tried instead of the whole import failing.
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CODE: usize = 100_000;
 const MAX_INPUT: usize = 100_000;
 const MAX_OUTPUT: u64 = 1_000_001;
@@ -1888,6 +1894,7 @@ async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, Stri
                 headers
             })
             .timeout(Duration::from_secs(20))
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .build()
             .map_err(|error| error.to_string())?;
         let parsed = reqwest::Url::parse(&url)
@@ -2024,6 +2031,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("MildEditor/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(20))
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
     let mut statuses = Vec::new();
@@ -2349,6 +2357,7 @@ pub fn run() {
         .manage(RunState::default())
         .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
+        .manage(updates::PendingUpdate::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
@@ -2365,6 +2374,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_run,
+            updates::check_update,
+            updates::install_update,
             interactive::start_interactive,
             interactive::send_interactive,
             interactive::close_interactive_input,
