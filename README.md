@@ -102,7 +102,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
 
-The interface scale is also in **Settings → appearance**, and the same `Ctrl` shortcuts work on Windows and Linux. The default language for imported problems and new files is in **Settings → online judge**; while no file is open, the language menu in the status bar changes it too.
+The interface scale is also in **Settings → appearance**, next to a code font size in px that sizes only the editor text, and the same `Ctrl` shortcuts work on Windows and Linux. The default language for imported problems and new files is in **Settings → online judge**; while no file is open, the language menu in the status bar changes it too.
 
 Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` closes the program's input the way it would in a terminal.
 
