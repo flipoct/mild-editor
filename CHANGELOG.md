@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1
+
+- Stamp new files with local time: `[[timestamp]]`, `[[createdAt]]`, and `[[date]]` were written in UTC while `[[time]]` was local, so in Korea a header ran nine hours behind and, between midnight and 09:00, dated the file to the previous day.
+
 ## 1.6.0
 
 - Update from inside the app: Mild Editor checks the latest release when it starts, and one click downloads, verifies, installs, and restarts into the new version. Settings → updates has a manual check and the release notes.
