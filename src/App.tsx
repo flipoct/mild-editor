@@ -8,7 +8,6 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check as checkForAppUpdate, type Update as AppUpdate } from "@tauri-apps/plugin-updater";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { fileKey, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
@@ -339,6 +338,8 @@ const APP_VERSION = packageInfo.version;
 const IS_DEV_BUILD = import.meta.env.DEV;
 const UPDATES_SUPPORTED = "__TAURI_INTERNALS__" in window && !IS_DEV_BUILD;
 
+/** What the Rust `check_update` command reports. */
+type AvailableUpdate = { version: string; currentVersion: string; notes: string | null };
 type UpdatePhase = "idle" | "unavailable" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "installed" | "error";
 type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; received?: number; total?: number; error?: string };
 
@@ -461,7 +462,7 @@ function App() {
   // against; package.json is only the fallback for the browser preview.
   const [appVersion, setAppVersion] = useState(APP_VERSION);
   const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
-  const pendingUpdateRef = useRef<AppUpdate | null>(null);
+  const pendingUpdateRef = useRef<AvailableUpdate | null>(null);
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
   const [codeforcesHandle, setCodeforcesHandle] = useState(() => localStorage.getItem("mild-codeforces-handle") || "");
@@ -2289,10 +2290,10 @@ function App() {
     if (!UPDATES_SUPPORTED) { setUpdateStatus({ phase: "unavailable" }); return; }
     setUpdateStatus((current) => ({ ...current, phase: "checking", error: undefined }));
     try {
-      const update = await checkForAppUpdate({ timeout: 15000 });
+      const update = await invoke<AvailableUpdate | null>("check_update");
       pendingUpdateRef.current = update;
       if (update) {
-        setUpdateStatus({ phase: "available", version: update.version, notes: update.body?.trim() || undefined });
+        setUpdateStatus({ phase: "available", version: update.version, notes: update.notes || undefined });
         setUpdateNoticeDismissed(false);
       } else {
         setUpdateStatus({ phase: "up-to-date" });
@@ -2305,20 +2306,26 @@ function App() {
   const installUpdate = async () => {
     const update = pendingUpdateRef.current;
     if (!update) return;
-    setUpdateStatus({ phase: "downloading", version: update.version, notes: update.body?.trim() || undefined, received: 0 });
+    setUpdateStatus({ phase: "downloading", version: update.version, notes: update.notes || undefined, received: 0 });
+    // Progress arrives as events because the download runs on the Rust side.
+    const unlisten = await listen<{ received: number; total: number | null }>("update-download-progress", (event) => {
+      const { received, total } = event.payload;
+      setUpdateStatus((current) => ({ ...current, phase: "downloading", received, total: total ?? undefined }));
+    });
+    const unlistenFinished = await listen("update-download-finished", () => {
+      setUpdateStatus((current) => ({ ...current, phase: "installing" }));
+    });
     try {
-      let received = 0;
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") setUpdateStatus((current) => ({ ...current, phase: "downloading", received: 0, total: event.data.contentLength }));
-        else if (event.event === "Progress") { received += event.data.chunkLength; setUpdateStatus((current) => ({ ...current, received })); }
-        else if (event.event === "Finished") setUpdateStatus((current) => ({ ...current, phase: "installing" }));
-      });
+      await invoke("install_update");
       await relaunch();
       // Normally the process is gone by now. If it is not, say so instead of
       // sitting on "installing…" forever.
       setUpdateStatus({ phase: "installed", version: update.version });
     } catch (error) {
       setUpdateStatus({ phase: "error", version: update.version, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      unlisten();
+      unlistenFinished();
     }
   };
 

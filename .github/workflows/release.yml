@@ -70,11 +70,12 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.6.1
+            ## What's changed in v1.6.2
 
-            - Stamp new files with local time: `[[timestamp]]`, `[[createdAt]]`, and `[[date]]` were written in UTC while `[[time]]` was local, so in Korea a header ran nine hours behind and, between midnight and 09:00, dated the file to the previous day.
+            - Update checks no longer fail with a network error on connections where one of GitHub's release-host addresses is unreachable. Each connection attempt is now capped, so the next address is tried instead of the check timing out.
+            - Problem imports and judge-status refreshes get the same cap, so one unreachable address no longer stalls them.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.6.1/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.6.2/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
