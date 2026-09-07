@@ -112,6 +112,27 @@ Renaming happens in the row itself: the name turns into a text field with everyt
 
 The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
 
+## Problem panel (embedded Chromium)
+
+The problem panel is a real Chromium (CEF) hosted inside the editor window, so Chrome extensions such as Competitive Companion, Carrot and AtCoder Better run against the problem page. It is pinned to CEF 151.3.24: 152.0.5 hangs every network request on macOS 26, verified against CEF's own sample.
+
+Development needs the CEF binaries and a build tool the `cef` crate expects:
+
+```bash
+brew install ninja                                   # cef-dll-sys builds libcef_dll_wrapper with Ninja
+git clone https://github.com/tauri-apps/cef-rs && cd cef-rs && git checkout cef-v151.8.1+151.3.24
+cargo run -p export-cef-dir -- --force ~/.local/share/cef
+export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script
+
+# macOS only: the dev binary runs outside an .app, so lay the framework and helper
+# bundles out next to it once (repeat after `cargo clean`)
+cargo build --manifest-path src-tauri/Cargo.toml --bin mild-editor-cef-helper
+scripts/prepare-cef.sh debug
+npm run dev
+```
+
+Useful switches while developing: `MILD_CEF_DEBUG_PORT=9336` opens the DevTools protocol on the panel, `MILD_CEF_EXTENSIONS=/path/a,/path/b` loads unpacked extensions, and `VITE_PROBLEM_PANEL_OPEN=1` / `VITE_PROBLEM_PANEL_URL=…` open and seed the panel on first run.
+
 ## Build locally
 
 ```bash

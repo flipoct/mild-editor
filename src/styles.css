@@ -618,3 +618,19 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
   min-width: 0;
   flex: 1;
 }
+
+/* Problem panel: a native Chromium view is laid over .problem-host, so the host itself only
+   paints the empty state and keeps the space reserved. */
+.problem-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #292a26; border-left: 1px solid #41423c; }
+.problem-toolbar { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-bottom: 1px solid #41423c; }
+.problem-toolbar button { height: 24px; min-width: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #b9b6ab; font-size: 13px; line-height: 1; cursor: pointer; }
+.problem-toolbar button:hover:not(:disabled) { background: #33342f; border-color: #454640; }
+.problem-toolbar button:disabled { opacity: .35; cursor: default; }
+.problem-url { flex: 1; min-width: 0; height: 24px; border: 1px solid #454640; border-radius: 5px; background: #232420; color: #d1cec4; padding: 0 8px; outline: none; font: 11px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
+.problem-url:focus { border-color: #746e5b; }
+.problem-host { flex: 1; min-height: 0; position: relative; background: #1f201d; }
+.problem-hint { position: absolute; inset: 0; margin: 0; padding: 24px; display: grid; place-content: center; text-align: center; color: #777970; font-size: 12px; line-height: 1.6; }
+.problem-unavailable .problem-hint { color: #c9a18a; }
+.status-problem { height: 20px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #999a91; font-size: 10px; cursor: pointer; }
+.status-problem:hover { color: #d1cec4; }
+.status-problem.active { color: #e6dcc1; border-color: #5a5647; background: #33342f; }

@@ -48,6 +48,8 @@ type NativeRunResult = {
 };
 
 type PanelMode = "tests" | "interactive";
+/** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
+type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
 type InteractiveExitEvent = { sessionId: string; code: number | null; timeMs: number; stopped: boolean };
@@ -353,6 +355,7 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
+    problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -379,6 +382,7 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
+    problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -420,7 +424,7 @@ function App() {
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const [testPanelWidth, setTestPanelWidth] = useState(() => Number(localStorage.getItem("mild-test-panel-width")) || 306);
   const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
-  const resizeRef = useRef<{ panel: "test" | "explorer"; startX: number; startWidth: number; width: number } | null>(null);
+  const resizeRef = useRef<{ panel: "test" | "explorer" | "problem"; startX: number; startWidth: number; width: number } | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -508,6 +512,14 @@ function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [explorerVisible, setExplorerVisible] = useState(() => localStorage.getItem("mild-explorer-visible") !== "0");
   const [testPanelVisible, setTestPanelVisible] = useState(() => localStorage.getItem("mild-test-panel-visible") !== "0");
+  // Embedded Chromium problem panel. The native view is positioned over `.problem-host`;
+  // React only owns the rectangle, the toolbar and the status it is told about.
+  const [problemPanelOpen, setProblemPanelOpen] = useState(() => (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
+  const [problemPanelWidth, setProblemPanelWidth] = useState(() => Number(localStorage.getItem("mild-problem-panel-width")) || 460);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus>({ available: false, open: false, visible: false, url: "", title: "", loading: false, canGoBack: false, canGoForward: false });
+  const [problemUrlDraft, setProblemUrlDraft] = useState("");
+  const problemHostRef = useRef<HTMLDivElement | null>(null);
+  const problemUrlEditingRef = useRef(false);
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
   const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
   const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
@@ -833,9 +845,9 @@ function App() {
     });
   }, [customFonts]);
 
-  const startPanelResize = (panel: "test" | "explorer", event: ReactPointerEvent<HTMLDivElement>) => {
+  const startPanelResize = (panel: "test" | "explorer" | "problem", event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const startWidth = panel === "test" ? testPanelWidth : explorerWidth;
+    const startWidth = panel === "test" ? testPanelWidth : panel === "problem" ? problemPanelWidth : explorerWidth;
     resizeRef.current = { panel, startX: event.clientX, startWidth, width: startWidth };
     event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add("panel-resizing");
@@ -846,15 +858,17 @@ function App() {
       const current = resizeRef.current;
       if (!current) return;
       const delta = event.clientX - current.startX;
-      const width = Math.max(190, Math.min(520, current.startWidth + (current.panel === "test" ? delta : -delta)));
+      const limit = current.panel === "problem" ? 900 : 520;
+      const width = Math.max(190, Math.min(limit, current.startWidth + (current.panel === "test" ? delta : -delta)));
       current.width = width;
       if (current.panel === "test") setTestPanelWidth(width);
+      else if (current.panel === "problem") setProblemPanelWidth(width);
       else setExplorerWidth(width);
     };
     const finish = () => {
       const current = resizeRef.current;
       if (!current) return;
-      localStorage.setItem(current.panel === "test" ? "mild-test-panel-width" : "mild-explorer-width", String(current.width));
+      localStorage.setItem(current.panel === "test" ? "mild-test-panel-width" : current.panel === "problem" ? "mild-problem-panel-width" : "mild-explorer-width", String(current.width));
       resizeRef.current = null;
       document.body.classList.remove("panel-resizing");
     };
@@ -862,7 +876,7 @@ function App() {
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
-  }, [explorerWidth, testPanelWidth]);
+  }, [explorerWidth, problemPanelWidth, testPanelWidth]);
 
   const activateTab = (tab: ProblemTab) => {
     clearDiagnostics();
@@ -2347,6 +2361,78 @@ function App() {
     void startInteractive();
   };
 
+  const showTestPanel = testPanelVisible && tabs.length > 0;
+  const showExplorer = explorerVisible && Boolean(workspacePath);
+  const showProblemPanel = problemPanelOpen;
+
+  // ── Problem panel ────────────────────────────────────────────────────────────
+
+  const problemHostBounds = () => {
+    const host = problemHostRef.current;
+    if (!host) return null;
+    const rect = host.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height, scale: uiZoom / 100 };
+  };
+
+  const openProblemUrl = (raw: string) => {
+    const typed = raw.trim();
+    if (!typed) return;
+    const url = /^[a-z]+:\/\//i.test(typed) ? typed : `https://${typed}`;
+    const bounds = problemHostBounds();
+    if (!bounds) return;
+    invoke("browser_open", { url, bounds }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+  };
+
+  useEffect(() => {
+    localStorage.setItem("mild-problem-panel", problemPanelOpen ? "1" : "0");
+  }, [problemPanelOpen]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void invoke<BrowserStatus>("browser_status").then(setBrowserStatus).catch(() => undefined);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<BrowserStatus>("browser-status", (event) => setBrowserStatus(event.payload))
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+  // Keep the URL field in step with the page unless the user is typing in it.
+  useEffect(() => {
+    if (!problemUrlEditingRef.current) setProblemUrlDraft(browserStatus.url);
+  }, [browserStatus.url]);
+
+  // The native view sits over `.problem-host`: report the host's rectangle whenever it
+  // moves or resizes, and hide the view while the host is not on screen at all.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window) || !browserStatus.available) return;
+    const host = problemHostRef.current;
+    if (!showProblemPanel || !host) {
+      if (browserStatus.open) void invoke("browser_set_visible", { visible: false }).catch(() => undefined);
+      return;
+    }
+    const report = () => {
+      const bounds = problemHostBounds();
+      if (bounds && bounds.width > 0 && bounds.height > 0) void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
+    };
+    report();
+    if (browserStatus.open) void invoke("browser_set_visible", { visible: !settingsOpen }).catch(() => undefined);
+    const observer = new ResizeObserver(report);
+    observer.observe(host);
+    window.addEventListener("resize", report);
+    return () => { observer.disconnect(); window.removeEventListener("resize", report); };
+  }, [browserStatus.available, browserStatus.open, explorerWidth, problemPanelWidth, settingsOpen, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
+
+  // Follow the active file: a tab imported from a judge carries its problem URL. With no
+  // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
+  useEffect(() => {
+    if (!showProblemPanel || !browserStatus.available) return;
+    const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
+    if (!url || url === browserStatus.url) return;
+    openProblemUrl(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab?.sourceUrl, browserStatus.available, showProblemPanel]);
+
   const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
 
   /** Runs what the user is looking at: the interactive panel when it is showing, otherwise the tests. */
@@ -2437,6 +2523,7 @@ function App() {
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
         case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
+        case "view:panel-problem": setProblemPanelOpen((open) => !open); break;
         case "view:zoom-in": adjustUiZoom(UI_ZOOM_STEP); break;
         case "view:zoom-out": adjustUiZoom(-UI_ZOOM_STEP); break;
         case "view:zoom-reset": setUiZoom(100); break;
@@ -2502,6 +2589,10 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === "0") {
         event.preventDefault();
         setUiZoom(100);
+      }
+      if ((event.ctrlKey || event.metaKey) && event.altKey && event.key === "3") {
+        event.preventDefault();
+        setProblemPanelOpen((open) => !open);
       }
       // Cmd+Alt+1/2 selects a side-panel mode, so plain tab switching ignores Alt.
       if ((event.ctrlKey || event.metaKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
@@ -2619,12 +2710,11 @@ function App() {
   // what the field held when the dialog opened rather than what it holds now.
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
-  const showTestPanel = testPanelVisible && tabs.length > 0;
-  const showExplorer = explorerVisible && Boolean(workspacePath);
   // Built here rather than in CSS so hiding a panel also removes its grid track and resizer.
   const workspaceColumns = [
     ...(showTestPanel ? ["var(--test-panel-width, 306px)", "5px"] : []),
     "minmax(0, 1fr)",
+    ...(showProblemPanel ? ["5px", "var(--problem-width, 460px)"] : []),
     ...(showExplorer ? ["5px", "var(--explorer-width, 218px)"] : []),
   ].join(" ");
 
@@ -2785,7 +2875,7 @@ function App() {
           ))}
         </div>
       </nav>
-      <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
+      <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
           {showTestPanel && <><aside className="test-panel">
             <div className="panel-heading">
               <div className="panel-modes">
@@ -2925,6 +3015,24 @@ function App() {
             <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>
+        {showProblemPanel && <><div className="panel-resizer problem-resizer" onPointerDown={(event) => startPanelResize("problem", event)} role="separator" aria-label="Resize problem panel" aria-orientation="vertical" />
+        <aside className="problem-panel" aria-label="Problem browser">
+          <div className="problem-toolbar">
+            <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
+            <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
+            <button onClick={() => void invoke("browser_go", { action: browserStatus.loading ? "stop" : "reload" })} disabled={!browserStatus.open} aria-label={browserStatus.loading ? "stop" : "reload"} title={browserStatus.loading ? "stop" : "reload"}>{browserStatus.loading ? "×" : "↻"}</button>
+            <input className="problem-url" value={problemUrlDraft} placeholder="https://" spellCheck={false}
+              onFocus={() => { problemUrlEditingRef.current = true; }}
+              onBlur={() => { problemUrlEditingRef.current = false; setProblemUrlDraft(browserStatus.url); }}
+              onChange={(event) => setProblemUrlDraft(event.target.value)}
+              onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); openProblemUrl(problemUrlDraft); event.currentTarget.blur(); } }}
+              aria-label="problem URL" />
+            <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close">×</button>
+          </div>
+          {browserStatus.available
+            ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
+            : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
+        </aside></>}
         {showExplorer && <><div className="panel-resizer explorer-resizer" onPointerDown={(event) => startPanelResize("explorer", event)} role="separator" aria-label="Resize file explorer" aria-orientation="vertical" />
         <aside className="file-explorer" aria-label="Saved files">
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
@@ -3237,6 +3345,7 @@ function App() {
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
+        <button className={`status-problem ${problemPanelOpen ? "active" : ""}`} onClick={() => setProblemPanelOpen((open) => !open)} aria-pressed={problemPanelOpen} title={`${t("problemPanel")} (${modLabel}⌥3)`}>{t("problemPanel")}</button>
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;

@@ -1,3 +1,4 @@
+pub mod browser;
 mod companion;
 mod interactive;
 mod updates;
@@ -2358,6 +2359,7 @@ pub fn run() {
         .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
         .manage(updates::PendingUpdate::default())
+        .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
@@ -2366,9 +2368,16 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             macos_menu::install(app.handle())?;
+            browser::initialize(app.handle());
             Ok(())
         })
         .on_menu_event(macos_menu::forward_event);
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.setup(|app| {
+        browser::initialize(app.handle());
+        Ok(())
+    });
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -2409,7 +2418,14 @@ pub fn run() {
             stop_clangd,
             start_companion,
             stop_companion,
-            companion_status
+            companion_status,
+            browser::browser_status,
+            browser::browser_open,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_navigate,
+            browser::browser_go,
+            browser::browser_close
         ])
         .on_window_event(|window, event| {
             match event {
@@ -2431,8 +2447,13 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running mild editor");
+        .build(tauri::generate_context!())
+        .expect("error while building mild editor")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                browser::shutdown(app);
+            }
+        });
 }
 
 #[cfg(test)]
