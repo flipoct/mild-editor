@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -48,6 +48,17 @@ type NativeRunResult = {
 };
 
 type PanelMode = "tests" | "interactive";
+/** The four workspace panels. Their left-to-right order is the user's to arrange. */
+type PanelId = "tests" | "editor" | "problem" | "explorer";
+const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
+const storedPanelOrder = (): PanelId[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
+    const order = Array.isArray(parsed) ? parsed.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
+    // Anything missing (older builds, new panels) keeps its default place.
+    return [...new Set([...order, ...PANEL_IDS])];
+  } catch { return [...PANEL_IDS]; }
+};
 /** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
 type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
@@ -355,7 +366,7 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
-    problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide, drag to move", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -382,7 +393,7 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
-    problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기, 드래그: 위치 이동", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -424,7 +435,8 @@ function App() {
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const [testPanelWidth, setTestPanelWidth] = useState(() => Number(localStorage.getItem("mild-test-panel-width")) || 306);
   const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
-  const resizeRef = useRef<{ panel: "test" | "explorer" | "problem"; startX: number; startWidth: number; width: number } | null>(null);
+  const resizeRef = useRef<{ panel: PanelId; sign: 1 | -1; startX: number; startWidth: number; width: number } | null>(null);
+  const [layoutOrder, setLayoutOrder] = useState<PanelId[]>(storedPanelOrder);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -845,10 +857,13 @@ function App() {
     });
   }, [customFonts]);
 
-  const startPanelResize = (panel: "test" | "explorer" | "problem", event: ReactPointerEvent<HTMLDivElement>) => {
+  const panelWidthOf = (panel: PanelId) => panel === "tests" ? testPanelWidth : panel === "problem" ? problemPanelWidth : explorerWidth;
+
+  /** `sign` is +1 when the panel sits left of the divider being dragged, -1 when right. */
+  const startPanelResize = (panel: PanelId, sign: 1 | -1, event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const startWidth = panel === "test" ? testPanelWidth : panel === "problem" ? problemPanelWidth : explorerWidth;
-    resizeRef.current = { panel, startX: event.clientX, startWidth, width: startWidth };
+    const startWidth = panelWidthOf(panel);
+    resizeRef.current = { panel, sign, startX: event.clientX, startWidth, width: startWidth };
     event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add("panel-resizing");
   };
@@ -859,16 +874,16 @@ function App() {
       if (!current) return;
       const delta = event.clientX - current.startX;
       const limit = current.panel === "problem" ? 900 : 520;
-      const width = Math.max(190, Math.min(limit, current.startWidth + (current.panel === "test" ? delta : -delta)));
+      const width = Math.max(190, Math.min(limit, current.startWidth + current.sign * delta));
       current.width = width;
-      if (current.panel === "test") setTestPanelWidth(width);
+      if (current.panel === "tests") setTestPanelWidth(width);
       else if (current.panel === "problem") setProblemPanelWidth(width);
       else setExplorerWidth(width);
     };
     const finish = () => {
       const current = resizeRef.current;
       if (!current) return;
-      localStorage.setItem(current.panel === "test" ? "mild-test-panel-width" : current.panel === "problem" ? "mild-problem-panel-width" : "mild-explorer-width", String(current.width));
+      localStorage.setItem(current.panel === "tests" ? "mild-test-panel-width" : current.panel === "problem" ? "mild-problem-panel-width" : "mild-explorer-width", String(current.width));
       resizeRef.current = null;
       document.body.classList.remove("panel-resizing");
     };
@@ -2364,6 +2379,37 @@ function App() {
   const showTestPanel = testPanelVisible && tabs.length > 0;
   const showExplorer = explorerVisible && Boolean(workspacePath);
   const showProblemPanel = problemPanelOpen;
+  const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
+  const orderedPanels = layoutOrder.filter(panelShown);
+  /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
+  const resizeTargetAt = (index: number): { panel: PanelId; sign: 1 | -1 } | null => {
+    const left = orderedPanels[index - 1];
+    const right = orderedPanels[index];
+    if (left && left !== "editor") return { panel: left, sign: 1 };
+    if (right && right !== "editor") return { panel: right, sign: -1 };
+    return null;
+  };
+  const togglePanel = (id: PanelId) => {
+    if (id === "tests") setTestPanelVisible((visible) => !visible);
+    else if (id === "problem") setProblemPanelOpen((open) => !open);
+    else if (id === "explorer") setExplorerVisible((visible) => !visible);
+  };
+  /** Drop `id` at `target`'s slot; the rest keep their relative order. */
+  const movePanelTo = (id: PanelId, target: PanelId) => setLayoutOrder((order) => {
+    if (id === target) return order;
+    const without = order.filter((item) => item !== id);
+    const at = without.indexOf(target);
+    return [...without.slice(0, at), id, ...without.slice(at)];
+  });
+  const shiftPanel = (id: PanelId, direction: -1 | 1) => setLayoutOrder((order) => {
+    const from = order.indexOf(id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= order.length) return order;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    return next;
+  });
+  const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
 
   // ── Problem panel ────────────────────────────────────────────────────────────
 
@@ -2386,6 +2432,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-problem-panel", problemPanelOpen ? "1" : "0");
   }, [problemPanelOpen]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-panel-order", JSON.stringify(layoutOrder));
+  }, [layoutOrder]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2421,7 +2471,7 @@ function App() {
     observer.observe(host);
     window.addEventListener("resize", report);
     return () => { observer.disconnect(); window.removeEventListener("resize", report); };
-  }, [browserStatus.available, browserStatus.open, explorerWidth, problemPanelWidth, settingsOpen, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
+  }, [browserStatus.available, browserStatus.open, explorerWidth, layoutOrder, problemPanelWidth, settingsOpen, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
@@ -2711,12 +2761,9 @@ function App() {
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
   // Built here rather than in CSS so hiding a panel also removes its grid track and resizer.
-  const workspaceColumns = [
-    ...(showTestPanel ? ["var(--test-panel-width, 306px)", "5px"] : []),
-    "minmax(0, 1fr)",
-    ...(showProblemPanel ? ["5px", "var(--problem-width, 460px)"] : []),
-    ...(showExplorer ? ["5px", "var(--explorer-width, 218px)"] : []),
-  ].join(" ");
+  const workspaceColumns = orderedPanels
+    .flatMap((id, index) => [...(index > 0 ? ["5px"] : []), id === "editor" ? "minmax(0, 1fr)" : `var(--${id}-width)`])
+    .join(" ");
 
   const summary = useMemo(() => {
     if (running) return "running tests…";
@@ -2875,8 +2922,10 @@ function App() {
           ))}
         </div>
       </nav>
-      <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
-          {showTestPanel && <><aside className="test-panel">
+      <section className="workspace" style={{ "--tests-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
+        {orderedPanels.map((id, index) => (<Fragment key={id}>
+          {index > 0 && <div className={`panel-resizer resizer-before-${id}`} onPointerDown={(event) => { const target = resizeTargetAt(index); if (target) startPanelResize(target.panel, target.sign, event); }} role="separator" aria-label="Resize panel" aria-orientation="vertical" />}
+          {id === "tests" && <aside className="test-panel">
             <div className="panel-heading">
               <div className="panel-modes">
                 <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
@@ -2966,10 +3015,8 @@ function App() {
                 </div>
               </div>
             </div>}
-          </aside>
-          <div className="panel-resizer test-resizer" onPointerDown={(event) => startPanelResize("test", event)} role="separator" aria-label="Resize test case panel" aria-orientation="vertical" /></>}
-
-        <section className="editor-area">
+          </aside>}
+          {id === "editor" && <section className="editor-area">
           {tabs.length ? <>
           <Editor
             beforeMount={beforeMount}
@@ -3014,9 +3061,8 @@ function App() {
             <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>{modLabel}N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>{modLabel}O</kbd></button></div>
             <small>C++ · Python · sample tests · local save</small>
           </div>}
-        </section>
-        {showProblemPanel && <><div className="panel-resizer problem-resizer" onPointerDown={(event) => startPanelResize("problem", event)} role="separator" aria-label="Resize problem panel" aria-orientation="vertical" />
-        <aside className="problem-panel" aria-label="Problem browser">
+        </section>}
+        {id === "problem" && <aside className="problem-panel" aria-label="Problem browser">
           <div className="problem-toolbar">
             <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
             <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
@@ -3032,9 +3078,8 @@ function App() {
           {browserStatus.available
             ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
             : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
-        </aside></>}
-        {showExplorer && <><div className="panel-resizer explorer-resizer" onPointerDown={(event) => startPanelResize("explorer", event)} role="separator" aria-label="Resize file explorer" aria-orientation="vertical" />
-        <aside className="file-explorer" aria-label="Saved files">
+        </aside>}
+        {id === "explorer" && <aside className="file-explorer" aria-label="Saved files">
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
             <span className="explorer-chevron">⌄</span>
             <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
@@ -3056,7 +3101,8 @@ function App() {
             {renderExplorerTree(explorerTree)}
             {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
           </div>
-        </aside></>}
+        </aside>}
+        </Fragment>))}
       </section>
 
       {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
@@ -3345,7 +3391,18 @@ function App() {
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
-        <button className={`status-problem ${problemPanelOpen ? "active" : ""}`} onClick={() => setProblemPanelOpen((open) => !open)} aria-pressed={problemPanelOpen} title={`${t("problemPanel")} (${modLabel}⌥3)`}>{t("problemPanel")}</button>
+        <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
+          {layoutOrder.map((id) => (
+            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""}`} draggable
+              aria-pressed={id === "editor" ? undefined : panelShown(id)} data-panel={id}
+              onClick={() => togglePanel(id)}
+              onDragStart={(event) => { event.dataTransfer.setData("text/plain", id); event.dataTransfer.effectAllowed = "move"; }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => { event.preventDefault(); const from = event.dataTransfer.getData("text/plain") as PanelId; if (PANEL_IDS.includes(from)) movePanelTo(from, id); }}
+              onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); } }}
+            >{chipLabel(id)}</button>
+          ))}
+        </div>
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;
