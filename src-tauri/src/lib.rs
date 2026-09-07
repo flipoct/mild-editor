@@ -1,5 +1,6 @@
 mod companion;
 mod interactive;
+mod updates;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 
@@ -2349,6 +2350,7 @@ pub fn run() {
         .manage(RunState::default())
         .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
+        .manage(updates::PendingUpdate::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
@@ -2365,6 +2367,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_run,
+            updates::check_update,
+            updates::install_update,
             interactive::start_interactive,
             interactive::send_interactive,
             interactive::close_interactive_input,

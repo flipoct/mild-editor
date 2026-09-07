@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.2
+
+- Fix update checks that failed with a network error on some connections: GitHub hands out four addresses for its release host and the check gave up after 15 seconds, while an unreachable address alone costs 21 seconds to abandon. Each connection attempt is now capped, so the next address is tried and the check finishes in about a second.
+
 ## 1.6.1
 
 - Stamp new files with local time: `[[timestamp]]`, `[[createdAt]]`, and `[[date]]` were written in UTC while `[[time]]` was local, so in Korea a header ran nine hours behind and, between midnight and 09:00, dated the file to the previous day.
