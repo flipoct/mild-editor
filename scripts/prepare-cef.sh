@@ -3,6 +3,11 @@
 #
 #   CEF_PATH=~/.local/share/cef scripts/prepare-cef.sh debug     # for `tauri dev`
 #   CEF_PATH=~/.local/share/cef scripts/prepare-cef.sh release   # before `tauri build`
+#   CEF_PATH=... scripts/prepare-cef.sh release x86_64-apple-darwin   # cross-build
+#
+# The second argument is a Rust target triple, needed when `tauri build --target` differs
+# from the host: the helper has to be built for the architecture being bundled, and CEF_PATH
+# must hold that architecture's framework (export-cef-dir --target downloads it).
 #
 # debug:   the dev binary runs bare under src-tauri/target/debug/, so the framework, the five
 #          helper bundles and a stub main bundle go to src-tauri/target/cef-dev/ — a directory
@@ -14,6 +19,7 @@
 # reports itself unavailable.
 set -euo pipefail
 PROFILE=${1:-debug}
+TARGET=${2:-}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TAURI="$ROOT/src-tauri"
 APP_NAME="Mild Editor"
@@ -36,8 +42,28 @@ case "$PROFILE" in
   *) echo "usage: prepare-cef.sh [debug|release]" >&2; exit 2 ;;
 esac
 
+# An arm64 framework inside an x86_64 app (or the reverse) links and signs inconsistently
+# and cannot run, so fail here where the cause is obvious.
+if [ -n "$TARGET" ]; then
+  WANT=${TARGET%%-*}
+  [ "$WANT" = aarch64 ] && WANT=arm64
+  HAVE=$(lipo -archs "$FRAMEWORK/Chromium Embedded Framework" 2>/dev/null || echo unknown)
+  case " $HAVE " in
+    *" $WANT "*) ;;
+    *) echo "prepare-cef: CEF_PATH holds $HAVE but $TARGET needs $WANT; run export-cef-dir --target $TARGET" >&2; exit 1 ;;
+  esac
+fi
+
+if [ -n "$TARGET" ]; then
+  CARGO_FLAGS+=(--target "$TARGET")
+  HELPER_DIR="$TAURI/target/$TARGET/$PROFILE"
+else
+  HELPER_DIR="$TAURI/target/$PROFILE"
+fi
 (cd "$TAURI" && cargo build "${CARGO_FLAGS[@]}" --bin mild-editor-cef-helper)
-HELPER_BIN="$TAURI/target/$PROFILE/mild-editor-cef-helper"
+HELPER_BIN="$HELPER_DIR/mild-editor-cef-helper"
+[ -f "$HELPER_BIN" ] || { echo "prepare-cef: no helper at $HELPER_BIN" >&2; exit 1; }
+
 
 mkdir -p "$OUT" "$HELPERS_DIR"
 rm -rf "$OUT/Chromium Embedded Framework.framework"
