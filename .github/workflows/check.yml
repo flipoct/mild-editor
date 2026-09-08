@@ -1,0 +1,48 @@
+# Windows and Linux are only built by the release workflow, which runs after a tag is
+# pushed — a break there costs a release. These two platforms need no CEF (the problem
+# panel compiles to its stub), so checking them on every pull request is cheap.
+#
+# macOS is left out on purpose: its build needs the CEF binaries, which take several
+# minutes to download and build a wrapper for.
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: npm ci
+      - run: npm run build
+
+      # --all-targets covers the binaries as well: `cargo test --lib` alone once let a
+      # macOS-only dependency in the CEF helper binary through to the release build.
+      - name: Check the Rust crate
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib

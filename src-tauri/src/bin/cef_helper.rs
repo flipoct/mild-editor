@@ -5,11 +5,18 @@
 //! times under the names CEF expects (`Helper`, `Helper (GPU)`, `Helper (Renderer)`,
 //! `Helper (Plugin)`, `Helper (Alerts)`). It loads the framework and hands control to CEF;
 //! it never runs any editor code.
+//!
+//! `cef` is a macOS-only dependency and Cargo cannot declare a binary target for one
+//! platform, so on every other platform this is an empty placeholder: `tauri build` builds
+//! every declared binary, and a body referring to `cef` would fail to compile there.
 
+#[cfg(not(target_os = "macos"))]
+fn main() {}
+
+#[cfg(target_os = "macos")]
 fn main() {
     let args = cef::args::Args::new();
 
-    #[cfg(target_os = "macos")]
     {
         const FRAMEWORK: &str = "Chromium Embedded Framework.framework/Chromium Embedded Framework";
         let exe = std::env::current_exe().expect("helper executable path");

@@ -71,8 +71,11 @@ jobs:
         run: scripts/prepare-cef.sh release
 
       - name: Test application
+        # --all-targets so a binary that fails to compile is reported here rather than
+        # part-way through the bundle step.
         run: |
           npm run build
+          cargo check --manifest-path src-tauri/Cargo.toml --all-targets
           cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       - uses: tauri-apps/tauri-action@v1
