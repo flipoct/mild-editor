@@ -49,6 +49,8 @@ pub fn prepare(app: &AppHandle) {
 
 pub fn shutdown(_app: &AppHandle) {}
 
+pub fn window_moved(_window: &Window, _state: &BrowserState) {}
+
 #[tauri::command]
 pub fn browser_status(_state: tauri::State<'_, BrowserState>) -> PanelStatus {
     status()

@@ -2490,6 +2490,9 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.emit("native-close-requested", ());
                 }
+                tauri::WindowEvent::Moved(_) => {
+                    browser::window_moved(window, &window.state::<browser::BrowserState>());
+                }
                 tauri::WindowEvent::Destroyed => {
                     let state = window.state::<ClangdState>();
                     if let Ok(mut guard) = state.0.lock() {
