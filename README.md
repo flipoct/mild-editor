@@ -122,7 +122,7 @@ Development needs the CEF binaries and a build tool the `cef` crate expects:
 brew install ninja                                   # cef-dll-sys builds libcef_dll_wrapper with Ninja
 git clone https://github.com/tauri-apps/cef-rs && cd cef-rs && git checkout cef-v151.8.1+151.3.24
 cargo run -p export-cef-dir -- --force ~/.local/share/cef
-export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script
+export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script; prepare-cef.sh defaults to this path
 
 npm run dev:cef      # tauri dev with the CEF layer (runs scripts/prepare-cef.sh debug first)
 npm run build:cef    # tauri build with the CEF layer (framework + helpers bundled)

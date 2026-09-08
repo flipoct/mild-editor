@@ -5,8 +5,8 @@
 #   CEF_PATH=~/.local/share/cef scripts/prepare-cef.sh release   # before `tauri build`
 #
 # debug:   the dev binary runs bare under src-tauri/target/debug/, so the framework, the five
-#          helper bundles and a stub main bundle go to src-tauri/target/Frameworks/ — the
-#          "../Frameworks" the app resolves from its executable.
+#          helper bundles and a stub main bundle go to src-tauri/target/cef-dev/ — a directory
+#          the Tauri CLI leaves alone (it rewrites target/Frameworks from the bundle config).
 # release: the bundler takes the framework from src-tauri/cef/ (bundle.macOS.frameworks) and
 #          the helpers from src-tauri/cef/helpers/ (bundle.resources); see tauri.cef.conf.json.
 #
@@ -19,6 +19,10 @@ TAURI="$ROOT/src-tauri"
 APP_NAME="Mild Editor"
 BUNDLE_ID="io.mildeditor.desktop"
 
+# CEF_PATH defaults to the location the README's export-cef-dir step writes to.
+if [ -z "${CEF_PATH:-}" ] && [ -d "$HOME/.local/share/cef/Chromium Embedded Framework.framework" ]; then
+  CEF_PATH="$HOME/.local/share/cef"
+fi
 if [ -z "${CEF_PATH:-}" ]; then
   echo "prepare-cef: CEF_PATH is not set; building without the problem panel" >&2
   exit 0
@@ -27,7 +31,7 @@ FRAMEWORK="$CEF_PATH/Chromium Embedded Framework.framework"
 [ -d "$FRAMEWORK" ] || { echo "prepare-cef: no framework at $FRAMEWORK" >&2; exit 1; }
 
 case "$PROFILE" in
-  debug)   CARGO_FLAGS=(); OUT="$TAURI/target/Frameworks"; HELPERS_DIR="$OUT" ;;
+  debug)   CARGO_FLAGS=(); OUT="$TAURI/target/cef-dev"; HELPERS_DIR="$OUT" ;;
   release) CARGO_FLAGS=(--release); OUT="$TAURI/cef"; HELPERS_DIR="$OUT/helpers" ;;
   *) echo "usage: prepare-cef.sh [debug|release]" >&2; exit 2 ;;
 esac

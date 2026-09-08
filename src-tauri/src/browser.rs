@@ -136,12 +136,21 @@ fn resolve_layout(app: &AppHandle) -> Result<Layout, String> {
 
     #[cfg(target_os = "macos")]
     {
-        // The framework and helper bundles sit in "../Frameworks" relative to the
-        // executable: Contents/Frameworks inside the app bundle, and
-        // src-tauri/target/Frameworks for `tauri dev` (see scripts/prepare-cef.sh).
+        // The framework lives in Contents/Frameworks inside the app bundle. For `tauri dev`
+        // the bare binary looks in src-tauri/target/cef-dev, which scripts/prepare-cef.sh
+        // fills (target/Frameworks is rewritten by the Tauri CLI, so it cannot be used).
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-        let default_dir = exe.parent().map(|dir| dir.join("../Frameworks")).ok_or("executable has no parent directory")?;
-        let framework_dir = std::env::var_os("MILD_CEF_DIR").map(PathBuf::from).unwrap_or(default_dir);
+        let parent = exe.parent().ok_or("executable has no parent directory")?;
+        let candidates = [
+            std::env::var_os("MILD_CEF_DIR").map(PathBuf::from),
+            Some(parent.join("../cef-dev")),
+            Some(parent.join("../Frameworks")),
+        ];
+        let framework_dir = candidates
+            .into_iter()
+            .flatten()
+            .find(|dir| dir.join("Chromium Embedded Framework.framework").is_dir())
+            .ok_or_else(|| format!("CEF framework not found next to {} (run scripts/prepare-cef.sh debug)", exe.display()))?;
         let framework_dir = framework_dir.canonicalize().unwrap_or(framework_dir);
         let framework = framework_dir.join("Chromium Embedded Framework.framework/Chromium Embedded Framework");
         if !framework.is_file() {
@@ -983,6 +992,9 @@ mod mac {
         let current = NSApplication::sharedApplication(mtm)
             .currentEvent()
             .filter(|event| matches!(event.r#type(), NSEventType::LeftMouseDown | NSEventType::LeftMouseDragged));
+        if std::env::var_os("MILD_DEBUG_DRAG").is_some() {
+            eprintln!("[drag] current event usable: {}", current.is_some());
+        }
         let event = current.or_else(|| {
             NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
                 NSEventType::LeftMouseDown,
