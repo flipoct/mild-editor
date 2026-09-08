@@ -60,7 +60,7 @@ if [ -n "$TARGET" ]; then
 else
   HELPER_DIR="$TAURI/target/$PROFILE"
 fi
-(cd "$TAURI" && cargo build "${CARGO_FLAGS[@]}" --bin mild-editor-cef-helper)
+(cd "$TAURI" && cargo build "${CARGO_FLAGS[@]}" -p mild-editor-cef-helper)
 HELPER_BIN="$HELPER_DIR/mild-editor-cef-helper"
 [ -f "$HELPER_BIN" ] || { echo "prepare-cef: no helper at $HELPER_BIN" >&2; exit 1; }
 

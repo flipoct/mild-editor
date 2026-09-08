@@ -4,8 +4,6 @@ version = "1.7.0"
 description = "A lightweight competitive programming editor"
 authors = ["mild editor"]
 edition = "2021"
-# Two binaries exist (the app and the CEF helper); `cargo run` and `tauri dev` want this one.
-default-run = "mild-editor"
 
 [lib]
 name = "mild_editor_lib"
@@ -45,11 +43,12 @@ objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
-# macOS runs CEF sub-processes from a separate helper executable inside helper .app bundles.
 [[bin]]
 name = "mild-editor"
 path = "src/main.rs"
 
-[[bin]]
-name = "mild-editor-cef-helper"
-path = "src/bin/cef_helper.rs"
+# macOS runs CEF sub-processes from a separate helper executable. It is a workspace member
+# rather than a second binary of this package so the bundler does not copy it into the app;
+# see cef-helper/Cargo.toml.
+[workspace]
+members = ["cef-helper"]

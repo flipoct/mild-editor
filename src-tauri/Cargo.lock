@@ -2227,6 +2227,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mild-editor-cef-helper"
+version = "1.7.0"
+dependencies = [
+ "cef",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
