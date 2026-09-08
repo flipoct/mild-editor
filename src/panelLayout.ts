@@ -41,48 +41,8 @@ export const completeLayout = <Id extends string>(layout: PanelLayout<Id>, ids: 
   return [...kept, ...ids.filter((id) => !seen.has(id)).map((id) => [id])];
 };
 
-/**
- * Move a panel to the column beside it, joining that column's stack. A panel that shares a
- * column steps out into a new column of its own when it runs out of columns to join, so a
- * stack can always be broken up from the keyboard.
- */
-export const moveToColumn = <Id extends string>(layout: PanelLayout<Id>, id: Id, direction: -1 | 1): PanelLayout<Id> => {
-  const at = locate(layout, id);
-  if (!at) return layout;
-  const target = at.column + direction;
-  const alone = layout[at.column].length === 1;
-  if (target < 0 || target >= layout.length) {
-    if (alone) return layout;
-    const rest = removePanel(layout, id);
-    return direction < 0 ? [[id], ...rest] : [...rest, [id]];
-  }
-  const next = layout.map((column) => [...column]);
-  next[at.column].splice(at.row, 1);
-  next[target].push(id);
-  return withoutEmpty(next);
-};
 
-/** Move a panel up or down inside its own column. */
-export const moveWithinColumn = <Id extends string>(layout: PanelLayout<Id>, id: Id, direction: -1 | 1): PanelLayout<Id> => {
-  const at = locate(layout, id);
-  if (!at) return layout;
-  const to = at.row + direction;
-  const column = layout[at.column];
-  if (to < 0 || to >= column.length) return layout;
-  const next = layout.map((items) => [...items]);
-  [next[at.column][at.row], next[at.column][to]] = [next[at.column][to], next[at.column][at.row]];
-  return next;
-};
 
-/** Take a stacked panel out into a column of its own, immediately to the right. */
-export const splitPanel = <Id extends string>(layout: PanelLayout<Id>, id: Id): PanelLayout<Id> => {
-  const at = locate(layout, id);
-  if (!at || layout[at.column].length === 1) return layout;
-  const next = layout.map((column) => [...column]);
-  next[at.column].splice(at.row, 1);
-  next.splice(at.column + 1, 0, [id]);
-  return withoutEmpty(next);
-};
 
 /** Drop `id` against one edge of `target`: beside it as a new column, or into its stack. */
 export const dropPanel = <Id extends string>(layout: PanelLayout<Id>, id: Id, target: Id, edge: Edge): PanelLayout<Id> => {

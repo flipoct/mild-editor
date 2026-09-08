@@ -126,7 +126,7 @@ The workspace is a set of columns, and each column holds one or more panels stac
 
 Drag a panel by the grip in its top-left corner, or by its chip in the status bar, and drop it against the edge of another panel: the left or right half gives it a column of its own, the top or bottom half stacks it in that panel's column. The divider between two columns sets their widths and the divider between stacked panels sets their heights; a pair keeps its combined size, so the rest of the workspace stays where it is.
 
-The `⇄` button in the status bar opens the same moves as buttons: ◀ ▶ between columns, ▲ ▼ within one, and ⇥ to split a panel out. `Alt` with the arrow keys on a chip does the same, and a chip's checkbox hides the panel. Sizes are shares of the window, so a layout keeps its proportions when the window is resized.
+The chips in the status bar show and hide panels; arranging them is the drag's job alone. **Settings → appearance** restores the default arrangement, as does *View → Reset Panel Layout* on macOS. Sizes are shares of the window, so a layout keeps its proportions when the window is resized.
 
 The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
 
