@@ -21,10 +21,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --config src-tauri/tauri.cef.conf.json
           - platform: macos-latest
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --config src-tauri/tauri.cef.conf.json
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             args: ""
@@ -52,7 +52,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Install CEF (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        # The problem panel embeds Chromium. cef-dll-sys builds its wrapper with Ninja, and
+        # export-cef-dir downloads the pinned CEF binaries for this architecture.
+        run: |
+          brew install ninja
+          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
+          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force "$RUNNER_TEMP/cef")
+          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+
       - run: npm ci
+
+      # tauri-action runs `tauri build` itself, so the framework and helper bundles are
+      # staged here rather than through the npm scripts.
+      - name: Stage CEF for the bundle (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: scripts/prepare-cef.sh release
 
       - name: Test application
         run: |

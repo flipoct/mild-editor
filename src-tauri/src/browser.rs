@@ -141,10 +141,15 @@ fn resolve_layout(app: &AppHandle) -> Result<Layout, String> {
         if !framework.is_file() {
             return Err(format!("CEF framework not found at {}", framework.display()));
         }
-        let helper = framework_dir.join("Mild Editor Helper.app/Contents/MacOS/Mild Editor Helper");
-        if !helper.is_file() {
-            return Err(format!("CEF helper not found at {}", helper.display()));
-        }
+        // `tauri dev` puts the helpers next to the framework; the app bundle ships them as
+        // resources under Contents/Resources/cef/helpers (the bundler only accepts
+        // .framework and .dylib entries under Frameworks).
+        const HELPER: &str = "Mild Editor Helper.app/Contents/MacOS/Mild Editor Helper";
+        let resources_dir = exe.parent().map(|dir| dir.join("../Resources/cef/helpers")).ok_or("executable has no parent directory")?;
+        let helper = [framework_dir.join(HELPER), resources_dir.join(HELPER)]
+            .into_iter()
+            .find(|path| path.is_file())
+            .ok_or_else(|| format!("CEF helper not found under {} or {}", framework_dir.display(), resources_dir.display()))?;
         let inside_bundle = exe.ancestors().any(|dir| dir.extension().map(|ext| ext == "app").unwrap_or(false));
         let stub = framework_dir.join("Mild Editor.app");
         let main_bundle = (!inside_bundle && stub.join("Contents/Info.plist").is_file()).then_some(stub);
@@ -759,20 +764,3 @@ mod win {
 use mac as platform;
 #[cfg(target_os = "windows")]
 use win as platform;
-
-#[cfg(target_os = "linux")]
-mod platform {
-    use super::PanelBounds;
-    use cef::Rect;
-    use tauri::Window;
-    pub fn parent_handle(_window: &Window) -> Result<cef::sys::cef_window_handle_t, String> {
-        Err("the problem panel is not available on Linux yet".into())
-    }
-    pub fn rect_for(_window: &Window, _bounds: &PanelBounds) -> Result<Rect, String> {
-        Err("the problem panel is not available on Linux yet".into())
-    }
-    pub fn apply_bounds(_window: &Window, _browser: &cef::Browser, _bounds: &PanelBounds) -> Result<(), String> {
-        Ok(())
-    }
-    pub fn set_hidden(_browser: &cef::Browser, _hidden: bool) {}
-}

@@ -26,11 +26,14 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 scraper = "0.24"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.11.0"
-# Embedded Chromium for the problem panel. Pinned: 152.0.5 hangs every network request on
-# macOS 26 (verified against CEF's own cefsimple); 151.3.24 and 150.0.19 work.
-cef = { version = "=151.8.1", default-features = false }
 
+# Embedded Chromium for the problem panel. macOS only for now: the Windows code path in
+# browser.rs is written but the installer does not yet ship libcef.dll and its resources
+# next to the executable, and an exe that imports libcef.dll without it will not start.
+# Pinned: 152.0.5 hangs every network request on macOS 26 (verified against CEF's own
+# cefsimple); 151.3.24 and 150.0.19 work.
 [target.'cfg(target_os = "macos")'.dependencies]
+cef = { version = "=151.8.1", default-features = false }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder"] }
 objc2-foundation = "0.3"

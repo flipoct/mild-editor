@@ -10,7 +10,9 @@
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "dev:cef": "scripts/prepare-cef.sh debug && tauri dev --config src-tauri/tauri.dev.conf.json --config src-tauri/tauri.cef.conf.json",
+    "build:cef": "scripts/prepare-cef.sh release && tauri build --config src-tauri/tauri.cef.conf.json"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

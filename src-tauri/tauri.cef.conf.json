@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "macOS": {
+      "frameworks": [
+        "cef/Chromium Embedded Framework.framework"
+      ],
+      "entitlements": "entitlements.plist"
+    },
+    "resources": [
+      "cef/helpers/"
+    ]
+  }
+}

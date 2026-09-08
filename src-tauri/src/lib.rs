@@ -1,3 +1,9 @@
+// The problem panel (embedded CEF) is macOS-only until the Windows installer ships CEF;
+// other platforms get a stub with the same commands that reports the panel unavailable.
+#[cfg(target_os = "macos")]
+pub mod browser;
+#[cfg(not(target_os = "macos"))]
+#[path = "browser_stub.rs"]
 pub mod browser;
 mod companion;
 mod interactive;

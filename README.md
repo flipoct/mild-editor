@@ -124,12 +124,11 @@ git clone https://github.com/tauri-apps/cef-rs && cd cef-rs && git checkout cef-
 cargo run -p export-cef-dir -- --force ~/.local/share/cef
 export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script
 
-# macOS only: the dev binary runs outside an .app, so lay the framework and helper
-# bundles out next to it once (repeat after `cargo clean`)
-cargo build --manifest-path src-tauri/Cargo.toml --bin mild-editor-cef-helper
-scripts/prepare-cef.sh debug
-npm run dev
+npm run dev:cef      # tauri dev with the CEF layer (runs scripts/prepare-cef.sh debug first)
+npm run build:cef    # tauri build with the CEF layer (framework + helpers bundled)
 ```
+
+The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable. The panel is macOS-only for now; the Windows code path exists but the installer does not yet ship CEF next to the executable.
 
 Useful switches while developing: `MILD_CEF_DEBUG_PORT=9336` opens the DevTools protocol on the panel, `MILD_CEF_EXTENSIONS=/path/a,/path/b` loads unpacked extensions, and `VITE_PROBLEM_PANEL_OPEN=1` / `VITE_PROBLEM_PANEL_URL=…` open and seed the panel on first run.
 
