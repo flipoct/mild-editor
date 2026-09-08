@@ -1661,8 +1661,15 @@ mod win {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW};
 
+    /// Tauri hands out the `windows` crate's HWND and CEF's bindings declare their own
+    /// (`cef::sys::HWND`, a pointer to an opaque `HWND__`); both wrap the same handle.
     pub fn parent_handle(window: &Window) -> Result<cef::sys::cef_window_handle_t, String> {
-        window.hwnd().map(|hwnd| hwnd.0 as HWND).map_err(|error| error.to_string())
+        window.hwnd().map(|hwnd| cef::sys::HWND(hwnd.0 as *mut cef::sys::HWND__)).map_err(|error| error.to_string())
+    }
+
+    /// The raw handle of the browser's native window, for the windows-sys calls below.
+    fn raw_handle(host: &cef::BrowserHost) -> HWND {
+        host.window_handle().0 as HWND
     }
 
     /// WebView2 lays the page out in device pixels, so the CSS rectangle is scaled by
@@ -1681,7 +1688,7 @@ mod win {
     pub fn apply_bounds(window: &Window, browser: &cef::Browser, bounds: &PanelBounds) -> Result<(), String> {
         let rect = rect_for(window, bounds)?;
         let host = browser.host().ok_or("browser has no host")?;
-        let hwnd = host.window_handle();
+        let hwnd = raw_handle(&host);
         if hwnd.is_null() {
             return Err("browser has no native window".into());
         }
@@ -1692,7 +1699,7 @@ mod win {
 
     pub fn set_hidden(browser: &cef::Browser, hidden: bool) {
         if let Some(host) = browser.host() {
-            let hwnd = host.window_handle();
+            let hwnd = raw_handle(&host);
             if !hwnd.is_null() {
                 unsafe { ShowWindow(hwnd, if hidden { SW_HIDE } else { SW_SHOW }) };
             }
