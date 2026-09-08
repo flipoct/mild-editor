@@ -1659,7 +1659,7 @@ mod win {
     use cef::{ImplBrowser, ImplBrowserHost, Rect};
     use tauri::Window;
     use windows_sys::Win32::Foundation::HWND;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW};
 
     /// Tauri hands out the `windows` crate's HWND and CEF's bindings declare their own
     /// (`cef::sys::HWND`, a pointer to an opaque `HWND__`); both wrap the same handle.
@@ -1692,7 +1692,10 @@ mod win {
         if hwnd.is_null() {
             return Err("browser has no native window".into());
         }
-        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE) };
+        // The browser is a sibling of the WebView2 host inside the Tauri window and must sit
+        // above it in the z-order, or the page covers it; keeping SWP_NOZORDER here left
+        // the panel blank. HWND_TOP raises it every time its rectangle is applied.
+        unsafe { SetWindowPos(hwnd, HWND_TOP, rect.x, rect.y, rect.width, rect.height, SWP_NOACTIVATE) };
         host.was_resized();
         Ok(())
     }
@@ -1702,6 +1705,9 @@ mod win {
             let hwnd = raw_handle(&host);
             if !hwnd.is_null() {
                 unsafe { ShowWindow(hwnd, if hidden { SW_HIDE } else { SW_SHOW }) };
+                if !hidden {
+                    unsafe { SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) };
+                }
             }
             host.was_hidden(hidden as i32);
         }
