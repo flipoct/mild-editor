@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor"
-version = "1.6.2"
+version = "1.7.0"
 dependencies = [
  "cef",
  "objc2",
