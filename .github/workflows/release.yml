@@ -123,8 +123,11 @@ jobs:
 
             See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.8.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
-          prerelease: false
-          uploadUpdaterJson: true
+          # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
+          # out of "latest" and publishes no latest.json, so installed copies do not update
+          # to it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          uploadUpdaterJson: ${{ !contains(github.ref_name, '-') }}
           releaseAssetNamePattern: Mild-Editor_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
 
