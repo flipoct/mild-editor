@@ -499,6 +499,37 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 :root[data-theme] .companion-toggle input { accent-color: var(--accent); }
 :root[data-theme] .tab-status.dirty, :root[data-theme] .problem-tab.active .tab-status, :root[data-theme] .add-test, :root[data-theme] .file-actions .atcoder-button { color: var(--accent); }
 :root[data-theme] .delete-test:hover, :root[data-theme] .explorer-delete:hover, :root[data-theme] .snippet-delete:hover { background: color-mix(in srgb, var(--danger) 20%, var(--bg-2)); color: var(--danger); }
+/* Problem panel, panel chips and the layout popover arrived after the theme block above
+   and carried their own greys; these keep them on the selected theme. */
+:root[data-theme] .problem-panel { background: var(--bg-1); border-color: var(--border); }
+:root[data-theme] .problem-toolbar { border-color: var(--border); }
+:root[data-theme] .problem-toolbar button { color: var(--muted); }
+:root[data-theme] .problem-toolbar button:hover:not(:disabled) { background: var(--bg-3); border-color: var(--border); color: var(--text); }
+:root[data-theme] .problem-toolbar .problem-import { border-color: var(--border); color: var(--accent); }
+:root[data-theme] .problem-toolbar .problem-import:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+:root[data-theme] .problem-url { background: var(--field); border-color: var(--border); color: var(--text); }
+:root[data-theme] .problem-url:focus { border-color: var(--accent); }
+:root[data-theme] .problem-host { background: var(--bg-editor); }
+:root[data-theme] .problem-hint { color: var(--muted); }
+:root[data-theme] .problem-unavailable .problem-hint { color: var(--warning); }
+:root[data-theme] .panel-grip { color: var(--muted); }
+:root[data-theme] .panel-grip:hover { background: var(--bg-3); color: var(--text); }
+:root[data-theme] .panel-chip, :root[data-theme] .layout-button, :root[data-theme] .layout-close { color: var(--muted); }
+:root[data-theme] .panel-chip:hover, :root[data-theme] .layout-close:hover { color: var(--text); }
+:root[data-theme] .panel-chip.active, :root[data-theme] .layout-button:hover, :root[data-theme] .layout-button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+:root[data-theme] .panel-chip:focus-visible { outline-color: var(--accent); }
+:root[data-theme] .panel-drop-zone { outline-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+:root[data-theme] .panel-drop-edge { background: color-mix(in srgb, var(--accent) 80%, transparent); }
+:root[data-theme] .layout-popover { background: var(--bg-2); border-color: var(--border); color: var(--text); box-shadow: 0 10px 30px var(--shadow); }
+:root[data-theme] .layout-popover p, :root[data-theme] .layout-always { color: var(--muted); }
+:root[data-theme] .layout-row { background: var(--bg-1); border-color: var(--border); }
+:root[data-theme] .layout-row button { background: var(--field); border-color: var(--border); color: var(--text); }
+:root[data-theme] .layout-row button:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+:root[data-theme] .layout-show { color: var(--muted); }
+:root[data-theme] .extension-error { color: var(--danger); }
+:root[data-theme] .extension-row { background: var(--field); border-color: var(--border); color: var(--text); }
+:root[data-theme] .extension-row small { color: var(--muted); }
+:root[data-theme] .extension-restart { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 .error-notice { position: fixed; z-index: 2000; left: 50%; top: 50%; width: min(520px, 80vw); transform: translate(-50%, -50%); padding: 15px 17px; border: 1px solid color-mix(in srgb, var(--danger) 62%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 12%, var(--bg-2)); color: var(--text); box-shadow: 0 18px 55px #0b0c0aaa; font: 12px/1.5 "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; text-align: left; }
 .error-notice header, .error-notice footer { display: flex; align-items: center; }
 .error-notice header { justify-content: space-between; }
@@ -537,6 +568,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 }
 .app-shell[data-wallpaper] .window-titlebar,
 .app-shell[data-wallpaper] .problem-tabs,
+.app-shell[data-wallpaper] .problem-panel,
 .app-shell[data-wallpaper] .statusbar,
 .app-shell[data-wallpaper] .interactive-compose,
 .app-shell[data-wallpaper] .test-panel,
