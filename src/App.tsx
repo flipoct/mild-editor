@@ -10,7 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
-import { fileKey, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
+import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
 import { renderTemplateWithCursor } from "./templateParser";
 import packageInfo from "../package.json";
 
@@ -120,6 +120,8 @@ type ImportedAtCoderProblem = {
   tests: LoadedProblem["tests"];
   source: ProblemSource;
   sourceUrl: string;
+  /** Contest name, when the importer knows one; only Competitive Companion sends it. */
+  contest?: string;
 };
 
 type CodeSnippet = {
@@ -285,6 +287,7 @@ const companionToImported = (problem: CompanionProblem): ImportedAtCoderProblem 
   const source = companionSource(problem.url);
   return {
     title: problem.name,
+    contest: problem.group,
     suggestedFilename: companionFilename(problem, source),
     tests: problem.tests.map((test, index) => ({ name: `test ${index + 1}`, input: test.input, expected: test.output })),
     source,
@@ -364,6 +367,11 @@ let snippetCompletionSource: CodeSnippet[] = [];
 const APP_VERSION = packageInfo.version;
 /** `tauri dev` runs under tauri.dev.conf.json: its own name, identifier, and no updater. */
 const IS_DEV_BUILD = import.meta.env.DEV;
+// The development build keeps its own workspace memory, and starts in a scratch folder
+// under its own app data directory, so testing an import cannot disturb the folder the
+// installed app is working in.
+const WORKSPACE_KEY = IS_DEV_BUILD ? "mild-dev-last-workspace" : "mild-last-workspace";
+const OPEN_TABS_KEY = IS_DEV_BUILD ? "mild-dev-last-open-tabs" : "mild-last-open-tabs";
 const UPDATES_SUPPORTED = "__TAURI_INTERNALS__" in window && !IS_DEV_BUILD;
 
 /** What the Rust `check_update` command reports. */
@@ -378,7 +386,7 @@ const messages = {
     preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean", interfaceScale: "interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
     local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.", organizeImports: "file imports into folders", organizeImportsHelp: "Off by default: every import lands in the workspace root. On, an imported problem goes into its judge's folder, and a contest gets a folder of its own inside it — Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. Files already saved are left where they are.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
@@ -406,7 +414,7 @@ const messages = {
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 시간 값은 이 컴퓨터의 시간대를 따릅니다. 기존 ${...} 문법도 계속 지원됩니다.",
     local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
-    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.", organizeImports: "가져온 파일을 폴더로 정리", organizeImportsHelp: "기본값은 꺼짐이며, 가져온 파일은 모두 작업 폴더 바로 아래에 저장됩니다. 켜면 문제는 해당 사이트 폴더 안에 들어가고, 대회 전체를 가져오면 그 안에 대회 이름 폴더가 하나 더 생깁니다. 예: Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. 이미 저장된 파일은 그대로 둡니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
@@ -559,6 +567,7 @@ function App() {
   const [problemUrlDraft, setProblemUrlDraft] = useState("");
   const problemHostRef = useRef<HTMLDivElement | null>(null);
   const problemUrlEditingRef = useRef(false);
+  const [organizeImports, setOrganizeImports] = useState(() => localStorage.getItem("mild-organize-imports") === "1");
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
   const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
   const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
@@ -743,6 +752,7 @@ function App() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
+    localStorage.setItem("mild-organize-imports", organizeImports ? "1" : "0");
     localStorage.setItem("mild-companion-enabled", companionEnabled ? "1" : "0");
     localStorage.setItem("mild-companion-port", String(companionPort));
     let cancelled = false;
@@ -763,7 +773,7 @@ function App() {
         });
     }
     return () => { cancelled = true; };
-  }, [companionEnabled, companionPort]);
+  }, [companionEnabled, companionPort, organizeImports]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1944,9 +1954,14 @@ function App() {
   };
 
   useEffect(() => {
-    const lastWorkspace = localStorage.getItem("mild-last-workspace");
-    if (!lastWorkspace) return;
-    void invoke<LoadedWorkspace>("load_workspace", { path: lastWorkspace }).then((loaded) => {
+    const remembered = localStorage.getItem(WORKSPACE_KEY);
+    if (!remembered && !(IS_DEV_BUILD && "__TAURI_INTERNALS__" in window)) return;
+    // Asking for the scratch folder first also recreates it, so a development build whose
+    // workspace was deleted starts a new one instead of falling back to its parent.
+    const opening = IS_DEV_BUILD && "__TAURI_INTERNALS__" in window
+      ? invoke<string>("dev_workspace_path").then((scratch) => remembered || scratch)
+      : Promise.resolve(remembered as string);
+    void opening.then((lastWorkspace) => invoke<LoadedWorkspace>("load_workspace", { path: lastWorkspace })).then((loaded) => {
       const loadedTabs: ProblemTab[] = loaded.problems.map((problem) => ({
         id: crypto.randomUUID(), title: problem.title, filename: problem.filename,
         language: problem.language,
@@ -1957,7 +1972,7 @@ function App() {
       let restoredFilenames: string[] = [];
       let restoredActiveFilename = "";
       try {
-        const restored = JSON.parse(localStorage.getItem("mild-last-open-tabs") || "{}");
+        const restored = JSON.parse(localStorage.getItem(OPEN_TABS_KEY) || "{}");
         if (restored.workspacePath === loaded.folderPath && Array.isArray(restored.filenames)) {
           restoredFilenames = restored.filenames;
           restoredActiveFilename = typeof restored.activeFilename === "string" ? restored.activeFilename : "";
@@ -1977,11 +1992,11 @@ function App() {
         setTests(restoredActive.tests);
       } else setActiveTabId("");
       setFileStatus("loaded");
-    }).catch(() => localStorage.removeItem("mild-last-workspace"));
+    }).catch(() => localStorage.removeItem(WORKSPACE_KEY));
   }, []);
 
   useEffect(() => {
-    if (workspacePath) localStorage.setItem("mild-last-workspace", workspacePath);
+    if (workspacePath) localStorage.setItem(WORKSPACE_KEY, workspacePath);
   }, [workspacePath]);
 
   useEffect(() => {
@@ -1997,7 +2012,7 @@ function App() {
 
   useEffect(() => {
     if (!workspacePath) return;
-    localStorage.setItem("mild-last-open-tabs", JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
+    localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
   }, [activeTab?.filename, tabs, workspacePath]);
 
   const addImportedProblems = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1) => {
@@ -2018,7 +2033,10 @@ function App() {
       return;
     }
     const importLanguage = defaultLanguage;
-    const requestedNames = new Map(candidates.map((problem) => [problem.sourceUrl, importedFilename(problem.title, problem.suggestedFilename, importLanguage)]));
+    const requestedNames = new Map(candidates.map((problem) => [
+      problem.sourceUrl,
+      importFolder(organizeImports, contestImport, problem) + importedFilename(problem.title, problem.suggestedFilename, importLanguage),
+    ]));
     const collision = candidates.find((problem) => existingFiles.some((file) => fileKey(file.filename) === fileKey(requestedNames.get(problem.sourceUrl) || problem.suggestedFilename)));
     if (collision && !renameDuplicates && !contestImport) {
       const requested = requestedNames.get(collision.sourceUrl) || collision.suggestedFilename;
@@ -3096,8 +3114,8 @@ function App() {
               >⠿</span>
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span>{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
-                : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{tab.filename}</span></button>}</div>
-                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span><span className="tab-title">{tab.filename}</span></button>}
+                : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
+                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}
               <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
             </div>
           ))}
@@ -3482,6 +3500,8 @@ function App() {
               </div>
               <label className="clangd-path-label">{t("defaultLanguage")}<select value={defaultLanguage} onChange={(event) => setDefaultLanguage(event.target.value as Language)}><option value="cpp">C++ (.cpp)</option><option value="python">Python (.py)</option></select></label>
               <p className="settings-help">{t("defaultLanguageHelp")}</p>
+              <label className="companion-toggle"><input type="checkbox" checked={organizeImports} onChange={(event) => setOrganizeImports(event.target.checked)} />{t("organizeImports")}</label>
+              <p className="settings-help">{t("organizeImportsHelp")}</p>
               <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
