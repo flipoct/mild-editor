@@ -2469,6 +2469,7 @@ pub fn run() {
             browser::browser_extension_install,
             browser::browser_extension_remove,
             browser::browser_import_page,
+            browser::browser_install_userscript,
             debug_report
         ])
         .on_window_event(|window, event| {

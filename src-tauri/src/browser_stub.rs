@@ -92,6 +92,7 @@ pub struct ExtensionInfo {
     pub version: String,
     pub path: String,
     pub pending: bool,
+    pub builtin: bool,
 }
 
 #[tauri::command]
@@ -102,6 +103,11 @@ pub fn browser_extensions_list(_state: tauri::State<'_, BrowserState>) -> Vec<Ex
 #[tauri::command]
 pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _source: String) -> Result<ExtensionInfo, String> {
     Err(REASON.into())
+}
+
+#[tauri::command]
+pub fn browser_install_userscript(_window: Window, _state: tauri::State<'_, BrowserState>, _url: String, _bounds: PanelBounds) -> Result<(), String> {
+    Err("The problem browser is not available on this platform yet.".into())
 }
 
 #[tauri::command]

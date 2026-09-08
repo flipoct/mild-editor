@@ -64,7 +64,11 @@ const storedPanelOrder = (): PanelId[] => {
 };
 /** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
 /** An unpacked Chrome extension under the app profile, as listed by `browser_extensions_list`. */
-type BrowserExtension = { id: string; name: string; version: string; path: string; pending: boolean };
+type BrowserExtension = { id: string; name: string; version: string; path: string; pending: boolean; builtin: boolean };
+/** Installed from the Web Store on first start (see DEFAULT_EXTENSIONS in browser.rs). */
+const TAMPERMONKEY_ID = "dhdgffkkebhmkfjojejmpbldmpobfkfo";
+/** AtCoder Better! only runs under Tampermonkey; Greasy Fork serves the script by id. */
+const ATCODER_BETTER_USERSCRIPT = "https://greasyfork.org/scripts/471106/code/atcoder-better.user.js";
 type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
@@ -371,7 +375,7 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
-    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
+    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
     chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
@@ -382,7 +386,7 @@ const messages = {
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
     companion: "Competitive Companion", companionEnable: "listen for problems", companionPort: "port",
-    companionHelp: "Install the Competitive Companion browser extension, open a problem, and press its button. Mild Editor creates the file and sample tests automatically. Contest parses arrive as one batch.",
+    companionHelp: "Competitive Companion is built into the problem panel: open a problem or contest page there and press its import button. Mild Editor creates the files and sample tests automatically. The extension in your regular browser works too, as long as it sends to this port.",
     companionListening: "listening", companionOff: "off", companionPortInUse: "port unavailable",
     diff: "diff", showDiff: "compare", showRaw: "raw output", diffExpected: "expected", diffActual: "output", diffWhitespace: "whitespace only",
     interactive: "interactive", interactiveStart: "start interactive run", interactiveSend: "send", interactiveEof: "end input",
@@ -399,7 +403,7 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
-    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
+    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
@@ -410,7 +414,7 @@ const messages = {
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
     snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
     companion: "Competitive Companion", companionEnable: "문제 수신 대기", companionPort: "포트",
-    companionHelp: "Competitive Companion 브라우저 확장을 설치하고 문제 페이지에서 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 대회 페이지에서는 문제 전체가 한 번에 들어옵니다.",
+    companionHelp: "Competitive Companion이 문제 패널에 내장되어 있습니다. 패널에서 문제나 대회 페이지를 열고 가져오기 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 일반 브라우저의 확장도 이 포트로 보내면 그대로 받습니다.",
     companionListening: "수신 중", companionOff: "꺼짐", companionPortInUse: "포트를 사용할 수 없음",
     diff: "비교", showDiff: "비교 보기", showRaw: "원본 출력", diffExpected: "예상", diffActual: "출력", diffWhitespace: "공백만 다름",
     interactive: "인터렉티브", interactiveStart: "인터렉티브 실행", interactiveSend: "보내기", interactiveEof: "입력 종료",
@@ -2572,11 +2576,38 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.sourceUrl, browserStatus.available, showProblemPanel]);
 
+  // Tampermonkey installs a userscript from its dashboard, which the backend drives once
+  // the panel is on screen; the host element only exists after the panel renders.
+  const [pendingUserscript, setPendingUserscript] = useState("");
+  const installUserscript = (url: string) => {
+    setSettingsOpen(false);
+    setProblemPanelOpen(true);
+    setPendingUserscript(url);
+  };
+  useEffect(() => {
+    if (!pendingUserscript || !showProblemPanel || !browserStatus.available) return;
+    const bounds = problemHostBounds();
+    if (!bounds) return;
+    setPendingUserscript("");
+    invoke("browser_install_userscript", { url: pendingUserscript, bounds }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingUserscript, showProblemPanel, browserStatus.available]);
+
   const refreshBrowserExtensions = () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     void invoke<BrowserExtension[]>("browser_extensions_list").then(setBrowserExtensions).catch(() => setBrowserExtensions([]));
   };
   useEffect(() => { if (settingsOpen && settingsPage === "browser") refreshBrowserExtensions(); }, [settingsOpen, settingsPage]);
+  // The first start installs the default extensions in the background.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen("browser-extensions-changed", () => refreshBrowserExtensions())
+      .then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const installBrowserExtension = async () => {
     const source = extensionSource.trim();
@@ -2593,6 +2624,8 @@ function App() {
       setExtensionBusy(false);
     }
   };
+
+  const tampermonkeyLoaded = browserExtensions.some((extension) => extension.id === TAMPERMONKEY_ID && !extension.pending);
 
   const removeBrowserExtension = async (id: string) => {
     try {
@@ -3430,6 +3463,13 @@ function App() {
               <div className={`lsp-state ${browserStatus.available ? "ready" : "error"}`}>
                 <span className="lsp-dot" /><div><strong>{t("problemPanel")}</strong><small>{browserStatus.available ? `CEF · ${browserStatus.open ? browserStatus.url || "open" : "idle"}` : browserStatus.error || "unavailable"}</small></div>
               </div>
+              <div className="extension-defaults">
+                <strong>{t("browserDefaultsTitle")}</strong>
+                <small>{t("browserDefaultsHelp")}</small>
+                <div className="companion-controls">
+                  <button className="subtle-button extension-userscript" disabled={!tampermonkeyLoaded} title={tampermonkeyLoaded ? ATCODER_BETTER_USERSCRIPT : t("browserNeedsTampermonkey")} onClick={() => installUserscript(ATCODER_BETTER_USERSCRIPT)}>{t("browserInstallAtCoderBetter")}</button>
+                </div>
+              </div>
               <p className="settings-help">{t("browserExtensionsHelp")}</p>
               <label className="clangd-path-label">{t("browserExtensionSource")}<span className="extension-install"><input value={extensionSource} onChange={(event) => setExtensionSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void installBrowserExtension(); } }} placeholder="https://chromewebstore.google.com/detail/…" spellCheck={false} disabled={extensionBusy || !browserStatus.available} /><button className="primary-button" onClick={() => void installBrowserExtension()} disabled={extensionBusy || !extensionSource.trim() || !browserStatus.available}>{extensionBusy ? t("browserExtensionInstalling") : t("browserExtensionInstall")}</button></span></label>
               {extensionError && <p className="settings-help extension-error">{extensionError}</p>}
@@ -3437,8 +3477,8 @@ function App() {
                 {browserExtensions.length === 0 && <p className="settings-help">{t("browserExtensionsNone")}</p>}
                 {browserExtensions.map((extension) => (
                   <div className="extension-row" role="listitem" key={extension.id}>
-                    <div><strong>{extension.name}</strong><small>{extension.version} · {extension.id}{extension.pending ? ` · ${t("browserPending")}` : ""}</small></div>
-                    <button className="danger-button" onClick={() => void removeBrowserExtension(extension.id)}>{t("browserExtensionRemove")}</button>
+                    <div><strong>{extension.name}{extension.builtin && <span className="extension-badge">{t("browserBuiltin")}</span>}</strong><small>{extension.version} · {extension.id}{extension.pending ? ` · ${t("browserPending")}` : ""}</small></div>
+                    {!extension.builtin && <button className="danger-button" onClick={() => void removeBrowserExtension(extension.id)}>{t("browserExtensionRemove")}</button>}
                   </div>
                 ))}
               </div>

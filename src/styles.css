@@ -666,3 +666,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 
 .crash-screen { height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding: 40px; overflow: auto; background: var(--bg-1); color: var(--text); }
 .crash-screen pre { max-width: 100%; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-0); color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+
+.extension-badge { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .04em; vertical-align: middle; }
+.extension-defaults { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); }
+.extension-defaults small { color: var(--muted); line-height: 1.5; }

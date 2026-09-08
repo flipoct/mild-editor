@@ -23,6 +23,8 @@ pub const STATUS_EVENT: &str = "browser-status";
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+/// Set while the app itself closes the browser, so `do_close` lets CEF proceed.
+static CLOSING_BY_APP: AtomicBool = AtomicBool::new(false);
 /// Guards against re-entering `do_message_loop_work` from inside itself.
 static PUMPING: AtomicBool = AtomicBool::new(false);
 /// Why the one allowed CEF initialisation failed, if it did.
@@ -73,6 +75,11 @@ pub struct Shared {
     extensions_dir: Mutex<Option<PathBuf>>,
     /// Extension ids CEF was started with; anything else on disk is waiting for a restart.
     loaded_extensions: Mutex<std::collections::HashSet<String>>,
+    /// Hidden Chrome-style window that receives extension-created tabs (see TabClient).
+    tab_host: Mutex<Option<cef::Window>>,
+    tab_host_popups: Mutex<Vec<BrowserView>>,
+    /// Userscript URL to feed Tampermonkey's dashboard once it has loaded in the panel.
+    pending_userscript: Mutex<Option<String>>,
 }
 
 /// Tauri-managed handle to the panel.
@@ -121,6 +128,9 @@ fn resolve_layout(app: &AppHandle) -> Result<Layout, String> {
     // Extensions installed through the app live under the profile; MILD_CEF_EXTENSIONS adds
     // unpacked directories for development.
     let mut extensions = Vec::new();
+    if let Err(error) = sync_bundled_companion(&cache_dir.join("extensions")) {
+        eprintln!("[cef] bundled Competitive Companion: {error}");
+    }
     if let Ok(entries) = std::fs::read_dir(cache_dir.join("extensions")) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -211,6 +221,8 @@ pub fn prepare(app: &AppHandle) {
                 status.available = true;
                 status.error = None;
             });
+            let (app, shared, cache_dir) = (app.clone(), shared.clone(), layout.cache_dir.clone());
+            std::thread::spawn(move || install_default_extensions(&app, &shared, &cache_dir));
         }
         Err(error) => {
             eprintln!("[browser] CEF unavailable: {error}");
@@ -322,6 +334,8 @@ fn try_initialize(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), String> {
     }
     INITIALIZED.store(true, Ordering::SeqCst);
     start_pump_thread(app.clone());
+    allow_user_scripts(&layout.extensions);
+    create_tab_host(app, shared);
     Ok(())
 }
 
@@ -391,6 +405,7 @@ pub fn shutdown(app: &AppHandle) {
     let shared = app.state::<BrowserState>().0.clone();
     if let Some(browser) = shared.browser.lock().expect("browser").take() {
         if let Some(host) = browser.host() {
+            CLOSING_BY_APP.store(true, Ordering::SeqCst);
             host.close_browser(1);
         }
     }
@@ -450,6 +465,12 @@ wrap_browser_process_handler! {
     impl BrowserProcessHandler {
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             schedule_pump(delay_ms);
+        }
+
+        /// Browsers Chromium creates on its own (extension tabs, chrome.tabs.create) get
+        /// the tab-host client, which redirects their pages into the panel.
+        fn default_client(&self) -> Option<Client> {
+            Some(TabClient::new(self.app.clone()))
         }
     }
 }
@@ -519,11 +540,41 @@ wrap_life_span_handler! {
             });
         }
 
-        fn do_close(&self, _browser: Option<&mut Browser>) -> i32 {
-            0
+        /// A page calling window.close() (Tampermonkey's dialogs do) must not close the
+        /// host window: for a child view CEF would send performClose: to the editor's own
+        /// window. Own the close instead and step back to the previous page.
+        fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
+            if CLOSING_BY_APP.load(Ordering::SeqCst) {
+                return 0;
+            }
+            eprintln!("[cef] page asked to close; going back instead");
+            if let Some(browser) = browser {
+                if browser.can_go_back() != 0 {
+                    browser.go_back();
+                } else if let Some(frame) = browser.main_frame() {
+                    frame.load_url(Some(&CefString::from("about:blank")));
+                }
+            }
+            1
+        }
+
+        /// Pages that want a new window (target=_blank links, chrome.tabs.create from an
+        /// extension such as Tampermonkey's install page) get the panel itself: the
+        /// editor has one page, not a tab strip.
+        fn on_before_popup(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _popup_id: i32, target_url: Option<&CefString>, _target_frame_name: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: i32, _popup_features: Option<&PopupFeatures>, _window_info: Option<&mut WindowInfo>, _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra_info: Option<&mut Option<DictionaryValue>>, _no_javascript_access: Option<&mut i32>) -> i32 {
+            if let (Some(browser), Some(url)) = (browser, target_url) {
+                let url = url.to_string();
+                if !url.is_empty() && url != "about:blank" {
+                    if let Some(frame) = browser.main_frame() {
+                        frame.load_url(Some(&CefString::from(url.as_str())));
+                    }
+                }
+            }
+            1
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
+            CLOSING_BY_APP.store(false, Ordering::SeqCst);
             *self.shared.browser.lock().expect("browser") = None;
             self.shared.update(&self.app, |status| {
                 status.open = false;
@@ -547,6 +598,56 @@ wrap_load_handler! {
                 status.can_go_back = can_go_back != 0;
                 status.can_go_forward = can_go_forward != 0;
             });
+        }
+
+        /// Extension pages (Tampermonkey's dialogs, options pages) close themselves with
+        /// window.close(), which Chromium honours for them without asking `do_close`; for a
+        /// child view that closes the editor's own window. Give such pages a close that
+        /// steps back instead. Runs before the page's scripts.
+        fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+            let Some(frame) = frame else { return };
+            if frame.is_main() == 0 || !CefString::from(&frame.url()).to_string().starts_with("chrome-extension://") {
+                return;
+            }
+            let code = r#"window.close = () => { if (history.length > 1) history.back(); else location.replace("about:blank"); };"#;
+            frame.execute_java_script(Some(&CefString::from(code)), None, 0);
+        }
+
+        /// Tampermonkey's dashboard has just loaded for `browser_install_userscript`: type
+        /// the URL into its "Install from URL" field and press Install. The dashboard
+        /// renders its form after load, so the script polls for it briefly.
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: i32) {
+            let Some(frame) = frame else { return };
+            if frame.is_main() == 0 {
+                return;
+            }
+            let url = CefString::from(&frame.url()).to_string();
+            if !(url.starts_with("chrome-extension://") && url.contains("/options.html")) {
+                return;
+            }
+            let Some(script_url) = self.shared.pending_userscript.lock().expect("pending userscript").take() else { return };
+            let code = format!(
+                r#"(() => {{
+  const url = {url_json};
+  let tries = 0;
+  const timer = setInterval(() => {{
+    const input = document.getElementById("input_dXRpbHNfdXRpbHM_url") || [...document.querySelectorAll("input[type=text]")].find((i) => /url$/i.test(i.id));
+    const button = document.getElementById("input_dXRpbHNfdXRpbHNfaV91cmw_") || [...document.querySelectorAll("input[type=button]")].find((b) => b.value === "Install");
+    if (input && button) {{
+      clearInterval(timer);
+      input.focus();
+      input.value = url;
+      input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+      input.dispatchEvent(new Event("change", {{ bubbles: true }}));
+      button.click();
+    }} else if (++tries > 60) {{
+      clearInterval(timer);
+    }}
+  }}, 100);
+}})();"#,
+                url_json = serde_json::to_string(&script_url).expect("string json")
+            );
+            frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
         }
     }
 }
@@ -670,6 +771,7 @@ pub fn browser_close(window: Window, state: tauri::State<'_, BrowserState>) -> R
     let shared = state.0.clone();
     on_main(&window, move || {
         if let Some(host) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.host()) {
+            CLOSING_BY_APP.store(true, Ordering::SeqCst);
             host.close_browser(1);
         }
     })
@@ -694,6 +796,8 @@ pub struct ExtensionInfo {
     pub path: String,
     /// Installed or changed since CEF started; a restart picks it up.
     pub pending: bool,
+    /// Ships with the app and cannot be removed.
+    pub builtin: bool,
 }
 
 /// A Web Store id is 32 letters from a to p. Accepts the bare id or any store URL that
@@ -760,7 +864,8 @@ fn list_extensions(shared: &Shared) -> Vec<ExtensionInfo> {
             let (name, version) = read_manifest(&path)?;
             let id = entry.file_name().to_string_lossy().into_owned();
             let pending = INITIALIZED.load(Ordering::SeqCst) && !loaded.contains(&id);
-            Some(ExtensionInfo { pending, path: path.to_string_lossy().into_owned(), id, name, version })
+            let builtin = id == BUNDLED_COMPANION_DIR;
+            Some(ExtensionInfo { pending, builtin, path: path.to_string_lossy().into_owned(), id, name, version })
         })
         .collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -804,7 +909,353 @@ fn install_extension(shared: &Shared, source: &str) -> Result<ExtensionInfo, Str
     }
 
     let (name, version) = read_manifest(&target).unwrap_or_default();
-    Ok(ExtensionInfo { pending: true, path: target.to_string_lossy().into_owned(), id, name, version })
+    Ok(ExtensionInfo { pending: true, builtin: false, path: target.to_string_lossy().into_owned(), id, name, version })
+}
+
+/// The Competitive Companion build shipped with the app (src-tauri/extensions): the
+/// upstream extension plus DOJ parsers, which the Web Store version lacks. Unpacked into
+/// the profile at start-up so CEF loads it like any other extension.
+const BUNDLED_COMPANION_DIR: &str = "competitive-companion";
+const BUNDLED_COMPANION: &[(&str, &[u8])] = &[
+    ("manifest.json", include_bytes!("../extensions/competitive-companion/manifest.json")),
+    ("LICENSE", include_bytes!("../extensions/competitive-companion/LICENSE")),
+    ("options.html", include_bytes!("../extensions/competitive-companion/options.html")),
+    ("js/background.js", include_bytes!("../extensions/competitive-companion/js/background.js")),
+    ("js/content.js", include_bytes!("../extensions/competitive-companion/js/content.js")),
+    ("js/options.js", include_bytes!("../extensions/competitive-companion/js/options.js")),
+    ("icons/icon-16.png", include_bytes!("../extensions/competitive-companion/icons/icon-16.png")),
+    ("icons/icon-19.png", include_bytes!("../extensions/competitive-companion/icons/icon-19.png")),
+    ("icons/icon-20.png", include_bytes!("../extensions/competitive-companion/icons/icon-20.png")),
+    ("icons/icon-24.png", include_bytes!("../extensions/competitive-companion/icons/icon-24.png")),
+    ("icons/icon-32.png", include_bytes!("../extensions/competitive-companion/icons/icon-32.png")),
+    ("icons/icon-38.png", include_bytes!("../extensions/competitive-companion/icons/icon-38.png")),
+    ("icons/icon-48.png", include_bytes!("../extensions/competitive-companion/icons/icon-48.png")),
+    ("icons/icon-64.png", include_bytes!("../extensions/competitive-companion/icons/icon-64.png")),
+    ("icons/icon-96.png", include_bytes!("../extensions/competitive-companion/icons/icon-96.png")),
+    ("icons/icon-128.png", include_bytes!("../extensions/competitive-companion/icons/icon-128.png")),
+];
+
+/// Extensions installed from the Web Store the first time the app runs: Carrot (Codeforces
+/// rating predictions) and Tampermonkey (runs the AtCoder Better! userscript). Each id is
+/// tried once and recorded, so removing one afterwards is respected.
+const DEFAULT_EXTENSIONS: &[(&str, &str)] = &[
+    ("gakohpplicjdhhfllilcjpfildodfnnn", "Carrot"),
+    ("dhdgffkkebhmkfjojejmpbldmpobfkfo", "Tampermonkey"),
+];
+const DEFAULTS_MARKER: &str = "defaults.json";
+/// Tampermonkey's Web Store id (the second DEFAULT_EXTENSIONS entry).
+const TAMPERMONKEY_ID: &str = "dhdgffkkebhmkfjojejmpbldmpobfkfo";
+
+/// Writes the bundled Competitive Companion into the extensions directory when the copy
+/// there is missing or from another build, and drops a Web Store copy, which would parse
+/// every page a second time.
+fn sync_bundled_companion(dir: &std::path::Path) -> Result<(), String> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (name, bytes) in BUNDLED_COMPANION {
+        name.hash(&mut hasher);
+        bytes.hash(&mut hasher);
+    }
+    let stamp = format!("{:016x}", hasher.finish());
+    let target = dir.join(BUNDLED_COMPANION_DIR);
+    let store_copy = dir.join(COMPANION_ID);
+    if std::fs::read_to_string(target.join(".mild-bundled")).ok().as_deref() != Some(stamp.as_str()) {
+        let staging = dir.join(format!(".{BUNDLED_COMPANION_DIR}.partial"));
+        let _ = std::fs::remove_dir_all(&staging);
+        for (name, bytes) in BUNDLED_COMPANION {
+            let path = staging.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+            }
+            std::fs::write(&path, bytes).map_err(|error| format!("{name}: {error}"))?;
+        }
+        std::fs::write(staging.join(".mild-bundled"), &stamp).map_err(|error| error.to_string())?;
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::rename(&staging, &target).map_err(|error| error.to_string())?;
+    }
+    if store_copy.is_dir() {
+        let _ = std::fs::remove_dir_all(&store_copy);
+        eprintln!("[cef] removed the Web Store Competitive Companion; the bundled build replaces it");
+    }
+    Ok(())
+}
+
+fn install_default_extensions(app: &AppHandle, shared: &Shared, cache_dir: &std::path::Path) {
+    let marker = cache_dir.join(DEFAULTS_MARKER);
+    let mut done: Vec<String> = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let dir = cache_dir.join("extensions");
+    let mut changed = false;
+    for (id, name) in DEFAULT_EXTENSIONS {
+        if done.iter().any(|entry| entry == id) || dir.join(id).is_dir() {
+            continue;
+        }
+        match install_extension(shared, id) {
+            Ok(_) => {
+                eprintln!("[cef] installed {name} from the Web Store");
+                done.push((*id).to_string());
+                changed = true;
+            }
+            Err(error) => eprintln!("[cef] could not install {name}: {error}"),
+        }
+    }
+    if changed {
+        let _ = std::fs::write(&marker, serde_json::to_string(&done).expect("id list"));
+        let _ = app.emit("browser-extensions-changed", ());
+    }
+}
+
+/// The id Chromium gives an unpacked extension: the first 16 bytes of the SHA-256 of its
+/// absolute path, written with the letters a-p.
+fn unpacked_extension_id(path: &std::path::Path) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(path.to_string_lossy().as_bytes());
+    digest[..16].iter().flat_map(|byte| [byte >> 4, byte & 0x0f]).map(|nibble| (b'a' + nibble) as char).collect()
+}
+
+fn manifest_requests_user_scripts(dir: &std::path::Path) -> bool {
+    std::fs::read_to_string(dir.join("manifest.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|manifest| manifest.get("permissions")?.as_array().map(|list| list.iter().any(|item| item == "userScripts")))
+        .unwrap_or(false)
+}
+
+/// Chromium 138+ keeps the userScripts API switched off until "Allow user scripts" is
+/// turned on per extension in chrome://extensions, which the panel cannot show. The switch
+/// is an ordinary extension pref (`user_scripts_enabled`), so it is written here through
+/// CEF's preference store for every installed extension that asks for the permission
+/// (Tampermonkey). Runs right after CEF starts, before the extensions finish loading, so
+/// the flag is in place when Chromium first checks it.
+fn allow_user_scripts(extensions: &[PathBuf]) {
+    let wanting: Vec<&PathBuf> = extensions.iter().filter(|path| manifest_requests_user_scripts(path)).collect();
+    if wanting.is_empty() {
+        return;
+    }
+    let Some(context) = request_context_get_global_context() else { return };
+    let name = CefString::from("extensions.settings");
+    let mut value = match context.preference(Some(&name)) {
+        Some(value) => value,
+        None => match value_create() {
+            Some(value) => value,
+            None => return,
+        },
+    };
+    if value.dictionary().is_none() {
+        let Some(mut fresh) = dictionary_value_create() else { return };
+        value.set_dictionary(Some(&mut fresh));
+    }
+    let Some(settings) = value.dictionary() else { return };
+    let flag = CefString::from("user_scripts_enabled");
+    let mut changed = false;
+    for path in wanting {
+        let key = CefString::from(unpacked_extension_id(path).as_str());
+        if settings.dictionary(Some(&key)).is_none() {
+            let Some(mut entry) = dictionary_value_create() else { continue };
+            settings.set_dictionary(Some(&key), Some(&mut entry));
+        }
+        let Some(entry) = settings.dictionary(Some(&key)) else { continue };
+        if entry.bool(Some(&flag)) == 0 {
+            entry.set_bool(Some(&flag), 1);
+            changed = true;
+            eprintln!("[cef] user scripts allowed for {}", path.display());
+        }
+    }
+    if changed {
+        let mut error = CefString::from("");
+        if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
+            eprintln!("[cef] could not enable user scripts: {error}");
+        }
+    }
+}
+
+// ---- Extension tab host -------------------------------------------------------------
+//
+// Chromium routes an extension's chrome.tabs.create to "the current window", and an Alloy
+// child view is not one: the call fails with "No current window". That is how Tampermonkey
+// opens its install dialog, so without a window no userscript can be installed. A hidden
+// Chrome-style Views window gives the profile one such window. Tabs it receives are never
+// shown: TabRequestHandler cancels their navigation and loads the URL in the panel instead,
+// where the page works like any other.
+
+wrap_client! {
+    struct TabClient {
+        app: AppHandle,
+    }
+
+    impl Client {
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(TabLifeSpanHandler::new(self.app.clone()))
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(TabRequestHandler::new(self.app.clone()))
+        }
+    }
+}
+
+wrap_life_span_handler! {
+    struct TabLifeSpanHandler {
+        app: AppHandle,
+    }
+
+    impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            let Some(browser) = browser else { return };
+            eprintln!("[cef] tab host: browser #{} created", browser.identifier());
+            // Whatever Views window holds it (the host, or one Chromium made) stays off screen.
+            match browser_view_get_for_browser(Some(browser)).and_then(|view| view.window()) {
+                Some(window) => window.hide(),
+                None => eprintln!("[cef] tab host: browser #{} is not in a Views window", browser.identifier()),
+            }
+        }
+
+        /// Extensions may close the tab they think they opened; the host's own view stays.
+        fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
+            let Some(browser) = browser else { return 0 };
+            let state = self.app.state::<BrowserState>();
+            if is_host_browser(&state.0, browser) {
+                eprintln!("[cef] tab host: refused to close the host view");
+                return 1;
+            }
+            0
+        }
+
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            eprintln!("[cef] tab host: browser #{} closed", browser.map(|browser| browser.identifier()).unwrap_or(0));
+        }
+    }
+}
+
+wrap_request_handler! {
+    struct TabRequestHandler {
+        app: AppHandle,
+    }
+
+    impl RequestHandler {
+        fn on_before_browse(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, _user_gesture: i32, _is_redirect: i32) -> i32 {
+            let Some(request) = request else { return 0 };
+            let url = CefString::from(&request.url()).to_string();
+            if url.is_empty() || url == "about:blank" || frame.is_some_and(|frame| frame.is_main() == 0) {
+                return 0;
+            }
+            let state = self.app.state::<BrowserState>();
+            // Tampermonkey opens its own welcome page after an install or update; that is
+            // not worth taking the panel away from the user's problem.
+            if url.contains("tampermonkey.net/installed.php") {
+                eprintln!("[cef] tab host: dropped {url}");
+            } else {
+                eprintln!("[cef] tab host: {url} opens in the panel");
+                let panel = state.0.browser.lock().expect("browser").clone();
+                match panel.as_ref().and_then(|browser| browser.main_frame()) {
+                    Some(main_frame) => main_frame.load_url(Some(&CefString::from(url.as_str()))),
+                    None => eprintln!("[cef] tab host: no panel to show {url}"),
+                }
+            }
+            // A tab Chromium opened in a window of its own is not needed once relayed; the
+            // host's own view stays for the next request.
+            if let Some(browser) = _browser {
+                if !is_host_browser(&state.0, browser) {
+                    if let Some(host) = browser.host() {
+                        CLOSING_BY_APP.store(true, Ordering::SeqCst);
+                        host.close_browser(1);
+                    }
+                }
+            }
+            1
+        }
+    }
+}
+
+wrap_browser_view_delegate! {
+    struct TabHostViewDelegate {
+        app: AppHandle,
+    }
+
+    impl ViewDelegate {}
+
+    impl BrowserViewDelegate {
+        fn browser_runtime_style(&self) -> RuntimeStyle {
+            RuntimeStyle::CHROME
+        }
+
+        fn chrome_toolbar_type(&self, _browser_view: Option<&mut BrowserView>) -> ChromeToolbarType {
+            ChromeToolbarType::NONE
+        }
+
+        fn delegate_for_popup_browser_view(&self, _browser_view: Option<&mut BrowserView>, _settings: Option<&BrowserSettings>, _client: Option<&mut Client>, _is_devtools: i32) -> Option<BrowserViewDelegate> {
+            Some(TabHostViewDelegate::new(self.app.clone()))
+        }
+
+        fn on_popup_browser_view_created(&self, _browser_view: Option<&mut BrowserView>, popup_browser_view: Option<&mut BrowserView>, _is_devtools: i32) -> i32 {
+            eprintln!("[cef] tab host: popup browser view created");
+            // Handled: it gets no window. TabRequestHandler sends its page to the panel.
+            if let Some(popup) = popup_browser_view {
+                let state = self.app.state::<BrowserState>();
+                state.0.tab_host_popups.lock().expect("tab host popups").push(popup.clone());
+            }
+            1
+        }
+    }
+}
+
+wrap_window_delegate! {
+    struct TabHostWindowDelegate {
+        browser_view: Arc<Mutex<Option<BrowserView>>>,
+    }
+
+    impl ViewDelegate {}
+
+    impl PanelDelegate {}
+
+    impl WindowDelegate {
+        fn on_window_created(&self, window: Option<&mut cef::Window>) {
+            let Some(window) = window else { return };
+            if let Some(browser_view) = self.browser_view.lock().expect("tab host view").take() {
+                let mut view = View::from(&browser_view);
+                window.add_child_view(Some(&mut view));
+            }
+            // Deliberately never shown.
+        }
+
+        fn is_frameless(&self, _window: Option<&mut cef::Window>) -> i32 {
+            1
+        }
+
+        /// The host must outlive every extension request: Chromium treats the last
+        /// browser window closing as the end of the session.
+        fn can_close(&self, _window: Option<&mut cef::Window>) -> i32 {
+            0
+        }
+
+        fn window_runtime_style(&self) -> RuntimeStyle {
+            RuntimeStyle::CHROME
+        }
+    }
+}
+
+/// Whether `browser` is the tab host's own view (as opposed to a tab Chromium opened elsewhere).
+fn is_host_browser(shared: &Shared, browser: &mut Browser) -> bool {
+    browser_view_get_for_browser(Some(browser)).and_then(|view| view.window()).is_some_and(|window| {
+        shared.tab_host.lock().expect("tab host").as_ref().is_some_and(|host| host.is_same(Some(&mut View::from(&window))) != 0)
+    })
+}
+
+fn create_tab_host(app: &AppHandle, shared: &Shared) {
+    let mut client = TabClient::new(app.clone());
+    let mut view_delegate = TabHostViewDelegate::new(app.clone());
+    let settings = BrowserSettings::default();
+    let Some(browser_view) = browser_view_create(Some(&mut client), Some(&CefString::from("about:blank")), Some(&settings), None, None, Some(&mut view_delegate)) else {
+        eprintln!("[cef] tab host: could not create the browser view");
+        return;
+    };
+    let mut window_delegate = TabHostWindowDelegate::new(Arc::new(Mutex::new(Some(browser_view))));
+    match window_create_top_level(Some(&mut window_delegate)) {
+        Some(window) => *shared.tab_host.lock().expect("tab host") = Some(window),
+        None => eprintln!("[cef] tab host: could not create the window"),
+    }
 }
 
 /// Competitive Companion's Web Store id.
@@ -922,18 +1373,38 @@ fn random_token() -> String {
     format!("{a:016x}{b:016x}")
 }
 
+/// Installs a userscript through Tampermonkey. Its own install page cannot open here
+/// (it asks Chromium for a new tab), but the dashboard's "Install from URL" can, so the
+/// panel loads that dashboard and `MildLoadHandler` fills the form in; Tampermonkey's
+/// confirmation then appears in the panel like any other page.
+#[tauri::command]
+pub fn browser_install_userscript(window: Window, state: tauri::State<'_, BrowserState>, url: String, bounds: PanelBounds) -> Result<(), String> {
+    let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
+    let tampermonkey = dir.join(TAMPERMONKEY_ID);
+    if !tampermonkey.join("manifest.json").is_file() {
+        return Err("Tampermonkey is not installed yet. It is downloaded on the first start; check the extension list.".into());
+    }
+    if INITIALIZED.load(Ordering::SeqCst) && !state.0.loaded_extensions.lock().expect("loaded extensions").contains(TAMPERMONKEY_ID) {
+        return Err("Tampermonkey was installed after the browser started. Restart the app first.".into());
+    }
+    let dashboard = format!("chrome-extension://{}/options.html#nav=utils", unpacked_extension_id(&tampermonkey));
+    *state.0.pending_userscript.lock().expect("pending userscript") = Some(url);
+    browser_open(window, state, dashboard, bounds)
+}
+
 /// Asks Competitive Companion to parse the page in the panel: the editor's toolbar button
 /// stands in for the extension's own. Ok(false) when the extension is not installed, so
 /// the caller can fall back to the built-in importer.
 #[tauri::command]
 pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>) -> Result<bool, String> {
     let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
-    let Ok(text) = std::fs::read_to_string(dir.join(COMPANION_ID).join(BRIDGE_META)) else { return Ok(false) };
+    let Some(bridge) = [BUNDLED_COMPANION_DIR, COMPANION_ID].iter().find(|name| dir.join(name).join(BRIDGE_META).is_file()) else { return Ok(false) };
+    let text = std::fs::read_to_string(dir.join(bridge).join(BRIDGE_META)).map_err(|error| error.to_string())?;
     let nonce = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|meta| meta.get("nonce")?.as_str().map(str::to_owned))
-        .ok_or("The Competitive Companion bridge is damaged. Reinstall the extension.")?;
-    if !state.0.loaded_extensions.lock().expect("loaded extensions").contains(COMPANION_ID) {
+        .ok_or("The Competitive Companion bridge is damaged. Restart the app to rebuild it.")?;
+    if !state.0.loaded_extensions.lock().expect("loaded extensions").contains(*bridge) {
         return Err("Competitive Companion was installed after the browser started. Restart the app to use it.".into());
     }
     if state.0.browser.lock().expect("browser").is_none() {
@@ -967,6 +1438,9 @@ pub async fn browser_extension_install(state: tauri::State<'_, BrowserState>, so
 #[tauri::command]
 pub fn browser_extension_remove(state: tauri::State<'_, BrowserState>, id: String) -> Result<(), String> {
     let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
+    if id == BUNDLED_COMPANION_DIR {
+        return Err("Competitive Companion ships with Mild Editor and cannot be removed.".into());
+    }
     let id = extension_id_from_source(&id).ok_or("Unknown extension id.")?;
     std::fs::remove_dir_all(dir.join(&id)).map_err(|error| format!("Could not remove the extension: {error}"))?;
     // It stays loaded in the running CEF until the next start; the list reports it gone.
