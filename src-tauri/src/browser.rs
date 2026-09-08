@@ -5,6 +5,10 @@
 //! Better run against the problem page. The frontend owns the panel's rectangle and
 //! reports it here; this module positions the native view over that rectangle.
 //!
+//! macOS loads the framework from the app bundle and runs sub-processes from helper
+//! bundles; Windows links libcef.dll from next to the executable, with resources and
+//! locales beside it, and sub-processes re-enter this executable (see main.rs).
+//!
 //! Threading: every CEF call happens on the main thread. Commands arrive on Tauri's
 //! worker pool and hop over with `run_on_main_thread`. CEF's own message loop is pumped
 //! from the main thread through `external_message_pump` plus a 60 Hz fallback timer, the
@@ -260,6 +264,12 @@ fn ensure_initialized(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), Strin
 /// Chromium marks a profile in use with a `SingletonLock` symlink pointing at
 /// `<host>-<pid>`. After a relaunch the previous process may still be shutting down, and
 /// starting CEF against its profile would make Chromium defer to it; wait for it briefly.
+/// Windows Chromium uses a hidden message window instead of the symlink, so there is
+/// nothing to wait for there.
+#[cfg(not(unix))]
+fn wait_for_profile_lock(_cache_dir: &std::path::Path) {}
+
+#[cfg(unix)]
 fn wait_for_profile_lock(cache_dir: &std::path::Path) {
     let lock = cache_dir.join("SingletonLock");
     for _ in 0..20 {
@@ -1011,7 +1021,19 @@ fn install_default_extensions(app: &AppHandle, shared: &Shared, cache_dir: &std:
 /// absolute path, written with the letters a-p.
 fn unpacked_extension_id(path: &std::path::Path) -> String {
     use sha2::Digest;
-    let digest = sha2::Sha256::digest(path.to_string_lossy().as_bytes());
+    // Chromium hashes the path in its native string type (crx_file/id_util.cc): UTF-8 on
+    // macOS and Linux, UTF-16 on Windows, where it also upper-cases the drive letter first.
+    #[cfg(windows)]
+    let bytes: Vec<u8> = {
+        let mut text = path.to_string_lossy().into_owned();
+        if text.len() >= 2 && text.as_bytes()[1] == b':' && text.as_bytes()[0].is_ascii_lowercase() {
+            text.replace_range(0..1, &text[0..1].to_ascii_uppercase());
+        }
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    };
+    #[cfg(not(windows))]
+    let bytes: Vec<u8> = path.to_string_lossy().as_bytes().to_vec();
+    let digest = sha2::Sha256::digest(&bytes);
     digest[..16].iter().flat_map(|byte| [byte >> 4, byte & 0x0f]).map(|nibble| (b'a' + nibble) as char).collect()
 }
 

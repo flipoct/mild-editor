@@ -150,7 +150,20 @@ npm run build:cef    # tauri build with the CEF layer (framework + helpers bundl
 
 The sub-process helper is its own package, `src-tauri/cef-helper`, rather than a second binary of the app: the macOS bundler copies every binary of a package into `Contents/MacOS`, where a second helper is useless and, cross-compiled to Intel, unsigned — the linker ad-hoc signs arm64 binaries but not cross-built x86_64 ones, and `codesign` refuses to sign a bundle whose nested code is unsigned. It is a workspace member, so it shares the target directory and CEF is compiled once.
 
-The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable. The panel is macOS-only for now; the Windows code path exists but the installer does not yet ship CEF next to the executable.
+The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable.
+
+On Windows the layer is `src-tauri/tauri.cef.windows.conf.json`: `scripts/prepare-cef.ps1` copies the runtime files (libcef.dll, the `.pak`/`.bin`/`.dat` resources and `locales/`) from `CEF_PATH` into `src-tauri/cef/win/`, which the NSIS installer places next to the executable, where libcef.dll expects them. The `cef` crate builds `libcef_dll_wrapper` with CMake's Ninja generator, so a Visual Studio C++ toolchain, CMake and Ninja must be on PATH (run from a Developer PowerShell, or `choco install ninja`). CEF only ships MSVC builds; a GNU-toolchain build keeps the stub. Sub-processes re-enter the main executable, so there is no separate helper on Windows.
+
+```powershell
+git clone https://github.com/tauri-apps/cef-rs; cd cef-rs; git checkout cef-v151.8.1+151.3.24
+cargo run -p export-cef-dir -- --force --target x86_64-pc-windows-msvc "$env:USERPROFILE/.local/share/cef"
+$env:CEF_PATH = "$env:USERPROFILE/.local/share/cef"
+
+npm run dev:cef:win     # the cef crate copies the runtime next to the dev binary itself
+npm run build:cef:win   # stages src-tauri/cef/win and builds the installer with it
+```
+
+Linux still gets the stub.
 
 Three extensions come with the app. Competitive Companion is bundled in `src-tauri/extensions` (a build that also parses doj.kr) and unpacked into the profile at start-up; Carrot and Tampermonkey are downloaded from the Web Store the first time the app runs. **Settings → problem browser** installs AtCoder Better! into Tampermonkey with one click, and takes a Chrome Web Store link or extension id for anything else: the app downloads the `.crx`, unpacks it into its profile and loads it on the next start (the page offers a restart).
 

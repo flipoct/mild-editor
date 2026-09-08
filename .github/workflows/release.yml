@@ -30,7 +30,7 @@ jobs:
             args: ""
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            args: ""
+            args: --config src-tauri/tauri.cef.windows.conf.json
 
     runs-on: ${{ matrix.platform }}
 
@@ -63,6 +63,22 @@ jobs:
           (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force --target ${{ matrix.target }} "$RUNNER_TEMP/cef")
           echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
 
+      - name: Install CEF (Windows)
+        if: matrix.platform == 'windows-latest'
+        # Same pinned binaries as macOS. The cef crate builds libcef_dll_wrapper with CMake's
+        # Ninja generator, which needs cl.exe on PATH: msvc-dev-cmd below provides it.
+        shell: pwsh
+        run: |
+          choco install ninja --no-progress -y
+          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$env:RUNNER_TEMP/cef-rs"
+          Push-Location "$env:RUNNER_TEMP/cef-rs"
+          cargo run -p export-cef-dir -- --force --target ${{ matrix.target }} "$env:RUNNER_TEMP/cef"
+          Pop-Location
+          "CEF_PATH=$env:RUNNER_TEMP/cef" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.platform == 'windows-latest'
+
       - run: npm ci
 
       # tauri-action runs `tauri build` itself, so the framework and helper bundles are
@@ -72,6 +88,11 @@ jobs:
         # The target is passed so the helper binary is built for the architecture being
         # bundled rather than for the runner.
         run: scripts/prepare-cef.sh release ${{ matrix.target }}
+
+      - name: Stage CEF for the bundle (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: scripts/prepare-cef.ps1
 
       - name: Test application
         # --all-targets so a binary that fails to compile is reported here rather than
@@ -97,6 +118,8 @@ jobs:
             - **Drag to arrange.** Take a panel by the grip in its top-left corner, or by its chip in the status bar, and drop it against an edge: left or right for a column of its own, top or bottom to stack it in that column.
             - **Resize both ways.** Dividers between columns set widths, dividers between stacked panels set heights, and the pair keeps its combined size so nothing else moves.
             - The layout popover gains ▲ ▼ and ⇥ beside ◀ ▶, and `Alt` with the arrow keys on a chip does the same.
+            - **The problem panel comes to Windows.** The installer now ships the embedded Chromium, so the panel, its import button and the extensions work the same as on macOS. The portable build is a zip with the runtime beside the exe.
+            - The problem panel, panel chips and layout popover follow the selected theme instead of keeping their own greys.
 
             See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.8.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
@@ -105,17 +128,22 @@ jobs:
           releaseAssetNamePattern: Mild-Editor_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
 
-      - name: Upload Windows portable executable
+      - name: Upload Windows portable build
         if: matrix.platform == 'windows-latest'
+        # The executable imports libcef.dll, so the portable build is a zip of the exe with
+        # the CEF runtime beside it rather than a bare exe.
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           $version = node -p "require('./package.json').version"
-          $asset = "Mild-Editor_${version}_windows_x64-portable.exe"
-          Copy-Item -LiteralPath "src-tauri/target/release/mild-editor.exe" -Destination $asset
-          gh release upload $env:RELEASE_TAG $asset --clobber
+          $stage = "Mild-Editor_${version}_windows_x64-portable"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item -LiteralPath "src-tauri/target/release/mild-editor.exe" -Destination $stage
+          Copy-Item -Path "src-tauri/cef/win/*" -Destination $stage -Recurse
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -CompressionLevel Optimal
+          gh release upload $env:RELEASE_TAG "$stage.zip" --clobber
 
       - name: Verify macOS app signature
         if: startsWith(matrix.platform, 'macos')

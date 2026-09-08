@@ -7,6 +7,8 @@
 - Resize in both directions. The divider between two columns still sets their widths, and a new divider between stacked panels sets their heights. A pair keeps its combined size, so the rest of the workspace does not move.
 - The layout popover gains ▲ ▼ to move a panel inside its column and ⇥ to give it a column of its own, next to the ◀ ▶ that move it between columns. `Alt` with the arrow keys on a chip does the same.
 - Panel sizes are now shares of the window rather than pixel widths, so a layout keeps its proportions when the window is resized. Widths set in an earlier version are carried over once.
+- The problem panel comes to Windows. The installer ships the embedded Chromium next to the executable, so the panel, its import button and the extensions work as on macOS; the portable build becomes a zip with the runtime beside the exe. Chromium derives an unpacked extension's id from the UTF-16 form of its path on Windows, and the editor now does the same, so Tampermonkey's user-script switch lands on the right extension there.
+- The problem panel, the panel chips and the layout popover follow the selected theme. They had shipped with their own fixed greys, so a light theme left a dark toolbar and popover.
 
 ## 1.7.1
 
