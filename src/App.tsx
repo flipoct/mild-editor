@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -369,7 +369,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide, drag to move", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -397,7 +397,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
-    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기, 드래그: 위치 이동", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -441,6 +441,7 @@ function App() {
   const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
   const resizeRef = useRef<{ panel: PanelId; sign: 1 | -1; startX: number; startWidth: number; width: number } | null>(null);
   const [layoutOrder, setLayoutOrder] = useState<PanelId[]>(storedPanelOrder);
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -2418,6 +2419,14 @@ function App() {
     return next;
   });
   const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
+  /** The user's choice for a panel, before the gates (open tabs, a workspace) that may hide it anyway. */
+  const panelWanted = (id: PanelId) => id === "editor" || (id === "tests" ? testPanelVisible : id === "problem" ? problemPanelOpen : explorerVisible);
+  const resetLayout = () => {
+    setLayoutOrder([...PANEL_IDS]);
+    setTestPanelVisible(true);
+    setExplorerVisible(true);
+    setProblemPanelOpen(false);
+  };
 
   // ── Problem panel ────────────────────────────────────────────────────────────
 
@@ -2444,6 +2453,18 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-panel-order", JSON.stringify(layoutOrder));
   }, [layoutOrder]);
+
+  useEffect(() => {
+    if (!layoutMenuOpen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopImmediatePropagation(); setLayoutMenuOpen(false); } };
+    const onPointer = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || event.target.closest(".layout-popover, .layout-button")) return;
+      setLayoutMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("mousedown", onPointer, true);
+    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("mousedown", onPointer, true); };
+  }, [layoutMenuOpen]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2520,19 +2541,6 @@ function App() {
     } catch (error) {
       setExtensionError(error instanceof Error ? error.message : String(error));
     }
-  };
-
-  // Window dragging from the custom title bar. Windows and Linux use Tauri's
-  // data-tauri-drag-region handler; on macOS that path can crash on a nil current event
-  // once CEF shares the main loop, so the drag goes through a nil-safe native command.
-  const dragRegion = isMac ? {} : { "data-tauri-drag-region": true };
-  const titlebarMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (!isMac || !("__TAURI_INTERNALS__" in window) || event.button !== 0) return;
-    const target = event.target as Element;
-    if (target.closest("button, input, select, textarea, [role=tab], .tab, .titlebar-tools")) return;
-    event.preventDefault();
-    if (event.detail >= 2) { void getCurrentWindow().toggleMaximize(); return; }
-    void invoke("mac_drag_window");
   };
 
   const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
@@ -2626,6 +2634,7 @@ function App() {
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
         case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
         case "view:panel-problem": setProblemPanelOpen((open) => !open); break;
+        case "view:layout": setLayoutMenuOpen((open) => !open); break;
         case "view:zoom-in": adjustUiZoom(UI_ZOOM_STEP); break;
         case "view:zoom-out": adjustUiZoom(-UI_ZOOM_STEP); break;
         case "view:zoom-reset": setUiZoom(100); break;
@@ -2906,13 +2915,13 @@ function App() {
         "--acrylic-blur": `${acrylicBlur}px`,
       } as CSSProperties}
     >
-      <div className="window-titlebar" {...dragRegion} onMouseDown={titlebarMouseDown}>
-        <div className="titlebar-identity" {...dragRegion}>
+      <div className="window-titlebar" data-tauri-drag-region>
+        <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo" aria-hidden="true">m</span>
-          <span className="titlebar-name" {...dragRegion}>mild editor</span>
-          {IS_DEV_BUILD && <span className="titlebar-dev" {...dragRegion} title="tauri dev build">dev</span>}
-          <span className="titlebar-separator" {...dragRegion}>·</span>
-          <span className="titlebar-file" {...dragRegion}>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
+          <span className="titlebar-name" data-tauri-drag-region>mild editor</span>
+          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
+          <span className="titlebar-separator" data-tauri-drag-region>·</span>
+          <span className="titlebar-file" data-tauri-drag-region>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
         </div>
         <div className="titlebar-tools">
           <div className="file-actions">
@@ -3462,17 +3471,32 @@ function App() {
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
         <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
+          <button className={`layout-button ${layoutMenuOpen ? "active" : ""}`} onClick={() => setLayoutMenuOpen((open) => !open)} aria-haspopup="dialog" aria-expanded={layoutMenuOpen} title={t("layoutTitle")}>⇄</button>
           {layoutOrder.map((id) => (
-            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""}`} draggable
+            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""}`}
               aria-pressed={id === "editor" ? undefined : panelShown(id)} data-panel={id}
               onClick={() => togglePanel(id)}
-              onDragStart={(event) => { event.dataTransfer.setData("text/plain", id); event.dataTransfer.effectAllowed = "move"; }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => { event.preventDefault(); const from = event.dataTransfer.getData("text/plain") as PanelId; if (PANEL_IDS.includes(from)) movePanelTo(from, id); }}
               onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); } }}
             >{chipLabel(id)}</button>
           ))}
         </div>
+        {layoutMenuOpen && <div className="layout-popover" role="dialog" aria-label={t("layoutTitle")}>
+          <div className="layout-head"><strong>{t("layoutTitle")}</strong><button className="layout-close" onClick={() => setLayoutMenuOpen(false)} aria-label="close">×</button></div>
+          <p>{t("layoutHint")}</p>
+          <div className="layout-rows">
+            {layoutOrder.map((id, index) => (
+              <div className="layout-row" key={id} data-panel={id}>
+                <span className="layout-name">{chipLabel(id)}</span>
+                <button onClick={() => shiftPanel(id, -1)} disabled={index === 0} aria-label={`move ${chipLabel(id)} left`} title="◀">◀</button>
+                <button onClick={() => shiftPanel(id, 1)} disabled={index === layoutOrder.length - 1} aria-label={`move ${chipLabel(id)} right`} title="▶">▶</button>
+                {id === "editor"
+                  ? <span className="layout-always">{t("layoutShow")}</span>
+                  : <label className="layout-show"><input type="checkbox" checked={panelWanted(id)} onChange={() => togglePanel(id)} />{t("layoutShow")}</label>}
+              </div>
+            ))}
+          </div>
+          <div className="layout-foot"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div>
+        </div>}
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;

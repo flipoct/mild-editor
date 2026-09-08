@@ -2434,8 +2434,7 @@ pub fn run() {
             browser::browser_close,
             browser::browser_extensions_list,
             browser::browser_extension_install,
-            browser::browser_extension_remove,
-            browser::mac_drag_window
+            browser::browser_extension_remove
         ])
         .on_window_event(|window, event| {
             match event {

@@ -672,25 +672,6 @@ pub fn browser_close(window: Window, state: tauri::State<'_, BrowserState>) -> R
     })
 }
 
-/// Start a native window drag from the custom title bar.
-///
-/// Tauri's own drag path (`plugin:window|start_dragging`) reads `[NSApp currentEvent]`
-/// on the main thread and crashes the process when that is nil, which it can be once a
-/// drag request lands between events — something that happens readily with CEF pumping
-/// work on the same loop. This does the same thing but synthesises a mouse-down at the
-/// pointer when there is no current event, the way tao already does for its own proxy
-/// events.
-#[tauri::command]
-pub fn mac_drag_window(window: Window) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let target = window.clone();
-        return on_main(&window, move || mac::drag_window(&target));
-    }
-    #[allow(unreachable_code)]
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------------------
 // Extensions. CEF has no Web Store UI and loads extensions only from unpacked directories
 // named on the command line at start-up, so installing means: fetch the .crx Google serves
@@ -983,36 +964,6 @@ mod mac {
         window.ns_view().map_err(|error| error.to_string())
     }
 
-    pub fn drag_window(window: &Window) {
-        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSWindow};
-        use objc2_foundation::NSProcessInfo;
-        let Some(mtm) = MainThreadMarker::new() else { return };
-        let Ok(ns_window) = window.ns_window() else { return };
-        let ns_window: &NSWindow = unsafe { &*(ns_window as *const NSWindow) };
-        let current = NSApplication::sharedApplication(mtm)
-            .currentEvent()
-            .filter(|event| matches!(event.r#type(), NSEventType::LeftMouseDown | NSEventType::LeftMouseDragged));
-        if std::env::var_os("MILD_DEBUG_DRAG").is_some() {
-            eprintln!("[drag] current event usable: {}", current.is_some());
-        }
-        let event = current.or_else(|| {
-            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-                NSEventType::LeftMouseDown,
-                ns_window.mouseLocationOutsideOfEventStream(),
-                NSEventModifierFlags::empty(),
-                NSProcessInfo::processInfo().systemUptime(),
-                ns_window.windowNumber(),
-                None,
-                0,
-                1,
-                1.0,
-            )
-        });
-        if let Some(event) = event {
-            ns_window.performWindowDragWithEvent(&event);
-        }
-    }
-
     /// Convert the frontend's top-left CSS rectangle into the parent view's coordinate
     /// space. AppKit views measure from the bottom-left unless flipped.
     pub fn rect_for(window: &Window, bounds: &PanelBounds) -> Result<Rect, String> {
@@ -1037,6 +988,14 @@ mod mac {
     pub fn apply_bounds(window: &Window, browser: &cef::Browser, bounds: &PanelBounds) -> Result<(), String> {
         let rect = rect_for(window, bounds)?;
         let (host, view) = browser_view(browser).ok_or("browser has no native view")?;
+        if std::env::var_os("MILD_DEBUG_DRAG").is_some() {
+            let parent = window.ns_view().ok().map(|p| p as *const NSView).and_then(|p| unsafe { p.as_ref() });
+            eprintln!(
+                "[panel] css {:?} -> frame x={} y={} w={} h={} | parent flipped={:?} bounds={:?}",
+                (bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale), rect.x, rect.y, rect.width, rect.height,
+                parent.map(|p| p.isFlipped()), parent.map(|p| { let b = p.bounds(); (b.size.width, b.size.height) })
+            );
+        }
         view.setFrame(NSRect::new(NSPoint::new(rect.x as f64, rect.y as f64), NSSize::new(rect.width as f64, rect.height as f64)));
         host.was_resized();
         Ok(())
