@@ -117,6 +117,10 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let panel_interactive = MenuItemBuilder::with_id("view:panel-interactive", "Interactive")
         .accelerator("CmdOrCtrl+Alt+2")
         .build(app)?;
+    let panel_problem = MenuItemBuilder::with_id("view:panel-problem", "Problem Browser")
+        .accelerator("CmdOrCtrl+Alt+3")
+        .build(app)?;
+    let layout = MenuItemBuilder::with_id("view:layout", "Panel Layout…").build(app)?;
 
     let zoom_in = MenuItemBuilder::with_id("view:zoom-in", "Zoom In")
         .accelerator("CmdOrCtrl+=")
@@ -134,6 +138,8 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .separator()
         .item(&panel_tests)
         .item(&panel_interactive)
+        .item(&panel_problem)
+        .item(&layout)
         .separator()
         .item(&zoom_in)
         .item(&zoom_out)

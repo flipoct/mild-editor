@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -48,6 +48,28 @@ type NativeRunResult = {
 };
 
 type PanelMode = "tests" | "interactive";
+/** The four workspace panels. Their left-to-right order is the user's to arrange. */
+type PanelId = "tests" | "editor" | "problem" | "explorer";
+const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
+const storedPanelOrder = (): PanelId[] => {
+  // VITE_PANEL_ORDER=problem,tests,editor,explorer (development only) overrides the stored order.
+  const forced = String(import.meta.env.VITE_PANEL_ORDER || "").split(",").filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId));
+  if (forced.length) return [...new Set([...forced, ...PANEL_IDS])];
+  try {
+    const parsed = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
+    const order = Array.isArray(parsed) ? parsed.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
+    // Anything missing (older builds, new panels) keeps its default place.
+    return [...new Set([...order, ...PANEL_IDS])];
+  } catch { return [...PANEL_IDS]; }
+};
+/** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
+/** An unpacked Chrome extension under the app profile, as listed by `browser_extensions_list`. */
+type BrowserExtension = { id: string; name: string; version: string; path: string; pending: boolean; builtin: boolean };
+/** Installed from the Web Store on first start (see DEFAULT_EXTENSIONS in browser.rs). */
+const TAMPERMONKEY_ID = "dhdgffkkebhmkfjojejmpbldmpobfkfo";
+/** AtCoder Better! only runs under Tampermonkey; Greasy Fork serves the script by id. */
+const ATCODER_BETTER_USERSCRIPT = "https://greasyfork.org/scripts/471106/code/atcoder-better.user.js";
+type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
 type InteractiveExitEvent = { sessionId: string; code: number | null; timeMs: number; stopped: boolean };
@@ -359,6 +381,8 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
+    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -368,7 +392,7 @@ const messages = {
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
     companion: "Competitive Companion", companionEnable: "listen for problems", companionPort: "port",
-    companionHelp: "Install the Competitive Companion browser extension, open a problem, and press its button. Mild Editor creates the file and sample tests automatically. Contest parses arrive as one batch.",
+    companionHelp: "Competitive Companion is built into the problem panel: open a problem or contest page there and press its import button. Mild Editor creates the files and sample tests automatically. The extension in your regular browser works too, as long as it sends to this port.",
     companionListening: "listening", companionOff: "off", companionPortInUse: "port unavailable",
     diff: "diff", showDiff: "compare", showRaw: "raw output", diffExpected: "expected", diffActual: "output", diffWhitespace: "whitespace only",
     interactive: "interactive", interactiveStart: "start interactive run", interactiveSend: "send", interactiveEof: "end input",
@@ -385,6 +409,8 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
+    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -394,7 +420,7 @@ const messages = {
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
     snippetsHelp: "이름과 언어를 정해 스니펫을 만든 뒤 제목 표시줄에서 삽입하거나 snippet::이름을 입력하고 Tab 또는 Enter를 누르세요.",
     companion: "Competitive Companion", companionEnable: "문제 수신 대기", companionPort: "포트",
-    companionHelp: "Competitive Companion 브라우저 확장을 설치하고 문제 페이지에서 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 대회 페이지에서는 문제 전체가 한 번에 들어옵니다.",
+    companionHelp: "Competitive Companion이 문제 패널에 내장되어 있습니다. 패널에서 문제나 대회 페이지를 열고 가져오기 버튼을 누르면 파일과 예제 테스트가 자동으로 만들어집니다. 일반 브라우저의 확장도 이 포트로 보내면 그대로 받습니다.",
     companionListening: "수신 중", companionOff: "꺼짐", companionPortInUse: "포트를 사용할 수 없음",
     diff: "비교", showDiff: "비교 보기", showRaw: "원본 출력", diffExpected: "예상", diffActual: "출력", diffWhitespace: "공백만 다름",
     interactive: "인터렉티브", interactiveStart: "인터렉티브 실행", interactiveSend: "보내기", interactiveEof: "입력 종료",
@@ -426,7 +452,9 @@ function App() {
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const [testPanelWidth, setTestPanelWidth] = useState(() => Number(localStorage.getItem("mild-test-panel-width")) || 306);
   const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
-  const resizeRef = useRef<{ panel: "test" | "explorer"; startX: number; startWidth: number; width: number } | null>(null);
+  const resizeRef = useRef<{ panel: PanelId; sign: 1 | -1; startX: number; startWidth: number; width: number } | null>(null);
+  const [layoutOrder, setLayoutOrder] = useState<PanelId[]>(storedPanelOrder);
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -462,7 +490,11 @@ function App() {
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
   const importInFlightRef = useRef(false);
-  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates">("template");
+  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates" | "browser">("template");
+  const [browserExtensions, setBrowserExtensions] = useState<BrowserExtension[]>([]);
+  const [extensionSource, setExtensionSource] = useState("");
+  const [extensionBusy, setExtensionBusy] = useState(false);
+  const [extensionError, setExtensionError] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: UPDATES_SUPPORTED ? "idle" : "unavailable" });
   // The version the binary actually carries, which is what the updater compares
   // against; package.json is only the fallback for the browser preview.
@@ -519,6 +551,14 @@ function App() {
   const [fullscreen, setFullscreen] = useState(false);
   const [explorerVisible, setExplorerVisible] = useState(() => localStorage.getItem("mild-explorer-visible") !== "0");
   const [testPanelVisible, setTestPanelVisible] = useState(() => localStorage.getItem("mild-test-panel-visible") !== "0");
+  // Embedded Chromium problem panel. The native view is positioned over `.problem-host`;
+  // React only owns the rectangle, the toolbar and the status it is told about.
+  const [problemPanelOpen, setProblemPanelOpen] = useState(() => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
+  const [problemPanelWidth, setProblemPanelWidth] = useState(() => Number(localStorage.getItem("mild-problem-panel-width")) || 460);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus>({ available: false, open: false, visible: false, url: "", title: "", loading: false, canGoBack: false, canGoForward: false });
+  const [problemUrlDraft, setProblemUrlDraft] = useState("");
+  const problemHostRef = useRef<HTMLDivElement | null>(null);
+  const problemUrlEditingRef = useRef(false);
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
   const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
   const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
@@ -604,7 +644,8 @@ function App() {
     return root.children;
   }, [explorerFiles, workspaceDirectories]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated"].includes(fileStatus);
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting")].includes(fileStatus)
+    && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -857,10 +898,13 @@ function App() {
     });
   }, [customFonts]);
 
-  const startPanelResize = (panel: "test" | "explorer", event: ReactPointerEvent<HTMLDivElement>) => {
+  const panelWidthOf = (panel: PanelId) => panel === "tests" ? testPanelWidth : panel === "problem" ? problemPanelWidth : explorerWidth;
+
+  /** `sign` is +1 when the panel sits left of the divider being dragged, -1 when right. */
+  const startPanelResize = (panel: PanelId, sign: 1 | -1, event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const startWidth = panel === "test" ? testPanelWidth : explorerWidth;
-    resizeRef.current = { panel, startX: event.clientX, startWidth, width: startWidth };
+    const startWidth = panelWidthOf(panel);
+    resizeRef.current = { panel, sign, startX: event.clientX, startWidth, width: startWidth };
     event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add("panel-resizing");
   };
@@ -870,15 +914,17 @@ function App() {
       const current = resizeRef.current;
       if (!current) return;
       const delta = event.clientX - current.startX;
-      const width = Math.max(190, Math.min(520, current.startWidth + (current.panel === "test" ? delta : -delta)));
+      const limit = current.panel === "problem" ? 900 : 520;
+      const width = Math.max(190, Math.min(limit, current.startWidth + current.sign * delta));
       current.width = width;
-      if (current.panel === "test") setTestPanelWidth(width);
+      if (current.panel === "tests") setTestPanelWidth(width);
+      else if (current.panel === "problem") setProblemPanelWidth(width);
       else setExplorerWidth(width);
     };
     const finish = () => {
       const current = resizeRef.current;
       if (!current) return;
-      localStorage.setItem(current.panel === "test" ? "mild-test-panel-width" : "mild-explorer-width", String(current.width));
+      localStorage.setItem(current.panel === "tests" ? "mild-test-panel-width" : current.panel === "problem" ? "mild-problem-panel-width" : "mild-explorer-width", String(current.width));
       resizeRef.current = null;
       document.body.classList.remove("panel-resizing");
     };
@@ -886,7 +932,7 @@ function App() {
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
-  }, [explorerWidth, testPanelWidth]);
+  }, [explorerWidth, problemPanelWidth, testPanelWidth]);
 
   const activateTab = (tab: ProblemTab) => {
     clearDiagnostics();
@@ -2098,9 +2144,54 @@ function App() {
 
   // Kept in a ref so the single event subscription always sees the current tab and workspace state.
   const companionHandlerRef = useRef<(problem: CompanionProblem) => void>(() => {});
+  const companionWaitRef = useRef(0);
   useEffect(() => {
-    companionHandlerRef.current = (problem) => queueCompanionProblem(companionToImported(problem), problem.batch);
+    companionHandlerRef.current = (problem) => {
+      window.clearTimeout(companionWaitRef.current);
+      queueCompanionProblem(companionToImported(problem), problem.batch);
+    };
   });
+
+  const editorCanImport = (url: string) => {
+    try {
+      const host = new URL(url).hostname;
+      return ["atcoder.jp", "codeforces.com", "doj.kr"].some((site) => host === site || host.endsWith(`.${site}`));
+    } catch { return false; }
+  };
+
+  // The panel's import button. Competitive Companion, when installed, parses the page it
+  // is looking at (a contest page yields every problem); without it the built-in importer
+  // handles the judges it knows.
+  const importFromProblemPage = async () => {
+    const url = browserStatus.url;
+    if (!url || importInFlightRef.current) return;
+    try {
+      if (await invoke<boolean>("browser_import_page")) {
+        setFileStatus(t("problemImportWaiting"));
+        window.clearTimeout(companionWaitRef.current);
+        companionWaitRef.current = window.setTimeout(() => setFileStatus(t("problemImportNothing")), 8000);
+        return;
+      }
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!editorCanImport(url)) {
+      setFileStatus(t("problemImportUnsupported"));
+      return;
+    }
+    importInFlightRef.current = true;
+    setImportingAtCoder(true);
+    try {
+      const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url });
+      await addImportedProblems(imported, false, isContestImportUrl(url));
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      importInFlightRef.current = false;
+      setImportingAtCoder(false);
+    }
+  };
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2371,6 +2462,204 @@ function App() {
     void startInteractive();
   };
 
+  const showTestPanel = testPanelVisible && tabs.length > 0;
+  const showExplorer = explorerVisible && Boolean(workspacePath);
+  const showProblemPanel = problemPanelOpen;
+  const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
+  const orderedPanels = layoutOrder.filter(panelShown);
+  // The problem page is a native view over the webview, so CSS stacking cannot put a modal,
+  // popover or menu above it: hide it while anything floats over the workspace.
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  useEffect(() => {
+    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .layout-popover, .explorer-context-menu")));
+  });
+  // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
+  // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
+  // the effects of a moved subtree in development: @monaco-editor/react disposes its editor
+  // in that pass without recreating it, and the next setModel throws and unmounts the app.
+  const panelStyle = (id: PanelId, part: "panel" | "resizer"): CSSProperties => ({ order: orderedPanels.indexOf(id) * 2 - (part === "resizer" ? 1 : 0) });
+  /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
+  const resizeTargetAt = (index: number): { panel: PanelId; sign: 1 | -1 } | null => {
+    const left = orderedPanels[index - 1];
+    const right = orderedPanels[index];
+    if (left && left !== "editor") return { panel: left, sign: 1 };
+    if (right && right !== "editor") return { panel: right, sign: -1 };
+    return null;
+  };
+  const togglePanel = (id: PanelId) => {
+    if (id === "tests") setTestPanelVisible((visible) => !visible);
+    else if (id === "problem") setProblemPanelOpen((open) => !open);
+    else if (id === "explorer") setExplorerVisible((visible) => !visible);
+  };
+  /** Drop `id` at `target`'s slot; the rest keep their relative order. */
+  const movePanelTo = (id: PanelId, target: PanelId) => setLayoutOrder((order) => {
+    if (id === target) return order;
+    const without = order.filter((item) => item !== id);
+    const at = without.indexOf(target);
+    return [...without.slice(0, at), id, ...without.slice(at)];
+  });
+  const shiftPanel = (id: PanelId, direction: -1 | 1) => setLayoutOrder((order) => {
+    const from = order.indexOf(id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= order.length) return order;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    return next;
+  });
+  const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
+  /** The user's choice for a panel, before the gates (open tabs, a workspace) that may hide it anyway. */
+  const panelWanted = (id: PanelId) => id === "editor" || (id === "tests" ? testPanelVisible : id === "problem" ? problemPanelOpen : explorerVisible);
+  const resetLayout = () => {
+    setLayoutOrder([...PANEL_IDS]);
+    setTestPanelVisible(true);
+    setExplorerVisible(true);
+    setProblemPanelOpen(false);
+  };
+
+  // ── Problem panel ────────────────────────────────────────────────────────────
+
+  const problemHostBounds = () => {
+    const host = problemHostRef.current;
+    if (!host) return null;
+    const rect = host.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height, scale: uiZoom / 100 };
+  };
+
+  const openProblemUrl = (raw: string) => {
+    const typed = raw.trim();
+    if (!typed) return;
+    const url = /^[a-z]+:\/\//i.test(typed) ? typed : `https://${typed}`;
+    const bounds = problemHostBounds();
+    if (!bounds) return;
+    invoke("browser_open", { url, bounds }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+  };
+
+  useEffect(() => {
+    localStorage.setItem("mild-problem-panel", problemPanelOpen ? "1" : "0");
+  }, [problemPanelOpen]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-panel-order", JSON.stringify(layoutOrder));
+  }, [layoutOrder]);
+
+  useEffect(() => {
+    if (!layoutMenuOpen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopImmediatePropagation(); setLayoutMenuOpen(false); } };
+    const onPointer = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || event.target.closest(".layout-popover, .layout-button")) return;
+      setLayoutMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("mousedown", onPointer, true);
+    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("mousedown", onPointer, true); };
+  }, [layoutMenuOpen]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void invoke<BrowserStatus>("browser_status").then(setBrowserStatus).catch(() => undefined);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<BrowserStatus>("browser-status", (event) => setBrowserStatus(event.payload))
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+  // Keep the URL field in step with the page unless the user is typing in it.
+  useEffect(() => {
+    if (!problemUrlEditingRef.current) setProblemUrlDraft(browserStatus.url);
+  }, [browserStatus.url]);
+
+  // The native view sits over `.problem-host`: report the host's rectangle whenever it
+  // moves or resizes, and hide the view while the host is not on screen at all.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window) || !browserStatus.available) return;
+    const host = problemHostRef.current;
+    if (!showProblemPanel || !host) {
+      if (browserStatus.open) void invoke("browser_set_visible", { visible: false }).catch(() => undefined);
+      return;
+    }
+    const report = () => {
+      const bounds = problemHostBounds();
+      if (bounds && bounds.width > 0 && bounds.height > 0) void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
+    };
+    report();
+    if (browserStatus.open) void invoke("browser_set_visible", { visible: !overlayOpen }).catch(() => undefined);
+    const observer = new ResizeObserver(report);
+    observer.observe(host);
+    window.addEventListener("resize", report);
+    return () => { observer.disconnect(); window.removeEventListener("resize", report); };
+  }, [browserStatus.available, browserStatus.open, explorerWidth, layoutOrder, overlayOpen, problemPanelWidth, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
+
+  // Follow the active file: a tab imported from a judge carries its problem URL. With no
+  // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
+  useEffect(() => {
+    if (!showProblemPanel || !browserStatus.available) return;
+    const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
+    if (!url || url === browserStatus.url) return;
+    openProblemUrl(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab?.sourceUrl, browserStatus.available, showProblemPanel]);
+
+  // Tampermonkey installs a userscript from its dashboard, which the backend drives once
+  // the panel is on screen; the host element only exists after the panel renders.
+  const [pendingUserscript, setPendingUserscript] = useState("");
+  const installUserscript = (url: string) => {
+    setSettingsOpen(false);
+    setProblemPanelOpen(true);
+    setPendingUserscript(url);
+  };
+  useEffect(() => {
+    if (!pendingUserscript || !showProblemPanel || !browserStatus.available) return;
+    const bounds = problemHostBounds();
+    if (!bounds) return;
+    setPendingUserscript("");
+    invoke("browser_install_userscript", { url: pendingUserscript, bounds }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingUserscript, showProblemPanel, browserStatus.available]);
+
+  const refreshBrowserExtensions = () => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void invoke<BrowserExtension[]>("browser_extensions_list").then(setBrowserExtensions).catch(() => setBrowserExtensions([]));
+  };
+  useEffect(() => { if (settingsOpen && settingsPage === "browser") refreshBrowserExtensions(); }, [settingsOpen, settingsPage]);
+  // The first start installs the default extensions in the background.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen("browser-extensions-changed", () => refreshBrowserExtensions())
+      .then((stopListening) => { if (disposed) stopListening(); else unlisten = stopListening; });
+    return () => { disposed = true; unlisten?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const installBrowserExtension = async () => {
+    const source = extensionSource.trim();
+    if (!source || extensionBusy) return;
+    setExtensionBusy(true);
+    setExtensionError("");
+    try {
+      await invoke("browser_extension_install", { source });
+      setExtensionSource("");
+      refreshBrowserExtensions();
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExtensionBusy(false);
+    }
+  };
+
+  const tampermonkeyLoaded = browserExtensions.some((extension) => extension.id === TAMPERMONKEY_ID && !extension.pending);
+
+  const removeBrowserExtension = async (id: string) => {
+    try {
+      await invoke("browser_extension_remove", { id });
+      refreshBrowserExtensions();
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
 
   /** Runs what the user is looking at: the interactive panel when it is showing, otherwise the tests. */
@@ -2461,6 +2750,8 @@ function App() {
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
         case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
+        case "view:panel-problem": setProblemPanelOpen((open) => !open); break;
+        case "view:layout": setLayoutMenuOpen((open) => !open); break;
         case "view:zoom-in": adjustUiZoom(UI_ZOOM_STEP); break;
         case "view:zoom-out": adjustUiZoom(-UI_ZOOM_STEP); break;
         case "view:zoom-reset": setUiZoom(100); break;
@@ -2526,6 +2817,10 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === "0") {
         event.preventDefault();
         setUiZoom(100);
+      }
+      if ((event.ctrlKey || event.metaKey) && event.altKey && event.key === "3") {
+        event.preventDefault();
+        setProblemPanelOpen((open) => !open);
       }
       // Cmd+Alt+1/2 selects a side-panel mode, so plain tab switching ignores Alt.
       if ((event.ctrlKey || event.metaKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
@@ -2643,14 +2938,10 @@ function App() {
   // what the field held when the dialog opened rather than what it holds now.
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
-  const showTestPanel = testPanelVisible && tabs.length > 0;
-  const showExplorer = explorerVisible && Boolean(workspacePath);
   // Built here rather than in CSS so hiding a panel also removes its grid track and resizer.
-  const workspaceColumns = [
-    ...(showTestPanel ? ["var(--test-panel-width, 306px)", "5px"] : []),
-    "minmax(0, 1fr)",
-    ...(showExplorer ? ["5px", "var(--explorer-width, 218px)"] : []),
-  ].join(" ");
+  const workspaceColumns = orderedPanels
+    .flatMap((id, index) => [...(index > 0 ? ["5px"] : []), id === "editor" ? "minmax(0, 1fr)" : `var(--${id}-width)`])
+    .join(" ");
 
   const summary = useMemo(() => {
     if (running) return "running tests…";
@@ -2812,8 +3103,10 @@ function App() {
           ))}
         </div>
       </nav>
-      <section className="workspace" style={{ "--test-panel-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
-          {showTestPanel && <><aside className="test-panel">
+      <section className="workspace" style={{ "--tests-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
+        {PANEL_IDS.filter(panelShown).map((id) => { const index = orderedPanels.indexOf(id); return (<Fragment key={id}>
+          {index > 0 && <div className={`panel-resizer resizer-before-${id}`} style={panelStyle(id, "resizer")} onPointerDown={(event) => { const target = resizeTargetAt(index); if (target) startPanelResize(target.panel, target.sign, event); }} role="separator" aria-label="Resize panel" aria-orientation="vertical" />}
+          {id === "tests" && <aside className="test-panel" style={panelStyle(id, "panel")}>
             <div className="panel-heading">
               <div className="panel-modes">
                 <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
@@ -2903,10 +3196,8 @@ function App() {
                 </div>
               </div>
             </div>}
-          </aside>
-          <div className="panel-resizer test-resizer" onPointerDown={(event) => startPanelResize("test", event)} role="separator" aria-label="Resize test case panel" aria-orientation="vertical" /></>}
-
-        <section className="editor-area">
+          </aside>}
+          {id === "editor" && <section className="editor-area" style={panelStyle(id, "panel")}>
           {tabs.length ? <>
           <Editor
             beforeMount={beforeMount}
@@ -2951,9 +3242,26 @@ function App() {
             <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>{modLabel}N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>{modLabel}O</kbd></button></div>
             <small>C++ · Python · sample tests · local save</small>
           </div>}
-        </section>
-        {showExplorer && <><div className="panel-resizer explorer-resizer" onPointerDown={(event) => startPanelResize("explorer", event)} role="separator" aria-label="Resize file explorer" aria-orientation="vertical" />
-        <aside className="file-explorer" aria-label="Saved files">
+        </section>}
+        {id === "problem" && <aside className="problem-panel" style={panelStyle(id, "panel")} aria-label="Problem browser">
+          <div className="problem-toolbar">
+            <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
+            <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
+            <button onClick={() => void invoke("browser_go", { action: browserStatus.loading ? "stop" : "reload" })} disabled={!browserStatus.open} aria-label={browserStatus.loading ? "stop" : "reload"} title={browserStatus.loading ? "stop" : "reload"}>{browserStatus.loading ? "×" : "↻"}</button>
+            <input className="problem-url" value={problemUrlDraft} placeholder="https://" spellCheck={false}
+              onFocus={() => { problemUrlEditingRef.current = true; }}
+              onBlur={() => { problemUrlEditingRef.current = false; setProblemUrlDraft(browserStatus.url); }}
+              onChange={(event) => setProblemUrlDraft(event.target.value)}
+              onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); openProblemUrl(problemUrlDraft); event.currentTarget.blur(); } }}
+              aria-label="problem URL" />
+            <button className="problem-import" onClick={() => void importFromProblemPage()} disabled={!browserStatus.open || !browserStatus.url || browserStatus.loading || importingAtCoder} title={t("problemImportHint")}>{t("import")}</button>
+            <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close">×</button>
+          </div>
+          {browserStatus.available
+            ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
+            : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
+        </aside>}
+        {id === "explorer" && <aside className="file-explorer" style={panelStyle(id, "panel")} aria-label="Saved files">
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
             <span className="explorer-chevron">⌄</span>
             <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
@@ -2975,7 +3283,8 @@ function App() {
             {renderExplorerTree(explorerTree)}
             {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
           </div>
-        </aside></>}
+        </aside>}
+        </Fragment>); })}
       </section>
 
       {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
@@ -3072,7 +3381,7 @@ function App() {
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <header className="settings-header">
-              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : t("languageServer")}</h2></div>
+              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : settingsPage === "browser" ? t("browserSettings") : t("languageServer")}</h2></div>
               <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
             </header>
             <div className="settings-pages">
@@ -3081,6 +3390,7 @@ function App() {
               <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>{t("snippets")}</button>
               <button className={settingsPage === "judge" ? "active" : ""} onClick={() => setSettingsPage("judge")}>{t("judge")}</button>
               <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>{t("languageServer")}</button>
+              <button className={settingsPage === "browser" ? "active" : ""} onClick={() => setSettingsPage("browser")}>{t("browserSettings")}</button>
               <button className={settingsPage === "updates" ? "active" : ""} onClick={() => setSettingsPage("updates")}>{t("updates")}{updateStatus.phase === "available" ? " •" : ""}</button>
             </div>
             {settingsPage === "appearance" ? <div className="appearance-settings">
@@ -3176,6 +3486,30 @@ function App() {
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
               <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={() => void refreshSubmissionStatuses()}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
+            </div> : settingsPage === "browser" ? <div className="language-server-settings browser-settings">
+              <div className={`lsp-state ${browserStatus.available ? "ready" : "error"}`}>
+                <span className="lsp-dot" /><div><strong>{t("problemPanel")}</strong><small>{browserStatus.available ? `CEF · ${browserStatus.open ? browserStatus.url || "open" : "idle"}` : browserStatus.error || "unavailable"}</small></div>
+              </div>
+              <div className="extension-defaults">
+                <strong>{t("browserDefaultsTitle")}</strong>
+                <small>{t("browserDefaultsHelp")}</small>
+                <div className="companion-controls">
+                  <button className="subtle-button extension-userscript" disabled={!tampermonkeyLoaded} title={tampermonkeyLoaded ? ATCODER_BETTER_USERSCRIPT : t("browserNeedsTampermonkey")} onClick={() => installUserscript(ATCODER_BETTER_USERSCRIPT)}>{t("browserInstallAtCoderBetter")}</button>
+                </div>
+              </div>
+              <p className="settings-help">{t("browserExtensionsHelp")}</p>
+              <label className="clangd-path-label">{t("browserExtensionSource")}<span className="extension-install"><input value={extensionSource} onChange={(event) => setExtensionSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void installBrowserExtension(); } }} placeholder="https://chromewebstore.google.com/detail/…" spellCheck={false} disabled={extensionBusy || !browserStatus.available} /><button className="primary-button" onClick={() => void installBrowserExtension()} disabled={extensionBusy || !extensionSource.trim() || !browserStatus.available}>{extensionBusy ? t("browserExtensionInstalling") : t("browserExtensionInstall")}</button></span></label>
+              {extensionError && <p className="settings-help extension-error">{extensionError}</p>}
+              <div className="extension-list" role="list">
+                {browserExtensions.length === 0 && <p className="settings-help">{t("browserExtensionsNone")}</p>}
+                {browserExtensions.map((extension) => (
+                  <div className="extension-row" role="listitem" key={extension.id}>
+                    <div><strong>{extension.name}{extension.builtin && <span className="extension-badge">{t("browserBuiltin")}</span>}</strong><small>{extension.version} · {extension.id}{extension.pending ? ` · ${t("browserPending")}` : ""}</small></div>
+                    {!extension.builtin && <button className="danger-button" onClick={() => void removeBrowserExtension(extension.id)}>{t("browserExtensionRemove")}</button>}
+                  </div>
+                ))}
+              </div>
+              {browserExtensions.some((extension) => extension.pending) && <div className="extension-restart"><span>{IS_DEV_BUILD ? t("browserRestartDev") : t("browserRestartNeeded")}</span>{!IS_DEV_BUILD && <button className="subtle-button" onClick={() => void relaunch()}>{t("browserRestartNow")}</button>}</div>}
             </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
               <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
                 <span className="lsp-dot" />
@@ -3264,6 +3598,33 @@ function App() {
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => { setSettingsPage("judge"); setSettingsOpen(true); }} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
+        <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
+          <button className={`layout-button ${layoutMenuOpen ? "active" : ""}`} onClick={() => setLayoutMenuOpen((open) => !open)} aria-haspopup="dialog" aria-expanded={layoutMenuOpen} title={t("layoutTitle")}>⇄</button>
+          {layoutOrder.map((id) => (
+            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""}`}
+              aria-pressed={id === "editor" ? undefined : panelShown(id)} data-panel={id}
+              onClick={() => togglePanel(id)}
+              onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); } }}
+            >{chipLabel(id)}</button>
+          ))}
+        </div>
+        {layoutMenuOpen && <div className="layout-popover" role="dialog" aria-label={t("layoutTitle")}>
+          <div className="layout-head"><strong>{t("layoutTitle")}</strong><button className="layout-close" onClick={() => setLayoutMenuOpen(false)} aria-label="close">×</button></div>
+          <p>{t("layoutHint")}</p>
+          <div className="layout-rows">
+            {layoutOrder.map((id, index) => (
+              <div className="layout-row" key={id} data-panel={id}>
+                <span className="layout-name">{chipLabel(id)}</span>
+                <button onClick={() => shiftPanel(id, -1)} disabled={index === 0} aria-label={`move ${chipLabel(id)} left`} title="◀">◀</button>
+                <button onClick={() => shiftPanel(id, 1)} disabled={index === layoutOrder.length - 1} aria-label={`move ${chipLabel(id)} right`} title="▶">▶</button>
+                {id === "editor"
+                  ? <span className="layout-always">{t("layoutShow")}</span>
+                  : <label className="layout-show"><input type="checkbox" checked={panelWanted(id)} onChange={() => togglePanel(id)} />{t("layoutShow")}</label>}
+              </div>
+            ))}
+          </div>
+          <div className="layout-foot"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div>
+        </div>}
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;

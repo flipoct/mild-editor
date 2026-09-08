@@ -51,7 +51,7 @@ contest-folder/
 
 ### Competitive Companion
 
-Mild Editor listens for the [Competitive Companion](https://github.com/jmerle/competitive-companion) browser extension on `127.0.0.1:10043`, the same port cph uses. Open a problem on any judge the extension supports, press its button, and the file and its sample tests are created in the current workspace. Parsing a whole contest arrives as one batch and imports in a single step.
+Mild Editor listens for the [Competitive Companion](https://github.com/jmerle/competitive-companion) browser extension on `127.0.0.1:10043`, the same port cph uses. Open a problem on any judge the extension supports, press its button, and the file and its sample tests are created in the current workspace. Parsing a whole contest arrives as one batch and imports in a single step. The extension is built into the problem panel as well, where the panel's `import` button stands in for its toolbar button; the listener is the same either way, so the extension in your everyday browser keeps working.
 
 The listener is on by default and is confined to the loopback interface. Toggle it or change the port in **Settings → online judges**; the status bar shows `CC listening` while it is bound.
 
@@ -111,6 +111,32 @@ Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` 
 Renaming happens in the row itself: the name turns into a text field with everything selected, `↩` commits, `Esc` cancels, and a name typed without an extension takes the default language's. Folders rename the same way and carry their files along.
 
 The Edit menu restores the standard macOS text-editing shortcuts, and the editor defaults to SF Mono with Menlo and Monaco also offered in **Settings → appearance**. Windows and Linux keep their existing custom title bar and `Ctrl`-based shortcuts.
+
+## Problem panel (embedded Chromium)
+
+The problem panel is a real Chromium (CEF) hosted inside the editor window, so Chrome extensions run against the problem page. It is pinned to CEF 151.3.24: 152.0.5 hangs every network request on macOS 26, verified against CEF's own sample.
+
+The panel's `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once. It asks Competitive Companion to parse the page, so every judge the extension supports works; without it the built-in importer handles AtCoder, Codeforces and doj.kr. The panel is a native view layered over the window, so it is hidden automatically while a dialog or menu is open.
+
+Development needs the CEF binaries and a build tool the `cef` crate expects:
+
+```bash
+brew install ninja                                   # cef-dll-sys builds libcef_dll_wrapper with Ninja
+git clone https://github.com/tauri-apps/cef-rs && cd cef-rs && git checkout cef-v151.8.1+151.3.24
+cargo run -p export-cef-dir -- --force ~/.local/share/cef
+export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script; prepare-cef.sh defaults to this path
+
+npm run dev:cef      # tauri dev with the CEF layer (runs scripts/prepare-cef.sh debug first)
+npm run build:cef    # tauri build with the CEF layer (framework + helpers bundled)
+```
+
+The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable. The panel is macOS-only for now; the Windows code path exists but the installer does not yet ship CEF next to the executable.
+
+Three extensions come with the app. Competitive Companion is bundled in `src-tauri/extensions` (a build that also parses doj.kr) and unpacked into the profile at start-up; Carrot and Tampermonkey are downloaded from the Web Store the first time the app runs. **Settings → problem browser** installs AtCoder Better! into Tampermonkey with one click, and takes a Chrome Web Store link or extension id for anything else: the app downloads the `.crx`, unpacks it into its profile and loads it on the next start (the page offers a restart).
+
+Two Chromium behaviours needed work to run extensions in a hosted view. The bundled Competitive Companion is patched at install with a small bridge (`mild-bridge-*`), because an embedded view has no toolbar for its button; the editor's `import` button fires the extension's own click handler through it. And `chrome.tabs.create`, which Tampermonkey uses for its install dialog, needs a Chrome window, so the app keeps a hidden one: tabs opened there are cancelled and their page is loaded in the panel instead. Chrome 138+ also gates `chrome.userScripts` behind a per-extension preference, which the app writes for Tampermonkey at start-up.
+
+Useful switches while developing: `MILD_CEF_DEBUG_PORT=9336` opens the DevTools protocol on the panel, `MILD_CEF_EXTENSIONS=/path/a,/path/b` loads unpacked extensions, and `VITE_PROBLEM_PANEL_OPEN=1` / `VITE_PROBLEM_PANEL_URL=…` open and seed the panel on first run.
 
 ## Build locally
 

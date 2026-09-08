@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0
+
+- Add a problem panel: a real Chromium window inside the editor that opens the problem page next to the code, with back, forward, reload and an address field. It follows the file you are on, so opening an imported problem shows its page.
+- Ship the judge extensions with the app. Competitive Companion (a build that also parses doj.kr) is built in, and Carrot and Tampermonkey are installed on the first start. **Settings → problem browser** installs AtCoder Better! into Tampermonkey with one click, and any other Chrome Web Store extension by link or id.
+- Import from the panel with its `import` button: the page you are reading becomes a file with its sample tests, and a contest page imports every problem at once. Without the extension the built-in importer still handles AtCoder, Codeforces and doj.kr.
+- Arrange the workspace panels in any order and fold each of them away, from the `⇄` button in the status bar or `Alt`+`←`/`→` on a panel chip. The order is remembered.
+- Set the code font size in pixels in **Settings → appearance**, independently of the interface scale.
+- macOS: the problem panel is bundled with the app, so it works in the installed release with no extra setup. Windows and Linux show the panel as unavailable for now.
+
 ## 1.6.2
 
 - Fix update checks that failed with a network error on some connections: GitHub hands out four addresses for its release host and the check gave up after 15 seconds, while an unreachable address alone costs 21 seconds to abandon. Each connection attempt is now capped, so the next address is tried and the check finishes in about a second.

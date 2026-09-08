@@ -1,3 +1,10 @@
+// The problem panel (embedded CEF) is macOS-only until the Windows installer ships CEF;
+// other platforms get a stub with the same commands that reports the panel unavailable.
+#[cfg(target_os = "macos")]
+pub mod browser;
+#[cfg(not(target_os = "macos"))]
+#[path = "browser_stub.rs"]
+pub mod browser;
 mod companion;
 mod interactive;
 mod updates;
@@ -2351,6 +2358,38 @@ fn stop_clangd(state: tauri::State<'_, ClangdState>) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Development only. Prints what a probe script (see `start_debug_probe`) evaluated to.
+#[tauri::command]
+fn debug_report(text: String) {
+    eprintln!("[probe] {text}");
+}
+
+/// Development only: with MILD_DEBUG_PROBE=<path>, re-run that file's JavaScript inside the
+/// app webview each time it changes and report the awaited result through `debug_report`.
+/// Lets the app be inspected from a terminal when no GUI automation is available.
+fn start_debug_probe(app: tauri::AppHandle) {
+    if !cfg!(debug_assertions) { return; }
+    let Some(path) = std::env::var_os("MILD_DEBUG_PROBE").map(std::path::PathBuf::from) else { return };
+    std::thread::spawn(move || {
+        let mut seen: Option<std::time::SystemTime> = None;
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let Ok(modified) = fs::metadata(&path).and_then(|m| m.modified()) else { continue };
+            if seen == Some(modified) {
+                continue;
+            }
+            seen = Some(modified);
+            let Ok(script) = fs::read_to_string(&path) else { continue };
+            let wrapped = format!(
+                "(async () => {{ let out; try {{ out = await (async () => {{ {script} }})(); }} catch (error) {{ out = 'ERR ' + (error && error.stack || error); }} window.__TAURI_INTERNALS__.invoke('debug_report', {{ text: String(out) }}); }})();"
+            );
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(&wrapped);
+            }
+        }
+    });
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(ClangdState::default())
@@ -2358,6 +2397,7 @@ pub fn run() {
         .manage(interactive::InteractiveState::default())
         .manage(companion::CompanionState::default())
         .manage(updates::PendingUpdate::default())
+        .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
@@ -2366,9 +2406,17 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             macos_menu::install(app.handle())?;
+            browser::prepare(app.handle());
+            start_debug_probe(app.handle().clone());
             Ok(())
         })
         .on_menu_event(macos_menu::forward_event);
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.setup(|app| {
+        browser::prepare(app.handle());
+        Ok(())
+    });
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -2409,7 +2457,20 @@ pub fn run() {
             stop_clangd,
             start_companion,
             stop_companion,
-            companion_status
+            companion_status,
+            browser::browser_status,
+            browser::browser_open,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_navigate,
+            browser::browser_go,
+            browser::browser_close,
+            browser::browser_extensions_list,
+            browser::browser_extension_install,
+            browser::browser_extension_remove,
+            browser::browser_import_page,
+            browser::browser_install_userscript,
+            debug_report
         ])
         .on_window_event(|window, event| {
             match event {
@@ -2431,8 +2492,13 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running mild editor");
+        .build(tauri::generate_context!())
+        .expect("error while building mild editor")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                browser::shutdown(app);
+            }
+        });
 }
 
 #[cfg(test)]

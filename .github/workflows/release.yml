@@ -21,10 +21,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --config src-tauri/tauri.cef.conf.json
           - platform: macos-latest
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --config src-tauri/tauri.cef.conf.json
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             args: ""
@@ -52,7 +52,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Install CEF (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        # The problem panel embeds Chromium. cef-dll-sys builds its wrapper with Ninja, and
+        # export-cef-dir downloads the pinned CEF binaries for this architecture.
+        run: |
+          brew install ninja
+          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
+          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force "$RUNNER_TEMP/cef")
+          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+
       - run: npm ci
+
+      # tauri-action runs `tauri build` itself, so the framework and helper bundles are
+      # staged here rather than through the npm scripts.
+      - name: Stage CEF for the bundle (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: scripts/prepare-cef.sh release
 
       - name: Test application
         run: |
@@ -70,12 +86,17 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.6.2
+            ## What's changed in v1.7.0
 
-            - Update checks no longer fail with a network error on connections where one of GitHub's release-host addresses is unreachable. Each connection attempt is now capped, so the next address is tried instead of the check timing out.
-            - Problem imports and judge-status refreshes get the same cap, so one unreachable address no longer stalls them.
+            - **Problem panel.** A real Chromium window inside the editor shows the problem page next to your code, with back, forward, reload and an address field. It follows the file you are on.
+            - **Judge extensions included.** Competitive Companion (a build that also parses doj.kr) ships with the app; Carrot and Tampermonkey install themselves on the first start. Settings → problem browser adds AtCoder Better! with one click, and any other Chrome Web Store extension by link or id.
+            - **Import from the panel.** Its `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once.
+            - **Free panel layout.** Put the test, code, problem and file panels in any order and fold each away, from the `⇄` button in the status bar.
+            - **Code font size** in pixels, separate from the interface scale.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.6.2/CHANGELOG.md) for the patch notes.
+            The problem panel is macOS-only in this release; Windows and Linux builds show it as unavailable.
+
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.7.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

@@ -1,9 +1,11 @@
 [package]
 name = "mild-editor"
-version = "1.6.2"
+version = "1.7.0"
 description = "A lightweight competitive programming editor"
 authors = ["mild editor"]
 edition = "2021"
+# Two binaries exist (the app and the CEF helper); `cargo run` and `tauri dev` want this one.
+default-run = "mild-editor"
 
 [lib]
 name = "mild_editor_lib"
@@ -22,5 +24,32 @@ wait-timeout = "0.2"
 which = "8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 scraper = "0.24"
-tauri-plugin-updater = "2.11.0"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.11.0"
+
+# Embedded Chromium for the problem panel. macOS only for now: the Windows code path in
+# browser.rs is written but the installer does not yet ship libcef.dll and its resources
+# next to the executable, and an exe that imports libcef.dll without it will not start.
+# Pinned: 152.0.5 hangs every network request on macOS 26 (verified against CEF's own
+# cefsimple); 151.3.24 and 150.0.19 work.
+[target.'cfg(target_os = "macos")'.dependencies]
+cef = { version = "=151.8.1", default-features = false }
+# Unpacks .crx downloads (a CRX3 header in front of a deflate zip).
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# Chromium derives an unpacked extension's id from the SHA-256 of its path.
+sha2 = "0.10"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+# macOS runs CEF sub-processes from a separate helper executable inside helper .app bundles.
+[[bin]]
+name = "mild-editor"
+path = "src/main.rs"
+
+[[bin]]
+name = "mild-editor-cef-helper"
+path = "src/bin/cef_helper.rs"

@@ -578,7 +578,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 @media (max-width: 720px) {
   .workspace { grid-template-columns: min(38vw, 250px) 5px minmax(0, 1fr); }
   .workspace.empty-workspace { grid-template-columns: 1fr; }
-  .file-explorer, .explorer-resizer { display: none; }
+  .file-explorer, .resizer-before-explorer { display: none; }
   .test-fields { padding-left: 13px; }
 }
 .judge-badge {
@@ -622,3 +622,55 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
   min-width: 0;
   flex: 1;
 }
+
+/* Problem panel: a native Chromium view is laid over .problem-host, so the host itself only
+   paints the empty state and keeps the space reserved. */
+.problem-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #292a26; border-left: 1px solid #41423c; }
+.problem-toolbar { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-bottom: 1px solid #41423c; }
+.problem-toolbar button { height: 24px; min-width: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #b9b6ab; font-size: 13px; line-height: 1; cursor: pointer; }
+.problem-toolbar button:hover:not(:disabled) { background: #33342f; border-color: #454640; }
+.problem-toolbar button:disabled { opacity: .35; cursor: default; }
+.problem-toolbar .problem-import { padding: 0 9px; border-color: #454640; color: var(--accent); font-size: 11px; font-weight: 650; letter-spacing: .04em; white-space: nowrap; }
+.problem-url { flex: 1; min-width: 0; height: 24px; border: 1px solid #454640; border-radius: 5px; background: #232420; color: #d1cec4; padding: 0 8px; outline: none; font: 11px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
+.problem-url:focus { border-color: #746e5b; }
+.problem-host { flex: 1; min-height: 0; position: relative; background: #1f201d; }
+.problem-hint { position: absolute; inset: 0; margin: 0; padding: 24px; display: grid; place-content: center; text-align: center; color: #777970; font-size: 12px; line-height: 1.6; }
+.problem-unavailable .problem-hint { color: #c9a18a; }
+.panel-chips { display: flex; align-items: center; gap: 3px; }
+.panel-chip { height: 20px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #999a91; font-size: 10px; cursor: pointer; }
+.panel-chip:hover { color: #d1cec4; }
+.panel-chip.active { color: #e6dcc1; border-color: #5a5647; background: #33342f; }
+.panel-chip.fixed { cursor: grab; }
+.panel-chip:focus-visible { outline: 1px solid #b39a68; }
+
+/* Settings → problem browser: extension manager */
+.extension-install { display: flex; gap: 6px; }
+.extension-install input { flex: 1; min-width: 0; }
+.extension-install .primary-button { height: 36px; padding: 0 12px; white-space: nowrap; }
+.extension-error { color: #d38b7a; }
+.extension-list { display: grid; gap: 6px; margin-top: 14px; }
+.extension-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid #454640; border-radius: 7px; background: #232420; color: #d1cec4; font-size: 12px; }
+.extension-row small { display: block; margin-top: 2px; color: #8b8c84; font-size: 10px; }
+.extension-restart { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding: 9px 11px; border: 1px solid #5a5647; border-radius: 7px; background: #2f2e28; color: #e6dcc1; font-size: 11px; }
+
+/* Panel layout popover (status bar ⇄) */
+.layout-button { height: 20px; min-width: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #999a91; font-size: 12px; cursor: pointer; }
+.layout-button:hover, .layout-button.active { color: #e6dcc1; border-color: #5a5647; background: #33342f; }
+.layout-popover { position: fixed; left: 12px; bottom: 36px; z-index: 40; width: 300px; padding: 12px 12px 10px; border: 1px solid #5a5647; border-radius: 9px; background: #232420; color: #d1cec4; box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 12px; }
+.layout-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.layout-close { border: 0; background: transparent; color: #999a91; font-size: 14px; cursor: pointer; }
+.layout-popover p { margin: 0 0 10px; color: #8b8c84; font-size: 10px; line-height: 1.5; }
+.layout-rows { display: grid; gap: 4px; }
+.layout-row { display: grid; grid-template-columns: minmax(0, 1fr) 26px 26px 64px; align-items: center; gap: 6px; padding: 5px 6px; border: 1px solid #454640; border-radius: 6px; background: #292a26; }
+.layout-row button { height: 22px; border: 1px solid #454640; border-radius: 5px; background: #232420; color: #d1cec4; font-size: 10px; cursor: pointer; }
+.layout-row button:disabled { opacity: .3; cursor: default; }
+.layout-show { display: flex; align-items: center; gap: 5px; color: #b9b6ab; font-size: 10px; }
+.layout-always { color: #777970; font-size: 10px; }
+.layout-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+.crash-screen { height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding: 40px; overflow: auto; background: var(--bg-1); color: var(--text); }
+.crash-screen pre { max-width: 100%; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-0); color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+
+.extension-badge { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .04em; vertical-align: middle; }
+.extension-defaults { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); }
+.extension-defaults small { color: var(--muted); line-height: 1.5; }
