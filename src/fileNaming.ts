@@ -79,3 +79,73 @@ export const problemIdentity = (source: string | undefined, rawUrl: string | und
     return `${source || "other"}:${rawUrl.trim().replace(/\/$/, "").toLocaleLowerCase()}`;
   }
 };
+
+/**
+ * Folder layout for imports, used when "file imports into folders" is on.
+ *
+ * A single problem goes straight into its judge's folder; a contest gets a folder of its
+ * own inside it, so `Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py` sits beside
+ * `Codeforces/B_Spreadsheets.py`.
+ */
+const platformFolders: Record<string, string> = {
+  atcoder: "AtCoder",
+  codeforces: "Codeforces",
+  doj: "DOJ",
+};
+
+export const platformFolder = (source: string | undefined) => platformFolders[source || ""] || "Other";
+
+/** Trim what a folder name may not hold, on any of the three platforms. */
+const safeFolderName = (value: string) =>
+  value
+    // eslint-disable-next-line no-control-regex
+    .replace(/[/\\:*?"<>|\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    // Windows drops a trailing dot or space, which would not match what was asked for.
+    .replace(/[.\s]+$/g, "")
+    .slice(0, 64)
+    .trim();
+
+/** The contest id in a problem URL, for imports that arrive without a contest name. */
+const contestFromUrl = (source: string | undefined, rawUrl: string) => {
+  try {
+    const parts = new URL(rawUrl).pathname.split("/").filter(Boolean);
+    if (source === "atcoder") {
+      const at = parts.indexOf("contests");
+      return at >= 0 ? parts[at + 1] || "" : "";
+    }
+    if (source === "codeforces") {
+      const at = parts.indexOf("contest");
+      return at >= 0 ? parts[at + 1] || "" : "";
+    }
+    return "";
+  } catch {
+    return "";
+  }
+};
+
+/**
+ * `group` is what Competitive Companion sends, e.g. "Codeforces - Codeforces Round 1117
+ * (Div. 2)". The judge's own name in front of it is dropped: the folder already sits inside
+ * that judge's folder.
+ */
+export const contestFolder = (source: string | undefined, sourceUrl: string, group?: string) => {
+  const named = (group || "").split(" - ").slice(1).join(" - ").trim() || (group || "").trim();
+  return safeFolderName(named || contestFromUrl(source, sourceUrl));
+};
+
+/**
+ * Where an imported problem is filed. Empty for the flat layout, so callers can prefix
+ * unconditionally.
+ */
+export const importFolder = (
+  organize: boolean,
+  contestImport: boolean,
+  problem: { source?: string; sourceUrl: string; contest?: string },
+) => {
+  if (!organize) return "";
+  const platform = platformFolder(problem.source);
+  const contest = contestImport ? contestFolder(problem.source, problem.sourceUrl, problem.contest) : "";
+  return contest ? `${platform}/${contest}/` : `${platform}/`;
+};

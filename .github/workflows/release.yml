@@ -78,8 +78,7 @@ jobs:
         # part-way through the bundle step.
         run: |
           npm run build
-          cargo check --manifest-path src-tauri/Cargo.toml --all-targets
-          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -92,17 +91,12 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.7.0
+            ## What's changed in v1.7.1
 
-            - **Problem panel.** A real Chromium window inside the editor shows the problem page next to your code, with back, forward, reload and an address field. It follows the file you are on.
-            - **Judge extensions included.** Competitive Companion (a build that also parses doj.kr) ships with the app; Carrot and Tampermonkey install themselves on the first start. Settings → problem browser adds AtCoder Better! with one click, and any other Chrome Web Store extension by link or id.
-            - **Import from the panel.** Its `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once.
-            - **Free panel layout.** Put the test, code, problem and file panels in any order and fold each away, from the `⇄` button in the status bar.
-            - **Code font size** in pixels, separate from the interface scale.
+            - **Imports can go into folders.** Settings → online judges has a new "file imports into folders" option, off by default. With it on, a problem lands under its judge and a contest gets a folder of its own inside it: `Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py`. The import dialog, contest URLs and Competitive Companion all follow it.
+            - Tabs show the file name rather than its whole path, with the path in the tooltip.
 
-            The problem panel is macOS-only in this release; Windows and Linux builds show it as unavailable.
-
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.7.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.7.1/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

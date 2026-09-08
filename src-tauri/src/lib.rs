@@ -2342,6 +2342,16 @@ fn stop_companion(state: tauri::State<'_, companion::CompanionState>) -> compani
     companion::status(&state)
 }
 
+/// Scratch workspace for the development build. Its app data directory is its own
+/// (io.mildeditor.desktop.dev), so importing a contest while testing cannot touch the
+/// folder the installed app is pointed at.
+#[tauri::command]
+fn dev_workspace_path(app: tauri::AppHandle) -> Result<String, String> {
+    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?.join("workspace");
+    std::fs::create_dir_all(&folder).map_err(|error| format!("Could not create {}: {error}", folder.display()))?;
+    Ok(folder.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn companion_status(state: tauri::State<'_, companion::CompanionState>) -> companion::CompanionStatus {
     companion::status(&state)
@@ -2470,6 +2480,7 @@ pub fn run() {
             browser::browser_extension_remove,
             browser::browser_import_page,
             browser::browser_install_userscript,
+            dev_workspace_path,
             debug_report
         ])
         .on_window_event(|window, event| {

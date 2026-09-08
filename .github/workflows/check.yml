@@ -11,6 +11,11 @@ on:
   push:
     branches: [main]
 
+# Pushing again to a pull request abandons the run already going for it.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     strategy:
@@ -30,6 +35,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Compiling the dependency graph from scratch is almost the whole of this job; cached
+      # it drops from minutes to seconds. Keyed per platform by the action itself.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -39,10 +50,8 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      # --all-targets covers the binaries as well: `cargo test --lib` alone once let a
-      # macOS-only dependency in the CEF helper binary through to the release build.
-      - name: Check the Rust crate
-        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
-
-      - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      # One pass, not two: `cargo check --all-targets` followed by `cargo test` compiled the
+      # same graph twice. --all-targets is what matters — `cargo test --lib` alone once let
+      # a macOS-only dependency in the CEF helper binary through to the release build.
+      - name: Build and test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets

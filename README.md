@@ -49,6 +49,16 @@ contest-folder/
 
 `use output` copies the latest program output into the expected-output field.
 
+**Settings → online judges** has an optional *file imports into folders* layout, off by default. With it on, an imported problem is filed under its judge and a contest gets a folder of its own inside it:
+
+```
+AtCoder/C_Remove_and_Append.py
+Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py
+DOJ/47_AND와_OR.py
+```
+
+The import dialog, contest URLs and Competitive Companion all follow the setting; files already saved stay where they are.
+
 ### Competitive Companion
 
 Mild Editor listens for the [Competitive Companion](https://github.com/jmerle/competitive-companion) browser extension on `127.0.0.1:10043`, the same port cph uses. Open a problem on any judge the extension supports, press its button, and the file and its sample tests are created in the current workspace. Parsing a whole contest arrives as one batch and imports in a single step. The extension is built into the problem panel as well, where the panel's `import` button stands in for its toolbar button; the listener is the same either way, so the extension in your everyday browser keeps working.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1
+
+- Add **file imports into folders** in **Settings → online judges**, off by default. With it on, an imported problem is filed under its judge — `AtCoder/C_Remove_and_Append.py` — and a contest gets a folder of its own inside it, so a whole contest arrives as `Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py`. Problems from the import dialog, from a contest URL and from Competitive Companion all follow the setting. Files already saved stay where they are.
+- Show only the file name on a tab, with the full path in its tooltip, so a file inside a folder does not stretch the tab strip.
+- The development build now works in its own scratch folder instead of whatever workspace was last opened, so trying an import while developing cannot write into real work.
+
 ## 1.7.0
 
 - Add a problem panel: a real Chromium window inside the editor that opens the problem page next to the code, with back, forward, reload and an address field. It follows the file you are on, so opening an imported problem shows its page.
