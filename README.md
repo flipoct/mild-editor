@@ -130,6 +130,8 @@ npm run dev:cef      # tauri dev with the CEF layer (runs scripts/prepare-cef.sh
 npm run build:cef    # tauri build with the CEF layer (framework + helpers bundled)
 ```
 
+The sub-process helper is its own package, `src-tauri/cef-helper`, rather than a second binary of the app: the macOS bundler copies every binary of a package into `Contents/MacOS`, where a second helper is useless and, cross-compiled to Intel, unsigned — the linker ad-hoc signs arm64 binaries but not cross-built x86_64 ones, and `codesign` refuses to sign a bundle whose nested code is unsigned. It is a workspace member, so it shares the target directory and CEF is compiled once.
+
 The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable. The panel is macOS-only for now; the Windows code path exists but the installer does not yet ship CEF next to the executable.
 
 Three extensions come with the app. Competitive Companion is bundled in `src-tauri/extensions` (a build that also parses doj.kr) and unpacked into the profile at start-up; Carrot and Tampermonkey are downloaded from the Web Store the first time the app runs. **Settings → problem browser** installs AtCoder Better! into Tampermonkey with one click, and takes a Chrome Web Store link or extension id for anything else: the app downloads the `.crx`, unpacks it into its profile and loads it on the next start (the page offers a restart).

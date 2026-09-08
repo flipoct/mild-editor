@@ -1,0 +1,18 @@
+# The CEF sub-process helper is its own package so that it is not one of the app's binary
+# targets: the macOS bundler copies every binary of the app package into Contents/MacOS,
+# where a second copy of the helper is useless (the app launches the helper bundles under
+# Contents/Resources/cef/helpers) and, cross-compiled to x86_64, unsigned — the linker
+# ad-hoc signs arm64 binaries but not cross-built Intel ones, and codesign refuses to sign
+# a bundle containing unsigned nested code.
+#
+# scripts/prepare-cef.sh builds it; it shares the workspace target directory, so the cef
+# crate is compiled once.
+[package]
+name = "mild-editor-cef-helper"
+version = "1.7.0"
+description = "CEF sub-process helper for Mild Editor"
+authors = ["mild editor"]
+edition = "2021"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cef = { version = "=151.8.1", default-features = false }
