@@ -120,7 +120,7 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let panel_problem = MenuItemBuilder::with_id("view:panel-problem", "Problem Browser")
         .accelerator("CmdOrCtrl+Alt+3")
         .build(app)?;
-    let layout = MenuItemBuilder::with_id("view:layout", "Panel Layout…").build(app)?;
+    let layout = MenuItemBuilder::with_id("view:layout", "Reset Panel Layout").build(app)?;
 
     let zoom_in = MenuItemBuilder::with_id("view:zoom-in", "Zoom In")
         .accelerator("CmdOrCtrl+=")

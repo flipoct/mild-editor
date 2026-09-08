@@ -5,6 +5,10 @@
 //! Better run against the problem page. The frontend owns the panel's rectangle and
 //! reports it here; this module positions the native view over that rectangle.
 //!
+//! macOS loads the framework from the app bundle and runs sub-processes from helper
+//! bundles; Windows links libcef.dll from next to the executable, with resources and
+//! locales beside it, and sub-processes re-enter this executable (see main.rs).
+//!
 //! Threading: every CEF call happens on the main thread. Commands arrive on Tauri's
 //! worker pool and hop over with `run_on_main_thread`. CEF's own message loop is pumped
 //! from the main thread through `external_message_pump` plus a 60 Hz fallback timer, the
@@ -25,6 +29,8 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// Set while the app itself closes the browser, so `do_close` lets CEF proceed.
 static CLOSING_BY_APP: AtomicBool = AtomicBool::new(false);
+/// Set at shutdown so the tab host, which otherwise refuses to close, can go.
+static TAB_HOST_MAY_CLOSE: AtomicBool = AtomicBool::new(false);
 /// Guards against re-entering `do_message_loop_work` from inside itself.
 static PUMPING: AtomicBool = AtomicBool::new(false);
 /// Why the one allowed CEF initialisation failed, if it did.
@@ -71,6 +77,8 @@ pub struct Shared {
     browser: Mutex<Option<Browser>>,
     /// Applied when the browser finishes creating, which happens asynchronously.
     pending_bounds: Mutex<Option<PanelBounds>>,
+    /// The rectangle last applied, re-applied on Windows when the app window moves.
+    last_bounds: Mutex<Option<PanelBounds>>,
     /// `<app data>/cef/extensions`, set once CEF has started.
     extensions_dir: Mutex<Option<PathBuf>>,
     /// Extension ids CEF was started with; anything else on disk is waiting for a restart.
@@ -260,6 +268,12 @@ fn ensure_initialized(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), Strin
 /// Chromium marks a profile in use with a `SingletonLock` symlink pointing at
 /// `<host>-<pid>`. After a relaunch the previous process may still be shutting down, and
 /// starting CEF against its profile would make Chromium defer to it; wait for it briefly.
+/// Windows Chromium uses a hidden message window instead of the symlink, so there is
+/// nothing to wait for there.
+#[cfg(not(unix))]
+fn wait_for_profile_lock(_cache_dir: &std::path::Path) {}
+
+#[cfg(unix)]
 fn wait_for_profile_lock(cache_dir: &std::path::Path) {
     let lock = cache_dir.join("SingletonLock");
     for _ in 0..20 {
@@ -350,8 +364,47 @@ fn pump() {
     if PUMPING.swap(true, Ordering::SeqCst) {
         return;
     }
+    pump_stats::ran();
     do_message_loop_work();
     PUMPING.store(false, Ordering::SeqCst);
+}
+
+/// Diagnostics for the external pump, on when `MILD_CEF_PUMP_LOG` names a file: every two
+/// seconds it appends how many pumps were dispatched and actually ran and the longest
+/// gap between runs, which is what a starved CEF UI thread looks like.
+mod pump_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static DISPATCHED: AtomicU64 = AtomicU64::new(0);
+    static RAN: AtomicU64 = AtomicU64::new(0);
+    static MAX_GAP_MS: AtomicU64 = AtomicU64::new(0);
+    static LAST_RUN: Mutex<Option<Instant>> = Mutex::new(None);
+    pub fn dispatched() { DISPATCHED.fetch_add(1, Ordering::Relaxed); }
+    pub fn ran() {
+        RAN.fetch_add(1, Ordering::Relaxed);
+        let now = Instant::now();
+        if let Ok(mut last) = LAST_RUN.lock() {
+            if let Some(previous) = *last {
+                let gap = now.duration_since(previous).as_millis() as u64;
+                MAX_GAP_MS.fetch_max(gap, Ordering::Relaxed);
+            }
+            *last = Some(now);
+        }
+    }
+    pub fn report() {
+        let Ok(path) = std::env::var("MILD_CEF_PUMP_LOG") else { return };
+        let line = format!(
+            "dispatched={} ran={} max_gap_ms={}\n",
+            DISPATCHED.swap(0, Ordering::Relaxed),
+            RAN.swap(0, Ordering::Relaxed),
+            MAX_GAP_MS.swap(0, Ordering::Relaxed)
+        );
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
 }
 
 /// Called by CEF from any thread, including the main thread mid-pump. It only records
@@ -371,7 +424,12 @@ fn start_pump_thread(app: AppHandle) {
     std::thread::spawn(move || {
         const TICK: Duration = Duration::from_millis(16);
         let mut due = std::time::Instant::now() + TICK;
+        let mut next_report = std::time::Instant::now() + Duration::from_secs(2);
         loop {
+            if std::time::Instant::now() >= next_report {
+                pump_stats::report();
+                next_report = std::time::Instant::now() + Duration::from_secs(2);
+            }
             if SHUTTING_DOWN.load(Ordering::SeqCst) {
                 break;
             }
@@ -389,6 +447,7 @@ fn start_pump_thread(app: AppHandle) {
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
+            pump_stats::dispatched();
             if app.run_on_main_thread(pump).is_err() {
                 break;
             }
@@ -408,6 +467,15 @@ pub fn shutdown(app: &AppHandle) {
             CLOSING_BY_APP.store(true, Ordering::SeqCst);
             host.close_browser(1);
         }
+    }
+    // The hidden tab host is a views window. Left alive into cef::shutdown() it took the
+    // views layer down with it on Windows (`Check failed: !is_destroyed_`, then an access
+    // violation in libcef) every time the app exited with the panel open, so it is closed
+    // here, ahead of the shutdown, like the panel browser.
+    TAB_HOST_MAY_CLOSE.store(true, Ordering::SeqCst);
+    shared.tab_host_popups.lock().expect("tab host popups").clear();
+    if let Some(window) = shared.tab_host.lock().expect("tab host").take() {
+        window.close();
     }
     // Let the close round-trip through CEF's threads before shutdown.
     for _ in 0..20 {
@@ -533,6 +601,7 @@ wrap_life_span_handler! {
                 if let Some(window) = self.app.get_webview_window("main") {
                     let _ = platform::apply_bounds(&window.as_ref().window(), &browser, &bounds);
                 }
+                *self.shared.last_bounds.lock().expect("last bounds") = Some(bounds);
             }
             self.shared.update(&self.app, |status| {
                 status.open = true;
@@ -705,7 +774,7 @@ fn create_browser(window: &Window, shared: &Arc<Shared>, app: &AppHandle, url: &
     let rect = platform::rect_for(window, &bounds)?;
     // Alloy style is what a browser embedded in a host view gets; Chrome style cannot be
     // parented into a foreign window (CEF issue #3294). Extensions load either way.
-    let window_info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..Default::default() }.set_as_child(parent, &rect);
+    let window_info = platform::window_info(parent, &rect);
     let mut client = Some(MildClient::new(shared.clone(), app.clone()));
     let settings = BrowserSettings::default();
     if browser_host_create_browser(Some(&window_info), client.as_mut(), Some(&CefString::from(url)), Some(&settings), None, None) != 1 {
@@ -721,10 +790,31 @@ pub fn browser_set_bounds(window: Window, state: tauri::State<'_, BrowserState>,
     on_main(&window, move || {
         let browser = shared.browser.lock().expect("browser").clone();
         match browser {
-            Some(browser) => { let _ = platform::apply_bounds(&target, &browser, &bounds); }
+            Some(browser) => {
+                let _ = platform::apply_bounds(&target, &browser, &bounds);
+                *shared.last_bounds.lock().expect("last bounds") = Some(bounds);
+            }
             None => *shared.pending_bounds.lock().expect("pending bounds") = Some(bounds),
         }
     })
+}
+
+/// Called from the app window's move event. On Windows the browser is a separate window
+/// placed in screen coordinates, so it has to follow; elsewhere it is a child view and
+/// moves with the window on its own.
+pub fn window_moved(window: &Window, state: &BrowserState) {
+    #[cfg(target_os = "windows")]
+    {
+        let bounds = state.0.last_bounds.lock().expect("last bounds").clone();
+        let browser = state.0.browser.lock().expect("browser").clone();
+        if let (Some(bounds), Some(browser)) = (bounds, browser) {
+            let _ = platform::apply_bounds(window, &browser, &bounds);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, state);
+    }
 }
 
 #[tauri::command]
@@ -1011,7 +1101,19 @@ fn install_default_extensions(app: &AppHandle, shared: &Shared, cache_dir: &std:
 /// absolute path, written with the letters a-p.
 fn unpacked_extension_id(path: &std::path::Path) -> String {
     use sha2::Digest;
-    let digest = sha2::Sha256::digest(path.to_string_lossy().as_bytes());
+    // Chromium hashes the path in its native string type (crx_file/id_util.cc): UTF-8 on
+    // macOS and Linux, UTF-16 on Windows, where it also upper-cases the drive letter first.
+    #[cfg(windows)]
+    let bytes: Vec<u8> = {
+        let mut text = path.to_string_lossy().into_owned();
+        if text.len() >= 2 && text.as_bytes()[1] == b':' && text.as_bytes()[0].is_ascii_lowercase() {
+            text.replace_range(0..1, &text[0..1].to_ascii_uppercase());
+        }
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    };
+    #[cfg(not(windows))]
+    let bytes: Vec<u8> = path.to_string_lossy().as_bytes().to_vec();
+    let digest = sha2::Sha256::digest(&bytes);
     digest[..16].iter().flat_map(|byte| [byte >> 4, byte & 0x0f]).map(|nibble| (b'a' + nibble) as char).collect()
 }
 
@@ -1225,9 +1327,9 @@ wrap_window_delegate! {
         }
 
         /// The host must outlive every extension request: Chromium treats the last
-        /// browser window closing as the end of the session.
+        /// browser window closing as the end of the session. Only shutdown may close it.
         fn can_close(&self, _window: Option<&mut cef::Window>) -> i32 {
-            0
+            TAB_HOST_MAY_CLOSE.load(Ordering::SeqCst) as i32
         }
 
         fn window_runtime_style(&self) -> RuntimeStyle {
@@ -1513,7 +1615,7 @@ mod extension_tests {
 #[cfg(target_os = "macos")]
 mod mac {
     use super::PanelBounds;
-    use cef::{ImplBrowser, ImplBrowserHost, Rect};
+    use cef::{ImplBrowser, ImplBrowserHost, Rect, RuntimeStyle, WindowInfo};
     use objc2::encode::Encoding;
     use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Imp, Sel};
     use objc2::{ffi, sel, MainThreadMarker};
@@ -1629,28 +1731,62 @@ mod mac {
             host.was_hidden(hidden as i32);
         }
     }
+
+    pub fn window_info(parent: cef::sys::cef_window_handle_t, rect: &Rect) -> WindowInfo {
+        WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..Default::default() }.set_as_child(parent, rect)
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod win {
     use super::PanelBounds;
-    use cef::{ImplBrowser, ImplBrowserHost, Rect};
+    use cef::{ImplBrowser, ImplBrowserHost, Rect, RuntimeStyle, WindowInfo};
     use tauri::Window;
-    use windows_sys::Win32::Foundation::HWND;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW};
+    use windows_sys::Win32::Foundation::{HWND, POINT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE};
 
+    /// Tauri hands out the `windows` crate's HWND and CEF's bindings declare their own
+    /// (`cef::sys::HWND`, a pointer to an opaque `HWND__`); both wrap the same handle.
     pub fn parent_handle(window: &Window) -> Result<cef::sys::cef_window_handle_t, String> {
-        window.hwnd().map(|hwnd| hwnd.0 as HWND).map_err(|error| error.to_string())
+        window.hwnd().map(|hwnd| cef::sys::HWND(hwnd.0 as *mut cef::sys::HWND__)).map_err(|error| error.to_string())
     }
 
-    /// WebView2 lays the page out in device pixels, so the CSS rectangle is scaled by
-    /// both the webview zoom and the monitor scale factor.
+    /// The raw handle of the browser's native window, for the windows-sys calls below.
+    fn raw_handle(host: &cef::BrowserHost) -> HWND {
+        host.window_handle().0 as HWND
+    }
+
+    /// The browser is a top-level window owned by the app window, not a child of it.
+    /// WebView2 draws through DirectComposition, and DWM layers a window's composition
+    /// visuals above everything its GDI children paint, whatever their z-order — as a
+    /// child, the browser rendered into its window and never reached the screen. An owned
+    /// window is composited above its owner, follows it through minimise and restore, and
+    /// stays behind other applications with it.
+    pub fn window_info(parent: cef::sys::cef_window_handle_t, rect: &Rect) -> WindowInfo {
+        WindowInfo {
+            runtime_style: RuntimeStyle::ALLOY,
+            parent_window: parent,
+            style: WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE,
+            // Keeps it off the taskbar and out of Alt+Tab; it is part of the app window.
+            ex_style: WS_EX_TOOLWINDOW,
+            bounds: rect.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// The panel rectangle in screen pixels. WebView2 lays the page out in device pixels,
+    /// so the CSS rectangle is scaled by both the webview zoom and the monitor scale
+    /// factor, then offset by where the app window's client area sits on screen.
     pub fn rect_for(window: &Window, bounds: &PanelBounds) -> Result<Rect, String> {
         let dpi = window.scale_factor().map_err(|error| error.to_string())?;
         let factor = bounds.scale * dpi;
+        let owner = window.hwnd().map_err(|error| error.to_string())?.0 as HWND;
+        let mut origin = POINT { x: 0, y: 0 };
+        unsafe { ClientToScreen(owner, &mut origin) };
         Ok(Rect {
-            x: (bounds.x * factor).round() as i32,
-            y: (bounds.y * factor).round() as i32,
+            x: origin.x + (bounds.x * factor).round() as i32,
+            y: origin.y + (bounds.y * factor).round() as i32,
             width: (bounds.width * factor).round().max(1.0) as i32,
             height: (bounds.height * factor).round().max(1.0) as i32,
         })
@@ -1659,10 +1795,12 @@ mod win {
     pub fn apply_bounds(window: &Window, browser: &cef::Browser, bounds: &PanelBounds) -> Result<(), String> {
         let rect = rect_for(window, bounds)?;
         let host = browser.host().ok_or("browser has no host")?;
-        let hwnd = host.window_handle();
+        let hwnd = raw_handle(&host);
         if hwnd.is_null() {
             return Err("browser has no native window".into());
         }
+        // Owned windows already sit above their owner; the z-order is left alone so a
+        // bounds update never pulls focus or reorders the app's other windows.
         unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE) };
         host.was_resized();
         Ok(())
@@ -1670,9 +1808,9 @@ mod win {
 
     pub fn set_hidden(browser: &cef::Browser, hidden: bool) {
         if let Some(host) = browser.host() {
-            let hwnd = host.window_handle();
+            let hwnd = raw_handle(&host);
             if !hwnd.is_null() {
-                unsafe { ShowWindow(hwnd, if hidden { SW_HIDE } else { SW_SHOW }) };
+                unsafe { ShowWindow(hwnd, if hidden { SW_HIDE } else { SW_SHOWNA }) };
             }
             host.was_hidden(hidden as i32);
         }

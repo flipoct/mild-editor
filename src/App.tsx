@@ -11,7 +11,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
-import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, locate, moveToColumn, moveWithinColumn, splitPanel, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
+import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
 import { renderTemplateWithCursor } from "./templateParser";
 import packageInfo from "../package.json";
 
@@ -416,7 +416,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Move a panel between columns with ◀ ▶, up and down inside a column with ▲ ▼, and ⇥ gives it a column of its own. Dragging a chip onto a panel drops it against the edge you point at.", layoutMoveLeft: "move to the column on the left", layoutMoveRight: "move to the column on the right", layoutMoveUp: "move up in this column", layoutMoveDown: "move down in this column", layoutSplit: "give it a column of its own", panelGrip: "drag to move this panel", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "drag to move this panel", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -444,7 +444,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
-    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 열을 옮기고, ▲ ▼ 로 같은 열 안에서 위아래로 옮깁니다. ⇥ 는 따로 떼어 새 열로 만듭니다. 칩을 패널 위로 끌면 가리킨 가장자리에 놓입니다.", layoutMoveLeft: "왼쪽 열로 보내기", layoutMoveRight: "오른쪽 열로 보내기", layoutMoveUp: "이 열에서 위로", layoutMoveDown: "이 열에서 아래로", layoutSplit: "따로 떼어 새 열로", panelGrip: "끌어서 이 패널 옮기기", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -491,7 +491,6 @@ function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [panelLayout, setPanelLayout] = useState<PanelLayout<PanelId>>(storedPanelLayout);
   const [panelWeights, setPanelWeights] = useState<PanelWeights>(storedPanelWeights);
-  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -991,7 +990,11 @@ function App() {
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
   }, []);
 
+  // Tabs in the order they were last active, newest first, so closing one can return to
+  // the tab that was in use before it.
+  const tabHistoryRef = useRef<string[]>([]);
   const activateTab = (tab: ProblemTab) => {
+    tabHistoryRef.current = [tab.id, ...tabHistoryRef.current.filter((id) => id !== tab.id)];
     clearDiagnostics();
     setActiveTabId(tab.id);
     setLanguage(tab.language);
@@ -1497,6 +1500,7 @@ function App() {
   const closeProblem = (id: string) => {
     const index = tabs.findIndex((tab) => tab.id === id);
     const remaining = tabs.filter((tab) => tab.id !== id);
+    tabHistoryRef.current = tabHistoryRef.current.filter((item) => item !== id);
     if (!remaining.length) {
       clearDiagnostics();
       setTabs([]);
@@ -1505,7 +1509,18 @@ function App() {
       return;
     }
     setTabs(remaining);
-    if (id === activeTabId) activateTab(remaining[Math.min(index, remaining.length - 1)]);
+    if (id === activeTabId) {
+      // Go back to the tab that was active before this one, so Ctrl+W lands where you
+      // came from every time. With no history left, the neighbour on the left: the same
+      // rule whether the closed tab was in the middle of the strip or at its end.
+      const previous = tabHistoryRef.current
+        .map((item) => remaining.find((tab) => tab.id === item))
+        .find((tab): tab is ProblemTab => Boolean(tab));
+      activateTab(previous ?? remaining[Math.max(0, index - 1)]);
+      // Whether the close came from the keyboard or the tab's button, typing continues in
+      // the editor; the button that had focus is gone with the tab.
+      editorRef.current?.focus();
+    }
   };
 
   const requestCloseProblem = (id: string) => {
@@ -2539,7 +2554,7 @@ function App() {
   // popover or menu above it: hide it while anything floats over the workspace.
   const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
-    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .layout-popover, .explorer-context-menu")));
+    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .explorer-context-menu")));
   });
   // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
@@ -2587,9 +2602,6 @@ function App() {
   /** Put `id` against one edge of `target`: beside it as a column, or into its stack. */
   const dropPanelOn = (id: PanelId, target: PanelId, edge: Edge) =>
     setPanelLayout((layout) => dropPanel(layout, id, target, edge));
-  const shiftPanel = (id: PanelId, direction: -1 | 1) => setPanelLayout((layout) => moveToColumn(layout, id, direction));
-  const stackPanel = (id: PanelId, direction: -1 | 1) => setPanelLayout((layout) => moveWithinColumn(layout, id, direction));
-  const dividePanel = (id: PanelId) => setPanelLayout((layout) => splitPanel(layout, id));
 
   /** The grip in a panel's top-left corner drags it exactly as its status-bar chip does. */
   const panelGrip = (id: PanelId) => (
@@ -2649,12 +2661,7 @@ function App() {
     document.body.classList.remove("panel-dragging");
     setPanelDrag(null);
     if (!drag) return false;
-    if (drag.over) {
-      if (!panelShown(drag.id)) togglePanel(drag.id);
-      dropPanelOn(drag.id, drag.over.target, drag.over.edge);
-    }
-    // A press that never moved is a click on the chip, which toggles the panel.
-    return drag.moved;
+    if (drag.over) dropPanelOn(drag.id, drag.over.target, drag.over.edge);
   };
   const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
   /** The user's choice for a panel, before the gates (open tabs, a workspace) that may hide it anyway. */
@@ -2696,18 +2703,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-panel-weights", JSON.stringify(panelWeights));
   }, [panelWeights]);
-
-  useEffect(() => {
-    if (!layoutMenuOpen) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopImmediatePropagation(); setLayoutMenuOpen(false); } };
-    const onPointer = (event: MouseEvent) => {
-      if (!(event.target instanceof Element) || event.target.closest(".layout-popover, .layout-button")) return;
-      setLayoutMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    window.addEventListener("mousedown", onPointer, true);
-    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("mousedown", onPointer, true); };
-  }, [layoutMenuOpen]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2906,7 +2901,7 @@ function App() {
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
         case "view:panel-interactive": setTestPanelVisible(true); setPanelMode("interactive"); break;
         case "view:panel-problem": setProblemPanelOpen((open) => !open); break;
-        case "view:layout": setLayoutMenuOpen((open) => !open); break;
+        case "view:layout": resetLayout(); break;
         case "view:zoom-in": adjustUiZoom(UI_ZOOM_STEP); break;
         case "view:zoom-out": adjustUiZoom(-UI_ZOOM_STEP); break;
         case "view:zoom-reset": setUiZoom(100); break;
@@ -3569,6 +3564,8 @@ function App() {
                 <div className="wallpaper-layout-actions"><button className="subtle-button" onClick={() => adjustUiZoom(-UI_ZOOM_STEP)} disabled={uiZoom <= UI_ZOOM_MIN} aria-label="zoom out">−</button><button className="subtle-button" onClick={() => adjustUiZoom(UI_ZOOM_STEP)} disabled={uiZoom >= UI_ZOOM_MAX} aria-label="zoom in">＋</button><button className="subtle-button" onClick={() => setUiZoom(100)} disabled={uiZoom === 100}>{t("reset")}</button></div>
               </div>
               <p className="settings-help">{t("interfaceScaleHelp")}</p>
+              <div className="appearance-group"><span>{t("layoutTitle")}</span><div className="companion-controls"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div></div>
+              <p className="settings-help">{t("layoutHint")}</p>
               <p className="settings-help">{t("appearanceHelp")}</p>
               <div className="appearance-group"><span>theme</span><div className="theme-options">
                 <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>pastel dusk</strong><small>muted Sublime-inspired</small></button>
@@ -3770,42 +3767,13 @@ function App() {
           <button className={`lsp-status ${clangdStatus}`} onClick={() => { setSettingsPage("language-server"); setSettingsOpen(true); }} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
         <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
-          <button className={`layout-button ${layoutMenuOpen ? "active" : ""}`} onClick={() => setLayoutMenuOpen((open) => !open)} aria-haspopup="dialog" aria-expanded={layoutMenuOpen} title={t("layoutTitle")}>⇄</button>
-          {PANEL_IDS.map((id) => (
-            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""} ${panelDrag?.id === id ? "dragging" : ""}`}
-              aria-pressed={id === "editor" ? undefined : panelShown(id)} data-panel={id}
-              onPointerDown={(event) => startPanelDrag(id, event)}
-              onPointerMove={trackPanelDrag}
-              onPointerUp={() => { if (!finishPanelDrag()) togglePanel(id); }}
-              onPointerCancel={finishPanelDrag}
-              onKeyDown={(event) => {
-                if (!event.altKey) return;
-                if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); }
-                if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); stackPanel(id, event.key === "ArrowUp" ? -1 : 1); }
-              }}
+          {PANEL_IDS.filter((id) => id !== "editor").map((id) => (
+            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""}`}
+              aria-pressed={panelShown(id)} data-panel={id}
+              onClick={() => togglePanel(id)}
             >{chipLabel(id)}</button>
           ))}
         </div>
-        {layoutMenuOpen && <div className="layout-popover" role="dialog" aria-label={t("layoutTitle")}>
-          <div className="layout-head"><strong>{t("layoutTitle")}</strong><button className="layout-close" onClick={() => setLayoutMenuOpen(false)} aria-label="close">×</button></div>
-          <p>{t("layoutHint")}</p>
-          <div className="layout-rows">
-            {PANEL_IDS.map((id) => { const at = locate(shownLayout, id); const stack = at ? shownLayout[at.column] : []; return (
-              <div className="layout-row" key={id} data-panel={id}>
-                <span className="layout-name">{chipLabel(id)}</span>
-                <button onClick={() => shiftPanel(id, -1)} disabled={!at || (at.column === 0 && stack.length === 1)} aria-label={`move ${chipLabel(id)} left`} title={t("layoutMoveLeft")}>◀</button>
-                <button onClick={() => shiftPanel(id, 1)} disabled={!at || (at.column === shownLayout.length - 1 && stack.length === 1)} aria-label={`move ${chipLabel(id)} right`} title={t("layoutMoveRight")}>▶</button>
-                <button onClick={() => stackPanel(id, -1)} disabled={!at || at.row === 0} aria-label={`move ${chipLabel(id)} up`} title={t("layoutMoveUp")}>▲</button>
-                <button onClick={() => stackPanel(id, 1)} disabled={!at || at.row === stack.length - 1} aria-label={`move ${chipLabel(id)} down`} title={t("layoutMoveDown")}>▼</button>
-                <button onClick={() => dividePanel(id)} disabled={!at || stack.length === 1} aria-label={`split ${chipLabel(id)} into its own column`} title={t("layoutSplit")}>⇥</button>
-                {id === "editor"
-                  ? <span className="layout-always">{t("layoutShow")}</span>
-                  : <label className="layout-show"><input type="checkbox" checked={panelWanted(id)} onChange={() => togglePanel(id)} />{t("layoutShow")}</label>}
-              </div>
-            ); })}
-          </div>
-          <div className="layout-foot"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div>
-        </div>}
         <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;

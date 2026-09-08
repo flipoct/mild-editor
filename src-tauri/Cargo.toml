@@ -25,23 +25,27 @@ scraper = "0.24"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.11.0"
 
-# Embedded Chromium for the problem panel. macOS only for now: the Windows code path in
-# browser.rs is written but the installer does not yet ship libcef.dll and its resources
-# next to the executable, and an exe that imports libcef.dll without it will not start.
+# Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
+# builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.
+# The installer ships libcef.dll and its resources next to the executable (see
+# tauri.cef.windows.conf.json and scripts/prepare-cef.ps1); an exe that imports libcef.dll
+# without them will not start, which is why the CEF layer stays opt-in per build.
 # Pinned: 152.0.5 hangs every network request on macOS 26 (verified against CEF's own
 # cefsimple); 151.3.24 and 150.0.19 work.
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", all(target_os = "windows", target_env = "msvc")))'.dependencies]
 cef = { version = "=151.8.1", default-features = false }
 # Unpacks .crx downloads (a CRX3 header in front of a deflate zip).
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Chromium derives an unpacked extension's id from the SHA-256 of its path.
 sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 [[bin]]
 name = "mild-editor"

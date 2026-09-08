@@ -1,8 +1,9 @@
-// The problem panel (embedded CEF) is macOS-only until the Windows installer ships CEF;
-// other platforms get a stub with the same commands that reports the panel unavailable.
-#[cfg(target_os = "macos")]
+// The problem panel (embedded CEF) exists on macOS and MSVC Windows, matching the `cef`
+// dependency in Cargo.toml; other platforms get a stub with the same commands that
+// reports the panel unavailable.
+#[cfg(any(target_os = "macos", all(target_os = "windows", target_env = "msvc")))]
 pub mod browser;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
 mod companion;
@@ -2488,6 +2489,9 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = window.emit("native-close-requested", ());
+                }
+                tauri::WindowEvent::Moved(_) => {
+                    browser::window_moved(window, &window.state::<browser::BrowserState>());
                 }
                 tauri::WindowEvent::Destroyed => {
                     let state = window.state::<ClangdState>();
