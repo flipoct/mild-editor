@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor"
-version = "1.7.1"
+version = "1.8.0"
 dependencies = [
  "cef",
  "objc2",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor-cef-helper"
-version = "1.7.1"
+version = "1.8.0"
 dependencies = [
  "cef",
 ]

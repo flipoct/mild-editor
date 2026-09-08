@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0
+
+- Panels can be stacked as well as placed side by side. The workspace is now a set of columns, each holding one or more panels top to bottom, so the problem page can sit under the code rather than beside it.
+- Drag a panel by the grip in its top-left corner, or by its chip in the status bar, and drop it against the edge of another panel: the left or right half puts it in a column of its own, the top or bottom half stacks it in that panel's column.
+- Resize in both directions. The divider between two columns still sets their widths, and a new divider between stacked panels sets their heights. A pair keeps its combined size, so the rest of the workspace does not move.
+- The layout popover gains ▲ ▼ to move a panel inside its column and ⇥ to give it a column of its own, next to the ◀ ▶ that move it between columns. `Alt` with the arrow keys on a chip does the same.
+- Panel sizes are now shares of the window rather than pixel widths, so a layout keeps its proportions when the window is resized. Widths set in an earlier version are carried over once.
+
 ## 1.7.1
 
 - Add **file imports into folders** in **Settings → online judges**, off by default. With it on, an imported problem is filed under its judge — `AtCoder/C_Remove_and_Append.py` — and a contest gets a folder of its own inside it, so a whole contest arrives as `Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py`. Problems from the import dialog, from a contest URL and from Competitive Companion all follow the setting. Files already saved stay where they are.
