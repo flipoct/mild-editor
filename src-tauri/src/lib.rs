@@ -2431,7 +2431,10 @@ pub fn run() {
             browser::browser_set_visible,
             browser::browser_navigate,
             browser::browser_go,
-            browser::browser_close
+            browser::browser_close,
+            browser::browser_extensions_list,
+            browser::browser_extension_install,
+            browser::browser_extension_remove
         ])
         .on_window_event(|window, event| {
             match event {

@@ -82,3 +82,28 @@ pub fn browser_go(_window: Window, _state: tauri::State<'_, BrowserState>, _acti
 pub fn browser_close(_window: Window, _state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     Ok(())
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub path: String,
+    pub pending: bool,
+}
+
+#[tauri::command]
+pub fn browser_extensions_list(_state: tauri::State<'_, BrowserState>) -> Vec<ExtensionInfo> {
+    Vec::new()
+}
+
+#[tauri::command]
+pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _source: String) -> Result<ExtensionInfo, String> {
+    Err(REASON.into())
+}
+
+#[tauri::command]
+pub fn browser_extension_remove(_state: tauri::State<'_, BrowserState>, _id: String) -> Result<(), String> {
+    Err(REASON.into())
+}

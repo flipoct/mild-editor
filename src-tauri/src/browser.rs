@@ -67,6 +67,10 @@ pub struct Shared {
     browser: Mutex<Option<Browser>>,
     /// Applied when the browser finishes creating, which happens asynchronously.
     pending_bounds: Mutex<Option<PanelBounds>>,
+    /// `<app data>/cef/extensions`, set once CEF has started.
+    extensions_dir: Mutex<Option<PathBuf>>,
+    /// Extension ids CEF was started with; anything else on disk is waiting for a restart.
+    loaded_extensions: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Tauri-managed handle to the panel.
@@ -201,8 +205,14 @@ pub fn initialize(app: &AppHandle) {
     }
 }
 
-fn try_initialize(app: &AppHandle, _shared: &Arc<Shared>) -> Result<(), String> {
+fn try_initialize(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), String> {
     let layout = resolve_layout(app)?;
+    *shared.extensions_dir.lock().expect("extensions dir") = Some(layout.cache_dir.join("extensions"));
+    *shared.loaded_extensions.lock().expect("loaded extensions") = layout
+        .extensions
+        .iter()
+        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .collect();
 
     #[cfg(target_os = "macos")]
     {
@@ -594,6 +604,218 @@ pub fn browser_close(window: Window, state: tauri::State<'_, BrowserState>) -> R
             host.close_browser(1);
         }
     })
+}
+
+// ---------------------------------------------------------------------------------------
+// Extensions. CEF has no Web Store UI and loads extensions only from unpacked directories
+// named on the command line at start-up, so installing means: fetch the .crx Google serves
+// for a store id, strip the CRX3 header, unzip it under the profile, and load it on the
+// next start.
+
+/// Chromium version reported to the update server, which serves the newest .crx compatible
+/// with it. Keep in step with the pinned CEF (see Cargo.toml).
+const CHROMIUM_VERSION: &str = "151.0.7922.174";
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub path: String,
+    /// Installed or changed since CEF started; a restart picks it up.
+    pub pending: bool,
+}
+
+/// A Web Store id is 32 letters from a to p. Accepts the bare id or any store URL that
+/// contains one (`…/detail/<slug>/<id>`).
+fn extension_id_from_source(source: &str) -> Option<String> {
+    let trimmed = source.trim();
+    let is_id = |s: &str| s.len() == 32 && s.bytes().all(|b| (b'a'..=b'p').contains(&b));
+    if is_id(trimmed) {
+        return Some(trimmed.to_string());
+    }
+    trimmed
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|part| is_id(part))
+        .map(str::to_string)
+}
+
+/// The zip inside a .crx. CRX3: "Cr24", u32 version (3), u32 header length, header, zip.
+/// CRX2 differs only in carrying two lengths (public key, signature) instead of one.
+fn crx_payload(bytes: &[u8]) -> Result<&[u8], String> {
+    let word = |at: usize| -> Result<usize, String> {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .ok_or_else(|| "truncated .crx header".to_string())
+    };
+    if bytes.get(0..4) != Some(b"Cr24") {
+        return Err("not a .crx file (the store returned something else)".into());
+    }
+    let start = match word(4)? {
+        3 => 12 + word(8)?,
+        2 => 16 + word(8)? + word(12)?,
+        other => return Err(format!("unsupported .crx version {other}")),
+    };
+    bytes.get(start..).ok_or_else(|| "truncated .crx payload".to_string())
+}
+
+fn read_manifest(dir: &std::path::Path) -> Option<(String, String)> {
+    let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).ok()?).ok()?;
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut name = manifest.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // Localised names look like __MSG_appName__ and resolve through the default locale.
+    if let Some(key) = name.strip_prefix("__MSG_").and_then(|rest| rest.strip_suffix("__")) {
+        let locale = manifest.get("default_locale").and_then(|v| v.as_str()).unwrap_or("en");
+        let messages = std::fs::read_to_string(dir.join("_locales").join(locale).join("messages.json")).ok();
+        let resolved = messages
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get(key)?.get("message")?.as_str().map(str::to_string));
+        if let Some(resolved) = resolved {
+            name = resolved;
+        }
+    }
+    Some((name, version))
+}
+
+fn list_extensions(shared: &Shared) -> Vec<ExtensionInfo> {
+    let Some(dir) = shared.extensions_dir.lock().expect("extensions dir").clone() else { return Vec::new() };
+    let loaded = shared.loaded_extensions.lock().expect("loaded extensions").clone();
+    let mut items: Vec<ExtensionInfo> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let (name, version) = read_manifest(&path)?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            Some(ExtensionInfo { pending: !loaded.contains(&id), path: path.to_string_lossy().into_owned(), id, name, version })
+        })
+        .collect();
+    items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    items
+}
+
+fn install_extension(shared: &Shared, source: &str) -> Result<ExtensionInfo, String> {
+    let id = extension_id_from_source(source).ok_or("That is not a Chrome Web Store link or extension id.")?;
+    let dir = shared.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
+    let url = format!(
+        "https://clients2.google.com/service/update2/crx?response=redirect&prodversion={CHROMIUM_VERSION}&acceptformat=crx2,crx3&x=id%3D{id}%26installsource%3Dondemand%26uc"
+    );
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{CHROMIUM_VERSION} Safari/537.36"))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client.get(&url).send().map_err(|error| format!("Download failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("The store answered {} for {id}. Is the id right?", response.status()));
+    }
+    let bytes = response.bytes().map_err(|error| error.to_string())?;
+    let payload = crx_payload(&bytes)?;
+
+    // Unpack beside the target, then swap it in, so a failed download never leaves a
+    // half-written extension for the next start to trip over.
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let staging = dir.join(format!(".{id}.partial"));
+    let _ = std::fs::remove_dir_all(&staging);
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(payload)).map_err(|error| format!("Unreadable .crx: {error}"))?;
+    archive.extract(&staging).map_err(|error| format!("Could not unpack the extension: {error}"))?;
+    if !staging.join("manifest.json").is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err("The download did not contain an extension manifest.".into());
+    }
+    let target = dir.join(&id);
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::rename(&staging, &target).map_err(|error| error.to_string())?;
+
+    let (name, version) = read_manifest(&target).unwrap_or_default();
+    Ok(ExtensionInfo { pending: true, path: target.to_string_lossy().into_owned(), id, name, version })
+}
+
+#[tauri::command]
+pub fn browser_extensions_list(state: tauri::State<'_, BrowserState>) -> Vec<ExtensionInfo> {
+    list_extensions(&state.0)
+}
+
+/// `source` is a Web Store link or a bare extension id. Runs off the main thread: the
+/// download can take a while and must not stall CEF's pump.
+#[tauri::command]
+pub async fn browser_extension_install(state: tauri::State<'_, BrowserState>, source: String) -> Result<ExtensionInfo, String> {
+    let shared = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || install_extension(&shared, &source))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn browser_extension_remove(state: tauri::State<'_, BrowserState>, id: String) -> Result<(), String> {
+    let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
+    let id = extension_id_from_source(&id).ok_or("Unknown extension id.")?;
+    std::fs::remove_dir_all(dir.join(&id)).map_err(|error| format!("Could not remove the extension: {error}"))?;
+    // It stays loaded in the running CEF until the next start; the list reports it gone.
+    state.0.loaded_extensions.lock().expect("loaded extensions").remove(&id);
+    Ok(())
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_bare_id_and_store_links() {
+        assert_eq!(extension_id_from_source("cjnmckjndlpiamhfimnnjmnckgghkjbl").as_deref(), Some("cjnmckjndlpiamhfimnnjmnckgghkjbl"));
+        assert_eq!(
+            extension_id_from_source("https://chromewebstore.google.com/detail/competitive-companion/cjnmckjndlpiamhfimnnjmnckgghkjbl?hl=en").as_deref(),
+            Some("cjnmckjndlpiamhfimnnjmnckgghkjbl")
+        );
+        assert_eq!(extension_id_from_source("https://chrome.google.com/webstore/detail/cjnmckjndlpiamhfimnnjmnckgghkjbl").as_deref(), Some("cjnmckjndlpiamhfimnnjmnckgghkjbl"));
+        assert_eq!(extension_id_from_source("not an id"), None);
+        assert_eq!(extension_id_from_source("cjnmckjndlpiamhfimnnjmnckgghkjbz"), None, "z is outside a-p");
+    }
+
+    #[test]
+    fn strips_crx3_and_crx2_headers() {
+        let zip = b"PK\x03\x04payload";
+        let mut crx3 = b"Cr24".to_vec();
+        crx3.extend(3u32.to_le_bytes());
+        crx3.extend(5u32.to_le_bytes());
+        crx3.extend(b"hdr..");
+        crx3.extend(zip);
+        assert_eq!(crx_payload(&crx3).unwrap(), zip);
+
+        let mut crx2 = b"Cr24".to_vec();
+        crx2.extend(2u32.to_le_bytes());
+        crx2.extend(2u32.to_le_bytes());
+        crx2.extend(3u32.to_le_bytes());
+        crx2.extend(b"kksig");
+        crx2.extend(zip);
+        assert_eq!(crx_payload(&crx2).unwrap(), zip);
+
+        assert!(crx_payload(b"<html>nope").is_err());
+        assert!(crx_payload(b"Cr24\x03\x00\x00\x00\xff\xff\x00\x00").is_err(), "header longer than the file");
+    }
+
+    /// Needs the network: fetches Competitive Companion from the Web Store and unpacks it.
+    #[test]
+    #[ignore = "downloads from clients2.google.com"]
+    fn installs_competitive_companion_from_the_store() {
+        let shared = Shared::default();
+        let dir = tempfile::tempdir().expect("temp dir");
+        // MILD_TEST_EXTENSIONS_DIR redirects the install into a real profile, which is how
+        // the end-to-end check seeds the dev app with a store extension.
+        let root = std::env::var_os("MILD_TEST_EXTENSIONS_DIR").map(PathBuf::from).unwrap_or_else(|| dir.path().join("extensions"));
+        *shared.extensions_dir.lock().unwrap() = Some(root);
+        let info = install_extension(&shared, "https://chromewebstore.google.com/detail/competitive-companion/cjnmckjndlpiamhfimnnjmnckgghkjbl").expect("install");
+        assert_eq!(info.id, "cjnmckjndlpiamhfimnnjmnckgghkjbl");
+        assert!(info.name.to_lowercase().contains("competitive"), "name was {:?}", info.name);
+        assert!(std::path::Path::new(&info.path).join("manifest.json").is_file());
+        assert!(info.pending);
+        let listed = list_extensions(&shared);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, info.id);
+    }
 }
 
 // ---------------------------------------------------------------------------------------

@@ -60,6 +60,8 @@ const storedPanelOrder = (): PanelId[] => {
   } catch { return [...PANEL_IDS]; }
 };
 /** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
+/** An unpacked Chrome extension under the app profile, as listed by `browser_extensions_list`. */
+type BrowserExtension = { id: string; name: string; version: string; path: string; pending: boolean };
 type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
@@ -366,6 +368,7 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
+    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserPending: "after restart",
     chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide, drag to move", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
@@ -393,6 +396,7 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
+    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기, 드래그: 위치 이동", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
@@ -472,7 +476,11 @@ function App() {
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
   const importInFlightRef = useRef(false);
-  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates">("template");
+  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates" | "browser">("template");
+  const [browserExtensions, setBrowserExtensions] = useState<BrowserExtension[]>([]);
+  const [extensionSource, setExtensionSource] = useState("");
+  const [extensionBusy, setExtensionBusy] = useState(false);
+  const [extensionError, setExtensionError] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: UPDATES_SUPPORTED ? "idle" : "unavailable" });
   // The version the binary actually carries, which is what the updater compares
   // against; package.json is only the fallback for the browser preview.
@@ -2483,6 +2491,37 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.sourceUrl, browserStatus.available, showProblemPanel]);
 
+  const refreshBrowserExtensions = () => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void invoke<BrowserExtension[]>("browser_extensions_list").then(setBrowserExtensions).catch(() => setBrowserExtensions([]));
+  };
+  useEffect(() => { if (settingsOpen && settingsPage === "browser") refreshBrowserExtensions(); }, [settingsOpen, settingsPage]);
+
+  const installBrowserExtension = async () => {
+    const source = extensionSource.trim();
+    if (!source || extensionBusy) return;
+    setExtensionBusy(true);
+    setExtensionError("");
+    try {
+      await invoke("browser_extension_install", { source });
+      setExtensionSource("");
+      refreshBrowserExtensions();
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExtensionBusy(false);
+    }
+  };
+
+  const removeBrowserExtension = async (id: string) => {
+    try {
+      await invoke("browser_extension_remove", { id });
+      refreshBrowserExtensions();
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
 
   /** Runs what the user is looking at: the interactive panel when it is showing, otherwise the tests. */
@@ -3199,7 +3238,7 @@ function App() {
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <header className="settings-header">
-              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : t("languageServer")}</h2></div>
+              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : settingsPage === "browser" ? t("browserSettings") : t("languageServer")}</h2></div>
               <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
             </header>
             <div className="settings-pages">
@@ -3208,6 +3247,7 @@ function App() {
               <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>{t("snippets")}</button>
               <button className={settingsPage === "judge" ? "active" : ""} onClick={() => setSettingsPage("judge")}>{t("judge")}</button>
               <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>{t("languageServer")}</button>
+              <button className={settingsPage === "browser" ? "active" : ""} onClick={() => setSettingsPage("browser")}>{t("browserSettings")}</button>
               <button className={settingsPage === "updates" ? "active" : ""} onClick={() => setSettingsPage("updates")}>{t("updates")}{updateStatus.phase === "available" ? " •" : ""}</button>
             </div>
             {settingsPage === "appearance" ? <div className="appearance-settings">
@@ -3303,6 +3343,23 @@ function App() {
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
               <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={() => void refreshSubmissionStatuses()}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
+            </div> : settingsPage === "browser" ? <div className="language-server-settings browser-settings">
+              <div className={`lsp-state ${browserStatus.available ? "ready" : "error"}`}>
+                <span className="lsp-dot" /><div><strong>{t("problemPanel")}</strong><small>{browserStatus.available ? `CEF · ${browserStatus.open ? browserStatus.url || "open" : "idle"}` : browserStatus.error || "unavailable"}</small></div>
+              </div>
+              <p className="settings-help">{t("browserExtensionsHelp")}</p>
+              <label className="clangd-path-label">{t("browserExtensionSource")}<span className="extension-install"><input value={extensionSource} onChange={(event) => setExtensionSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void installBrowserExtension(); } }} placeholder="https://chromewebstore.google.com/detail/…" spellCheck={false} disabled={extensionBusy || !browserStatus.available} /><button className="primary-button" onClick={() => void installBrowserExtension()} disabled={extensionBusy || !extensionSource.trim() || !browserStatus.available}>{extensionBusy ? t("browserExtensionInstalling") : t("browserExtensionInstall")}</button></span></label>
+              {extensionError && <p className="settings-help extension-error">{extensionError}</p>}
+              <div className="extension-list" role="list">
+                {browserExtensions.length === 0 && <p className="settings-help">{t("browserExtensionsNone")}</p>}
+                {browserExtensions.map((extension) => (
+                  <div className="extension-row" role="listitem" key={extension.id}>
+                    <div><strong>{extension.name}</strong><small>{extension.version} · {extension.id}{extension.pending ? ` · ${t("browserPending")}` : ""}</small></div>
+                    <button className="danger-button" onClick={() => void removeBrowserExtension(extension.id)}>{t("browserExtensionRemove")}</button>
+                  </div>
+                ))}
+              </div>
+              {browserExtensions.some((extension) => extension.pending) && <div className="extension-restart"><span>{t("browserRestartNeeded")}</span><button className="subtle-button" onClick={() => void relaunch()}>{t("browserRestartNow")}</button></div>}
             </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
               <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
                 <span className="lsp-dot" />
