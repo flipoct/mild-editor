@@ -42,7 +42,12 @@ fn status() -> PanelStatus {
 
 pub fn exit_if_subprocess() {}
 
-pub fn initialize(app: &AppHandle) {
+#[tauri::command]
+pub fn mac_drag_window(_window: Window) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn prepare(app: &AppHandle) {
     let _ = app.emit(STATUS_EVENT, status());
 }
 

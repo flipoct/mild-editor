@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -368,7 +368,7 @@ const messages = {
     judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.",
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
-    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserPending: "after restart",
+    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
     chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide, drag to move", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
@@ -396,7 +396,7 @@ const messages = {
     judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
-    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserPending: "재시작 후",
+    browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기, 드래그: 위치 이동", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
@@ -534,7 +534,7 @@ function App() {
   const [testPanelVisible, setTestPanelVisible] = useState(() => localStorage.getItem("mild-test-panel-visible") !== "0");
   // Embedded Chromium problem panel. The native view is positioned over `.problem-host`;
   // React only owns the rectangle, the toolbar and the status it is told about.
-  const [problemPanelOpen, setProblemPanelOpen] = useState(() => (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
+  const [problemPanelOpen, setProblemPanelOpen] = useState(() => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
   const [problemPanelWidth, setProblemPanelWidth] = useState(() => Number(localStorage.getItem("mild-problem-panel-width")) || 460);
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus>({ available: false, open: false, visible: false, url: "", title: "", loading: false, canGoBack: false, canGoForward: false });
   const [problemUrlDraft, setProblemUrlDraft] = useState("");
@@ -2522,6 +2522,19 @@ function App() {
     }
   };
 
+  // Window dragging from the custom title bar. Windows and Linux use Tauri's
+  // data-tauri-drag-region handler; on macOS that path can crash on a nil current event
+  // once CEF shares the main loop, so the drag goes through a nil-safe native command.
+  const dragRegion = isMac ? {} : { "data-tauri-drag-region": true };
+  const titlebarMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!isMac || !("__TAURI_INTERNALS__" in window) || event.button !== 0) return;
+    const target = event.target as Element;
+    if (target.closest("button, input, select, textarea, [role=tab], .tab, .titlebar-tools")) return;
+    event.preventDefault();
+    if (event.detail >= 2) { void getCurrentWindow().toggleMaximize(); return; }
+    void invoke("mac_drag_window");
+  };
+
   const adjustUiZoom = (delta: number) => setUiZoom((current) => clampUiZoom(current + delta));
 
   /** Runs what the user is looking at: the interactive panel when it is showing, otherwise the tests. */
@@ -2893,13 +2906,13 @@ function App() {
         "--acrylic-blur": `${acrylicBlur}px`,
       } as CSSProperties}
     >
-      <div className="window-titlebar" data-tauri-drag-region>
-        <div className="titlebar-identity" data-tauri-drag-region>
+      <div className="window-titlebar" {...dragRegion} onMouseDown={titlebarMouseDown}>
+        <div className="titlebar-identity" {...dragRegion}>
           <span className="titlebar-logo" aria-hidden="true">m</span>
-          <span className="titlebar-name" data-tauri-drag-region>mild editor</span>
-          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
-          <span className="titlebar-separator" data-tauri-drag-region>·</span>
-          <span className="titlebar-file" data-tauri-drag-region>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
+          <span className="titlebar-name" {...dragRegion}>mild editor</span>
+          {IS_DEV_BUILD && <span className="titlebar-dev" {...dragRegion} title="tauri dev build">dev</span>}
+          <span className="titlebar-separator" {...dragRegion}>·</span>
+          <span className="titlebar-file" {...dragRegion}>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
         </div>
         <div className="titlebar-tools">
           <div className="file-actions">
@@ -3359,7 +3372,7 @@ function App() {
                   </div>
                 ))}
               </div>
-              {browserExtensions.some((extension) => extension.pending) && <div className="extension-restart"><span>{t("browserRestartNeeded")}</span><button className="subtle-button" onClick={() => void relaunch()}>{t("browserRestartNow")}</button></div>}
+              {browserExtensions.some((extension) => extension.pending) && <div className="extension-restart"><span>{IS_DEV_BUILD ? t("browserRestartDev") : t("browserRestartNeeded")}</span>{!IS_DEV_BUILD && <button className="subtle-button" onClick={() => void relaunch()}>{t("browserRestartNow")}</button>}</div>}
             </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
               <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
                 <span className="lsp-dot" />

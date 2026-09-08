@@ -2374,14 +2374,14 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             macos_menu::install(app.handle())?;
-            browser::initialize(app.handle());
+            browser::prepare(app.handle());
             Ok(())
         })
         .on_menu_event(macos_menu::forward_event);
 
     #[cfg(not(target_os = "macos"))]
     let builder = builder.setup(|app| {
-        browser::initialize(app.handle());
+        browser::prepare(app.handle());
         Ok(())
     });
 
@@ -2434,7 +2434,8 @@ pub fn run() {
             browser::browser_close,
             browser::browser_extensions_list,
             browser::browser_extension_install,
-            browser::browser_extension_remove
+            browser::browser_extension_remove,
+            browser::mac_drag_window
         ])
         .on_window_event(|window, event| {
             match event {

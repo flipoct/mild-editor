@@ -25,6 +25,8 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// Guards against re-entering `do_message_loop_work` from inside itself.
 static PUMPING: AtomicBool = AtomicBool::new(false);
+/// Why the one allowed CEF initialisation failed, if it did.
+static INIT_FAILURE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// Delays (ms) requested by CEF's `OnScheduleMessagePumpWork`, consumed by the pump thread.
 static PUMP_REQUESTS: std::sync::OnceLock<std::sync::mpsc::Sender<i64>> = std::sync::OnceLock::new();
 
@@ -184,17 +186,20 @@ pub fn exit_if_subprocess() {
     }
 }
 
-/// Initialise CEF for the browser process. Must run on the main thread before the Tauri
-/// event loop starts handling events; failures are recorded in the status rather than
-/// aborting the editor, which works without the panel.
-pub fn initialize(app: &AppHandle) {
+/// Called at start-up. Only checks that CEF is present and records where the profile
+/// lives; Chromium itself is not started until the panel is first opened, so an editor
+/// session that never touches the panel pays nothing for it.
+pub fn prepare(app: &AppHandle) {
     let state = app.state::<BrowserState>();
     let shared = state.0.clone();
-    match try_initialize(app, &shared) {
-        Ok(()) => shared.update(app, |status| {
-            status.available = true;
-            status.error = None;
-        }),
+    match resolve_layout(app) {
+        Ok(layout) => {
+            *shared.extensions_dir.lock().expect("extensions dir") = Some(layout.cache_dir.join("extensions"));
+            shared.update(app, |status| {
+                status.available = true;
+                status.error = None;
+            });
+        }
         Err(error) => {
             eprintln!("[browser] CEF unavailable: {error}");
             shared.update(app, |status| {
@@ -202,6 +207,48 @@ pub fn initialize(app: &AppHandle) {
                 status.error = Some(error);
             });
         }
+    }
+}
+
+/// Start Chromium if it is not running yet. Main thread only; CEF can be initialised
+/// once per process, so a failure is remembered and reported on every later attempt.
+fn ensure_initialized(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), String> {
+    if INITIALIZED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if let Some(error) = INIT_FAILURE.get() {
+        return Err(error.clone());
+    }
+    match try_initialize(app, shared) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            eprintln!("[browser] CEF failed to start: {error}");
+            let _ = INIT_FAILURE.set(error.clone());
+            shared.update(app, |status| {
+                status.available = false;
+                status.error = Some(error.clone());
+            });
+            Err(error)
+        }
+    }
+}
+
+/// Chromium marks a profile in use with a `SingletonLock` symlink pointing at
+/// `<host>-<pid>`. After a relaunch the previous process may still be shutting down, and
+/// starting CEF against its profile would make Chromium defer to it; wait for it briefly.
+fn wait_for_profile_lock(cache_dir: &std::path::Path) {
+    let lock = cache_dir.join("SingletonLock");
+    for _ in 0..20 {
+        let Some(pid) = std::fs::read_link(&lock).ok().and_then(|target| target.to_string_lossy().rsplit('-').next()?.parse::<u32>().ok()) else { return };
+        if pid == std::process::id() {
+            return;
+        }
+        let alive = std::process::Command::new("kill").args(["-0", &pid.to_string()]).output().map(|out| out.status.success()).unwrap_or(false);
+        if !alive {
+            let _ = std::fs::remove_file(&lock);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -213,6 +260,7 @@ fn try_initialize(app: &AppHandle, shared: &Arc<Shared>) -> Result<(), String> {
         .iter()
         .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
         .collect();
+    wait_for_profile_lock(&layout.cache_dir);
 
     #[cfg(target_os = "macos")]
     {
@@ -361,6 +409,12 @@ wrap_app! {
                 return;
             }
             if let Some(command_line) = command_line {
+                // Chromium keeps its cookie-encryption key in the login keychain under an
+                // ACL tied to the app's code identity. Ad-hoc signed builds get a new
+                // identity every build, so macOS would ask for the password on each
+                // launch; the mock keychain uses a fixed key and never prompts.
+                #[cfg(target_os = "macos")]
+                command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 if !self.load_extension.is_empty() {
                     command_line.append_switch_with_value(
                         Some(&CefString::from("load-extension")),
@@ -503,13 +557,16 @@ pub fn browser_status(state: tauri::State<'_, BrowserState>) -> PanelStatus {
 /// Show the panel at `bounds`, loading `url`. Creates the browser on first use.
 #[tauri::command]
 pub fn browser_open(window: Window, state: tauri::State<'_, BrowserState>, url: String, bounds: PanelBounds) -> Result<(), String> {
-    if !INITIALIZED.load(Ordering::SeqCst) {
-        return Err(state.0.status.lock().expect("panel status").error.clone().unwrap_or_else(|| "CEF is not initialised".into()));
+    if !state.0.status.lock().expect("panel status").available {
+        return Err(state.0.status.lock().expect("panel status").error.clone().unwrap_or_else(|| "CEF is not available".into()));
     }
     let shared = state.0.clone();
     let app = window.app_handle().clone();
     let target = window.clone();
     on_main(&window, move || {
+        if ensure_initialized(&app, &shared).is_err() {
+            return;
+        }
         let existing = shared.browser.lock().expect("browser").clone();
         match existing {
             Some(browser) => {
@@ -606,6 +663,25 @@ pub fn browser_close(window: Window, state: tauri::State<'_, BrowserState>) -> R
     })
 }
 
+/// Start a native window drag from the custom title bar.
+///
+/// Tauri's own drag path (`plugin:window|start_dragging`) reads `[NSApp currentEvent]`
+/// on the main thread and crashes the process when that is nil, which it can be once a
+/// drag request lands between events — something that happens readily with CEF pumping
+/// work on the same loop. This does the same thing but synthesises a mouse-down at the
+/// pointer when there is no current event, the way tao already does for its own proxy
+/// events.
+#[tauri::command]
+pub fn mac_drag_window(window: Window) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let target = window.clone();
+        return on_main(&window, move || mac::drag_window(&target));
+    }
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // Extensions. CEF has no Web Store UI and loads extensions only from unpacked directories
 // named on the command line at start-up, so installing means: fetch the .crx Google serves
@@ -690,7 +766,8 @@ fn list_extensions(shared: &Shared) -> Vec<ExtensionInfo> {
             let path = entry.path();
             let (name, version) = read_manifest(&path)?;
             let id = entry.file_name().to_string_lossy().into_owned();
-            Some(ExtensionInfo { pending: !loaded.contains(&id), path: path.to_string_lossy().into_owned(), id, name, version })
+            let pending = INITIALIZED.load(Ordering::SeqCst) && !loaded.contains(&id);
+            Some(ExtensionInfo { pending, path: path.to_string_lossy().into_owned(), id, name, version })
         })
         .collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -895,6 +972,33 @@ mod mac {
 
     pub fn parent_handle(window: &Window) -> Result<cef::sys::cef_window_handle_t, String> {
         window.ns_view().map_err(|error| error.to_string())
+    }
+
+    pub fn drag_window(window: &Window) {
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSWindow};
+        use objc2_foundation::NSProcessInfo;
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let Ok(ns_window) = window.ns_window() else { return };
+        let ns_window: &NSWindow = unsafe { &*(ns_window as *const NSWindow) };
+        let current = NSApplication::sharedApplication(mtm)
+            .currentEvent()
+            .filter(|event| matches!(event.r#type(), NSEventType::LeftMouseDown | NSEventType::LeftMouseDragged));
+        let event = current.or_else(|| {
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                NSEventType::LeftMouseDown,
+                ns_window.mouseLocationOutsideOfEventStream(),
+                NSEventModifierFlags::empty(),
+                NSProcessInfo::processInfo().systemUptime(),
+                ns_window.windowNumber(),
+                None,
+                0,
+                1,
+                1.0,
+            )
+        });
+        if let Some(event) = event {
+            ns_window.performWindowDragWithEvent(&event);
+        }
     }
 
     /// Convert the frontend's top-left CSS rectangle into the parent view's coordinate

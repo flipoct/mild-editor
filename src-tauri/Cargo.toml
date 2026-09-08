@@ -37,8 +37,8 @@ cef = { version = "=151.8.1", default-features = false }
 # Unpacks .crx downloads (a CRX3 header in front of a deflate zip).
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder"] }
-objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
