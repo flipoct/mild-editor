@@ -123,7 +123,7 @@ Development needs the CEF binaries and a build tool the `cef` crate expects:
 ```bash
 brew install ninja                                   # cef-dll-sys builds libcef_dll_wrapper with Ninja
 git clone https://github.com/tauri-apps/cef-rs && cd cef-rs && git checkout cef-v151.8.1+151.3.24
-cargo run -p export-cef-dir -- --force ~/.local/share/cef
+cargo run -p export-cef-dir -- --force ~/.local/share/cef   # add --target <triple> to cross-build
 export CEF_PATH=~/.local/share/cef                   # read by the cef crate's build script; prepare-cef.sh defaults to this path
 
 npm run dev:cef      # tauri dev with the CEF layer (runs scripts/prepare-cef.sh debug first)
@@ -135,6 +135,8 @@ The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri 
 Three extensions come with the app. Competitive Companion is bundled in `src-tauri/extensions` (a build that also parses doj.kr) and unpacked into the profile at start-up; Carrot and Tampermonkey are downloaded from the Web Store the first time the app runs. **Settings → problem browser** installs AtCoder Better! into Tampermonkey with one click, and takes a Chrome Web Store link or extension id for anything else: the app downloads the `.crx`, unpacks it into its profile and loads it on the next start (the page offers a restart).
 
 Two Chromium behaviours needed work to run extensions in a hosted view. The bundled Competitive Companion is patched at install with a small bridge (`mild-bridge-*`), because an embedded view has no toolbar for its button; the editor's `import` button fires the extension's own click handler through it. And `chrome.tabs.create`, which Tampermonkey uses for its install dialog, needs a Chrome window, so the app keeps a hidden one: tabs opened there are cancelled and their page is loaded in the panel instead. Chrome 138+ also gates `chrome.userScripts` behind a per-extension preference, which the app writes for Tampermonkey at start-up.
+
+The framework is single-architecture, so a cross-build needs CEF for the target it is bundling: `export-cef-dir --target x86_64-apple-darwin` and `scripts/prepare-cef.sh release x86_64-apple-darwin`, which also builds the helper for that target. Passing a target whose architecture does not match `CEF_PATH` stops with an explanation rather than producing an app that cannot run.
 
 Useful switches while developing: `MILD_CEF_DEBUG_PORT=9336` opens the DevTools protocol on the panel, `MILD_CEF_EXTENSIONS=/path/a,/path/b` loads unpacked extensions, and `VITE_PROBLEM_PANEL_OPEN=1` / `VITE_PROBLEM_PANEL_URL=…` open and seed the panel on first run.
 

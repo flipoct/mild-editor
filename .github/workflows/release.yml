@@ -55,11 +55,12 @@ jobs:
       - name: Install CEF (macOS)
         if: startsWith(matrix.platform, 'macos')
         # The problem panel embeds Chromium. cef-dll-sys builds its wrapper with Ninja, and
-        # export-cef-dir downloads the pinned CEF binaries for this architecture.
+        # export-cef-dir downloads the pinned CEF binaries. --target matters: the runners are
+        # arm64, so without it the x86_64 job would bundle an arm64 framework.
         run: |
           brew install ninja
           git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
-          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force "$RUNNER_TEMP/cef")
+          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force --target ${{ matrix.target }} "$RUNNER_TEMP/cef")
           echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
 
       - run: npm ci
@@ -68,7 +69,9 @@ jobs:
       # staged here rather than through the npm scripts.
       - name: Stage CEF for the bundle (macOS)
         if: startsWith(matrix.platform, 'macos')
-        run: scripts/prepare-cef.sh release
+        # The target is passed so the helper binary is built for the architecture being
+        # bundled rather than for the runner.
+        run: scripts/prepare-cef.sh release ${{ matrix.target }}
 
       - name: Test application
         # --all-targets so a binary that fails to compile is reported here rather than
