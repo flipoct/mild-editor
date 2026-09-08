@@ -164,6 +164,12 @@ const UI_ZOOM_MIN = 50;
 const UI_ZOOM_MAX = 200;
 const UI_ZOOM_STEP = 10;
 const clampUiZoom = (value: number) => Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, Math.round(value / UI_ZOOM_STEP) * UI_ZOOM_STEP));
+const EDITOR_FONT_SIZE_MIN = 8;
+const EDITOR_FONT_SIZE_MAX = 40;
+const EDITOR_FONT_SIZE_DEFAULT = 14;
+const clampEditorFontSize = (value: number) => Math.min(EDITOR_FONT_SIZE_MAX, Math.max(EDITOR_FONT_SIZE_MIN, Math.round(value)));
+/** The editor has always set 14px text on 22px lines; every other size keeps that proportion. */
+const editorLineHeightFor = (fontSize: number) => Math.round(fontSize * 22 / 14);
 
 const storedBoundedNumber = (key: string, fallback: number, minimum: number, maximum: number) => {
   const stored = localStorage.getItem(key);
@@ -356,7 +362,7 @@ const messages = {
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
-    appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", addFont: "add font file", remove: "remove",
+    appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", editorFontSize: "code font size", addFont: "add font file", remove: "remove",
     backgroundImage: "background image", chooseBackground: "choose image", clearBackground: "remove image", acrylicOpacity: "panel opacity", acrylicBlur: "background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "no image selected",
     wallpaperLayout: "image layout", wallpaperCover: "fill", wallpaperContain: "fit", wallpaperStretch: "stretch", wallpaperOriginal: "original size", wallpaperTile: "tile", wallpaperCustom: "custom size", wallpaperScale: "image size", wallpaperPositionX: "horizontal position", wallpaperPositionY: "vertical position", resetWallpaperLayout: "reset layout",
     importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
@@ -382,7 +388,7 @@ const messages = {
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
-    appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", addFont: "폰트 파일 추가", remove: "제거",
+    appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
     wallpaperLayout: "이미지 배치", wallpaperCover: "채우기", wallpaperContain: "맞춤", wallpaperStretch: "늘이기", wallpaperOriginal: "원본 크기", wallpaperTile: "바둑판식", wallpaperCustom: "사용자 지정", wallpaperScale: "이미지 크기", wallpaperPositionX: "가로 위치", wallpaperPositionY: "세로 위치", resetWallpaperLayout: "배치 초기화",
     importSamples: "예제 가져오기", onlineProblem: "온라인 저지 문제", importHelp: "대회 URL은 문제 목록 전체를, 지원되는 문제 URL은 해당 문제와 예제 테스트 케이스를 가져옵니다.", cancel: "취소",
@@ -480,6 +486,11 @@ function App() {
   const [acrylicOpacity, setAcrylicOpacity] = useState(() => storedBoundedNumber("mild-acrylic-opacity", 82, 0, 100));
   const [acrylicBlur, setAcrylicBlur] = useState(() => storedBoundedNumber("mild-acrylic-blur", 14, 0, 32));
   const [uiZoom, setUiZoom] = useState(() => storedBoundedNumber("mild-ui-zoom", 100, UI_ZOOM_MIN, UI_ZOOM_MAX));
+  // Independent of the interface zoom: that scales every panel, this only sizes the code.
+  const [editorFontSize, setEditorFontSize] = useState(() => clampEditorFontSize(storedBoundedNumber("mild-editor-font-size", EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MIN, EDITOR_FONT_SIZE_MAX)));
+  // The field holds free text while it is typed and only applies on commit; clamping on
+  // every keystroke would turn the "2" on the way to "20" into the minimum.
+  const [editorFontSizeDraft, setEditorFontSizeDraft] = useState(() => String(editorFontSize));
   const [wallpaperLayout, setWallpaperLayout] = useState<WallpaperLayout>(storedWallpaperLayout);
   const [wallpaperScale, setWallpaperScale] = useState(() => storedBoundedNumber("mild-wallpaper-scale", 100, 25, 300));
   const [wallpaperPositionX, setWallpaperPositionX] = useState(() => storedBoundedNumber("mild-wallpaper-position-x", 50, 0, 100));
@@ -729,6 +740,19 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-editor-font", editorFont);
   }, [editorFont]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-editor-font-size", String(editorFontSize));
+    setEditorFontSizeDraft(String(editorFontSize));
+  }, [editorFontSize]);
+
+  const commitEditorFontSize = () => {
+    const parsed = Number.parseFloat(editorFontSizeDraft);
+    const next = Number.isFinite(parsed) ? clampEditorFontSize(parsed) : editorFontSize;
+    setEditorFontSize(next);
+    // Re-sync the text even when the size did not change, e.g. "99" clamped to an already-set 40.
+    setEditorFontSizeDraft(String(next));
+  };
 
   useEffect(() => {
     localStorage.setItem("mild-background-image", backgroundImagePath);
@@ -2654,6 +2678,9 @@ function App() {
       onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setExplorerRenameValue(event.target.value)}
       onKeyDown={(event) => {
+        // An IME ends its composition with Enter; committing on that keystroke would
+        // rename to the half-typed Hangul or kana. keyCode 229 is the legacy signal.
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
         if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); void commitExplorerRename(); }
         else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelExplorerRename(); }
       }}
@@ -2777,7 +2804,7 @@ function App() {
                 }}
               >⠿</span>
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span>{tabRenameDraft?.id === tab.id
-                ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
+                ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
                 : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{tab.filename}</span></button>}</div>
                 : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span><span className="tab-title">{tab.filename}</span></button>}
               <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
@@ -2896,8 +2923,8 @@ function App() {
             options={{
               automaticLayout: true,
               fontFamily: editorFontFamily,
-              fontSize: 14,
-              lineHeight: 22,
+              fontSize: editorFontSize,
+              lineHeight: editorLineHeightFor(editorFontSize),
               smoothScrolling: true,
               editContext: false,
               disableLayerHinting: true,
@@ -3090,7 +3117,7 @@ function App() {
                 <label className="appearance-range"><span>{t("acrylicOpacity")}</span><input type="range" min="0" max="100" value={acrylicOpacity} onChange={(event) => setAcrylicOpacity(Number(event.target.value))} /><output>{acrylicOpacity}%</output></label>
                 <label className="appearance-range"><span>{t("acrylicBlur")}</span><input type="range" min="0" max="32" value={acrylicBlur} onChange={(event) => setAcrylicBlur(Number(event.target.value))} /><output>{acrylicBlur}px</output></label>
               </div>
-              <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily }}>int main() {'{'} return 0; {'}'}</pre></div>
+              <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><label>{t("editorFontSize")}<span className="editor-font-size"><input type="number" inputMode="numeric" min={EDITOR_FONT_SIZE_MIN} max={EDITOR_FONT_SIZE_MAX} step={1} value={editorFontSizeDraft} onChange={(event) => setEditorFontSizeDraft(event.target.value)} onBlur={commitEditorFontSize} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} aria-label={t("editorFontSize")} /><small>px</small></span></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily, fontSize: editorFontSize }}>int main() {'{'} return 0; {'}'}</pre></div>
             </div> : settingsPage === "template" ? <>
               <div className="template-tabs" role="tablist" aria-label="Template language">
                 <button className={templateLanguage === "cpp" ? "active" : ""} onClick={() => setTemplateLanguage("cpp")}>C++</button>

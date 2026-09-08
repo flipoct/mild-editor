@@ -311,6 +311,10 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .theme-option.active { border-color: #b39a68; background: #33342e; box-shadow: inset 0 0 0 1px #b39a6833; }
 .appearance-group label { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 10px; }
 .appearance-group select { height: 31px; border: 1px solid #454640; border-radius: 6px; background: #232420; color: #cac7bd; padding: 0 9px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+.appearance-group .editor-font-size { display: flex; align-items: center; gap: 6px; }
+.appearance-group .editor-font-size input { width: 72px; height: 31px; border: 1px solid #454640; border-radius: 6px; background: #232420; color: #cac7bd; padding: 0 9px; outline: none; font: 11px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: none; letter-spacing: 0; }
+.appearance-group .editor-font-size input:focus { border-color: #746e5b; }
+.appearance-group .editor-font-size small { font-size: 10px; letter-spacing: 0; text-transform: none; }
 .appearance-group pre { margin: 0; padding: 13px; border: 1px solid #454640; border-radius: 7px; background: #232420; color: #d1cec4; font-size: 13px; letter-spacing: 0; text-transform: none; }
 .wallpaper-settings > .settings-help { margin: -2px 0 2px; text-transform: none; letter-spacing: 0; }
 .wallpaper-picker { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 12px; }
