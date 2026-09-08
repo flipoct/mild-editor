@@ -372,7 +372,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -400,7 +400,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
-    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -629,7 +629,8 @@ function App() {
     return root.children;
   }, [explorerFiles, workspaceDirectories]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated"].includes(fileStatus);
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting")].includes(fileStatus)
+    && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -2115,9 +2116,54 @@ function App() {
 
   // Kept in a ref so the single event subscription always sees the current tab and workspace state.
   const companionHandlerRef = useRef<(problem: CompanionProblem) => void>(() => {});
+  const companionWaitRef = useRef(0);
   useEffect(() => {
-    companionHandlerRef.current = (problem) => queueCompanionProblem(companionToImported(problem), problem.batch);
+    companionHandlerRef.current = (problem) => {
+      window.clearTimeout(companionWaitRef.current);
+      queueCompanionProblem(companionToImported(problem), problem.batch);
+    };
   });
+
+  const editorCanImport = (url: string) => {
+    try {
+      const host = new URL(url).hostname;
+      return ["atcoder.jp", "codeforces.com", "doj.kr"].some((site) => host === site || host.endsWith(`.${site}`));
+    } catch { return false; }
+  };
+
+  // The panel's import button. Competitive Companion, when installed, parses the page it
+  // is looking at (a contest page yields every problem); without it the built-in importer
+  // handles the judges it knows.
+  const importFromProblemPage = async () => {
+    const url = browserStatus.url;
+    if (!url || importInFlightRef.current) return;
+    try {
+      if (await invoke<boolean>("browser_import_page")) {
+        setFileStatus(t("problemImportWaiting"));
+        window.clearTimeout(companionWaitRef.current);
+        companionWaitRef.current = window.setTimeout(() => setFileStatus(t("problemImportNothing")), 8000);
+        return;
+      }
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!editorCanImport(url)) {
+      setFileStatus(t("problemImportUnsupported"));
+      return;
+    }
+    importInFlightRef.current = true;
+    setImportingAtCoder(true);
+    try {
+      const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url });
+      await addImportedProblems(imported, false, isContestImportUrl(url));
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      importInFlightRef.current = false;
+      setImportingAtCoder(false);
+    }
+  };
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2393,6 +2439,12 @@ function App() {
   const showProblemPanel = problemPanelOpen;
   const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
   const orderedPanels = layoutOrder.filter(panelShown);
+  // The problem page is a native view over the webview, so CSS stacking cannot put a modal,
+  // popover or menu above it: hide it while anything floats over the workspace.
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  useEffect(() => {
+    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .layout-popover, .explorer-context-menu")));
+  });
   // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
   // the effects of a moved subtree in development: @monaco-editor/react disposes its editor
@@ -2503,12 +2555,12 @@ function App() {
       if (bounds && bounds.width > 0 && bounds.height > 0) void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
     };
     report();
-    if (browserStatus.open) void invoke("browser_set_visible", { visible: !settingsOpen }).catch(() => undefined);
+    if (browserStatus.open) void invoke("browser_set_visible", { visible: !overlayOpen }).catch(() => undefined);
     const observer = new ResizeObserver(report);
     observer.observe(host);
     window.addEventListener("resize", report);
     return () => { observer.disconnect(); window.removeEventListener("resize", report); };
-  }, [browserStatus.available, browserStatus.open, explorerWidth, layoutOrder, problemPanelWidth, settingsOpen, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
+  }, [browserStatus.available, browserStatus.open, explorerWidth, layoutOrder, overlayOpen, problemPanelWidth, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
@@ -3142,6 +3194,7 @@ function App() {
               onChange={(event) => setProblemUrlDraft(event.target.value)}
               onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); openProblemUrl(problemUrlDraft); event.currentTarget.blur(); } }}
               aria-label="problem URL" />
+            <button className="problem-import" onClick={() => void importFromProblemPage()} disabled={!browserStatus.open || !browserStatus.url || browserStatus.loading || importingAtCoder} title={t("problemImportHint")}>{t("import")}</button>
             <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close">×</button>
           </div>
           {browserStatus.available

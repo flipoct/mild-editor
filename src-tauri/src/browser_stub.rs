@@ -105,6 +105,11 @@ pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _
 }
 
 #[tauri::command]
+pub fn browser_import_page(_window: Window, _state: tauri::State<'_, BrowserState>) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[tauri::command]
 pub fn browser_extension_remove(_state: tauri::State<'_, BrowserState>, _id: String) -> Result<(), String> {
     Err(REASON.into())
 }

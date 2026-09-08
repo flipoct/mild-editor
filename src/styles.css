@@ -626,6 +626,7 @@ body.panel-resizing { cursor: col-resize !important; user-select: none; }
 .problem-toolbar button { height: 24px; min-width: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #b9b6ab; font-size: 13px; line-height: 1; cursor: pointer; }
 .problem-toolbar button:hover:not(:disabled) { background: #33342f; border-color: #454640; }
 .problem-toolbar button:disabled { opacity: .35; cursor: default; }
+.problem-toolbar .problem-import { padding: 0 9px; border-color: #454640; color: var(--accent); font-size: 11px; font-weight: 650; letter-spacing: .04em; white-space: nowrap; }
 .problem-url { flex: 1; min-width: 0; height: 24px; border: 1px solid #454640; border-radius: 5px; background: #232420; color: #d1cec4; padding: 0 8px; outline: none; font: 11px "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
 .problem-url:focus { border-color: #746e5b; }
 .problem-host { flex: 1; min-height: 0; position: relative; background: #1f201d; }

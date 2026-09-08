@@ -125,6 +125,9 @@ fn resolve_layout(app: &AppHandle) -> Result<Layout, String> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.join("manifest.json").is_file() {
+                if let Err(error) = shim_competitive_companion(&path) {
+                    eprintln!("[cef] Competitive Companion bridge in {}: {error}", path.display());
+                }
                 extensions.push(path);
             }
         }
@@ -796,9 +799,154 @@ fn install_extension(shared: &Shared, source: &str) -> Result<ExtensionInfo, Str
     let target = dir.join(&id);
     let _ = std::fs::remove_dir_all(&target);
     std::fs::rename(&staging, &target).map_err(|error| error.to_string())?;
+    if let Err(error) = shim_competitive_companion(&target) {
+        eprintln!("[cef] Competitive Companion bridge in {}: {error}", target.display());
+    }
 
     let (name, version) = read_manifest(&target).unwrap_or_default();
     Ok(ExtensionInfo { pending: true, path: target.to_string_lossy().into_owned(), id, name, version })
+}
+
+/// Competitive Companion's Web Store id.
+const COMPANION_ID: &str = "cjnmckjndlpiamhfimnnjmnckgghkjbl";
+const BRIDGE_BACKGROUND: &str = "mild-bridge-background.js";
+const BRIDGE_PATCH: &str = "mild-bridge-patch.js";
+const BRIDGE_CONTENT: &str = "mild-bridge-content.js";
+const BRIDGE_META: &str = "mild-bridge.json";
+
+const BRIDGE_PATCH_JS: &str = r#"// Added by Mild Editor. Its problem panel has no browser toolbar, so the extension's
+// button does not exist there. The editor's own import button posts a message that
+// mild-bridge-content.js relays here, and this prelude fires the click handlers for it.
+(() => {
+  const handlers = [];
+  const event = chrome.action.onClicked;
+  const addListener = event.addListener;
+  event.addListener = function (listener, ...rest) {
+    handlers.push(listener);
+    return addListener.call(this, listener, ...rest);
+  };
+  // permissions.request insists on a user gesture even for origins already granted. The
+  // manifest patch grants every origin, so answer from permissions.contains instead.
+  const request = chrome.permissions.request;
+  chrome.permissions.request = function (permissions, callback) {
+    const result = chrome.permissions.contains(permissions)
+      .then((granted) => granted || request.call(chrome.permissions, permissions));
+    if (typeof callback === "function") {
+      result.then(callback, () => callback(false));
+      return undefined;
+    }
+    return result;
+  };
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (!message || message.type !== "mild-editor-parse" || !sender.tab) return;
+    for (const handler of handlers) handler(sender.tab);
+  });
+})();
+"#;
+
+/// The problem panel has no browser toolbar, so Competitive Companion's button does not
+/// exist there. This rewrites an installed copy so the editor can fire the extension's own
+/// click handler: `<all_urls>` host access (the button normally grants `activeTab`), a
+/// content script that relays the editor's request, and a service-worker prelude that
+/// records the click listeners and calls them. Idempotent; a fresh install is patched
+/// again. Other extensions are left alone.
+fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
+    let manifest_path = dir.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?;
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("manifest.json: {error}"))?;
+    let is_companion = manifest.get("name").and_then(|value| value.as_str()).is_some_and(|name| name.contains("Competitive Companion"))
+        || dir.file_name().and_then(|name| name.to_str()) == Some(COMPANION_ID);
+    if !is_companion {
+        return Ok(());
+    }
+    let root = manifest.as_object_mut().ok_or("manifest.json is not an object")?;
+
+    let hosts = root.entry("host_permissions").or_insert_with(|| serde_json::json!([]));
+    if let Some(list) = hosts.as_array_mut() {
+        if !list.iter().any(|value| value == "<all_urls>") {
+            list.push(serde_json::json!("<all_urls>"));
+        }
+    }
+    let scripts = root.entry("content_scripts").or_insert_with(|| serde_json::json!([]));
+    if let Some(list) = scripts.as_array_mut() {
+        let present = list.iter().any(|script| {
+            script.get("js").and_then(|js| js.as_array()).is_some_and(|js| js.iter().any(|file| file == BRIDGE_CONTENT))
+        });
+        if !present {
+            list.push(serde_json::json!({ "matches": ["<all_urls>"], "js": [BRIDGE_CONTENT], "run_at": "document_idle" }));
+        }
+    }
+
+    // A previous patch already points at the bridge: the original worker path and the
+    // token live in the sidecar, so a second pass keeps both.
+    let meta: Option<serde_json::Value> = std::fs::read_to_string(dir.join(BRIDGE_META)).ok().and_then(|text| serde_json::from_str(&text).ok());
+    let background = root.entry("background").or_insert_with(|| serde_json::json!({}));
+    let current = background.get("service_worker").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let original = if current.is_empty() || current == BRIDGE_BACKGROUND {
+        meta.as_ref()
+            .and_then(|meta| meta.get("background")?.as_str().map(str::to_owned))
+            .ok_or("the extension has no background service worker")?
+    } else {
+        current
+    };
+    let nonce = meta
+        .as_ref()
+        .and_then(|meta| meta.get("nonce")?.as_str().map(str::to_owned))
+        .unwrap_or_else(random_token);
+    background["service_worker"] = serde_json::json!(BRIDGE_BACKGROUND);
+    background["type"] = serde_json::json!("module");
+
+    let write = |name: &str, contents: String| std::fs::write(dir.join(name), contents).map_err(|error| format!("{name}: {error}"));
+    write(BRIDGE_PATCH, BRIDGE_PATCH_JS.to_string())?;
+    write(BRIDGE_BACKGROUND, format!("// Added by Mild Editor; see {BRIDGE_PATCH}.\nimport \"./{BRIDGE_PATCH}\";\nimport \"./{original}\";\n"))?;
+    write(BRIDGE_CONTENT, format!(
+        "// Added by Mild Editor: relays the editor's import request to the extension's\n\
+         // background script. The token keeps page scripts from triggering it themselves.\n\
+         window.addEventListener(\"message\", (event) => {{\n\
+         \x20 const data = event.data;\n\
+         \x20 if (event.source !== window || !data || data.type !== \"mild-editor-parse\" || data.nonce !== {nonce_json}) return;\n\
+         \x20 chrome.runtime.sendMessage({{ type: \"mild-editor-parse\" }});\n\
+         }});\n",
+        nonce_json = serde_json::to_string(&nonce).expect("string json")
+    ))?;
+    write(BRIDGE_META, serde_json::to_string_pretty(&serde_json::json!({ "background": original, "nonce": nonce })).expect("meta json"))?;
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).expect("manifest json")).map_err(|error| format!("manifest.json: {error}"))
+}
+
+/// 128 random bits from the standard library's hash seeding; enough to keep a page from
+/// forging the bridge message, which is all the token is for.
+fn random_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let a = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    let b = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!("{a:016x}{b:016x}")
+}
+
+/// Asks Competitive Companion to parse the page in the panel: the editor's toolbar button
+/// stands in for the extension's own. Ok(false) when the extension is not installed, so
+/// the caller can fall back to the built-in importer.
+#[tauri::command]
+pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>) -> Result<bool, String> {
+    let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
+    let Ok(text) = std::fs::read_to_string(dir.join(COMPANION_ID).join(BRIDGE_META)) else { return Ok(false) };
+    let nonce = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|meta| meta.get("nonce")?.as_str().map(str::to_owned))
+        .ok_or("The Competitive Companion bridge is damaged. Reinstall the extension.")?;
+    if !state.0.loaded_extensions.lock().expect("loaded extensions").contains(COMPANION_ID) {
+        return Err("Competitive Companion was installed after the browser started. Restart the app to use it.".into());
+    }
+    if state.0.browser.lock().expect("browser").is_none() {
+        return Err("Open a problem page first.".into());
+    }
+    let code = format!("window.postMessage({{ type: \"mild-editor-parse\", nonce: {} }}, \"*\");", serde_json::to_string(&nonce).expect("string json"));
+    let shared = state.0.clone();
+    on_main(&window, move || {
+        if let Some(frame) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.main_frame()) {
+            frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
+        }
+    })?;
+    Ok(true)
 }
 
 #[tauri::command]
