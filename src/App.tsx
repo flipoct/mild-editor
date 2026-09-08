@@ -11,6 +11,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
+import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, locate, moveToColumn, moveWithinColumn, splitPanel, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
 import { renderTemplateWithCursor } from "./templateParser";
 import packageInfo from "../package.json";
 
@@ -51,16 +52,41 @@ type PanelMode = "tests" | "interactive";
 /** The four workspace panels. Their left-to-right order is the user's to arrange. */
 type PanelId = "tests" | "editor" | "problem" | "explorer";
 const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
-const storedPanelOrder = (): PanelId[] => {
-  // VITE_PANEL_ORDER=problem,tests,editor,explorer (development only) overrides the stored order.
+/** Relative size a panel takes before anyone drags a divider, roughly the old fixed widths. */
+const DEFAULT_WEIGHT: Record<PanelId, number> = { tests: 1, editor: 3.2, problem: 2, explorer: 0.75 };
+type PanelWeights = Partial<Record<PanelId, { width?: number; height?: number }>>;
+
+const storedPanelLayout = (): PanelLayout<PanelId> => {
+  // VITE_PANEL_ORDER=problem,tests,editor,explorer (development only) overrides the layout.
   const forced = String(import.meta.env.VITE_PANEL_ORDER || "").split(",").filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId));
-  if (forced.length) return [...new Set([...forced, ...PANEL_IDS])];
+  if (forced.length) return completeLayout(columnsFromOrder(forced), PANEL_IDS);
   try {
-    const parsed = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
-    const order = Array.isArray(parsed) ? parsed.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
-    // Anything missing (older builds, new panels) keeps its default place.
-    return [...new Set([...order, ...PANEL_IDS])];
-  } catch { return [...PANEL_IDS]; }
+    const saved = JSON.parse(localStorage.getItem("mild-panel-layout") || "null") as unknown;
+    if (Array.isArray(saved)) {
+      const columns = saved
+        .filter(Array.isArray)
+        .map((column) => (column as unknown[]).filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)));
+      return completeLayout(columns, PANEL_IDS);
+    }
+    // Layouts saved before panels could be stacked were a single left-to-right order.
+    const legacy = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
+    const order = Array.isArray(legacy) ? legacy.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
+    return completeLayout(columnsFromOrder(order), PANEL_IDS);
+  } catch { return columnsFromOrder(PANEL_IDS); }
+};
+
+const storedPanelWeights = (): PanelWeights => {
+  try {
+    const saved = JSON.parse(localStorage.getItem("mild-panel-weights") || "null");
+    if (saved && typeof saved === "object") return saved as PanelWeights;
+    // Widths used to be pixels against a whole-window row; keep the proportions they set.
+    const pixels: PanelWeights = {};
+    for (const [id, key] of [["tests", "mild-test-panel-width"], ["problem", "mild-problem-panel-width"], ["explorer", "mild-explorer-width"]] as const) {
+      const value = Number(localStorage.getItem(key));
+      if (Number.isFinite(value) && value > 0) pixels[id] = { width: value / 190 };
+    }
+    return pixels;
+  } catch { return {}; }
 };
 /** Mirror of the Rust `PanelStatus` for the embedded Chromium problem panel. */
 /** An unpacked Chrome extension under the app profile, as listed by `browser_extensions_list`. */
@@ -390,7 +416,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "◀ ▶ moves a panel; the checkbox shows or hides it.", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Move a panel between columns with ◀ ▶, up and down inside a column with ▲ ▼, and ⇥ gives it a column of its own. Dragging a chip onto a panel drops it against the edge you point at.", layoutMoveLeft: "move to the column on the left", layoutMoveRight: "move to the column on the right", layoutMoveUp: "move up in this column", layoutMoveDown: "move down in this column", layoutSplit: "give it a column of its own", panelGrip: "drag to move this panel", layoutShow: "show", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -418,7 +444,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
-    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 패널 위치를 옮기고, 체크로 접거나 펼칩니다.", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "◀ ▶ 로 열을 옮기고, ▲ ▼ 로 같은 열 안에서 위아래로 옮깁니다. ⇥ 는 따로 떼어 새 열로 만듭니다. 칩을 패널 위로 끌면 가리킨 가장자리에 놓입니다.", layoutMoveLeft: "왼쪽 열로 보내기", layoutMoveRight: "오른쪽 열로 보내기", layoutMoveUp: "이 열에서 위로", layoutMoveDown: "이 열에서 아래로", layoutSplit: "따로 떼어 새 열로", panelGrip: "끌어서 이 패널 옮기기", layoutShow: "표시", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -458,10 +484,13 @@ function App() {
   const [savedFiles, setSavedFiles] = useState<ProblemTab[]>([]);
   const [workspaceDirectories, setWorkspaceDirectories] = useState<string[]>([]);
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
-  const [testPanelWidth, setTestPanelWidth] = useState(() => Number(localStorage.getItem("mild-test-panel-width")) || 306);
-  const [explorerWidth, setExplorerWidth] = useState(() => Number(localStorage.getItem("mild-explorer-width")) || 218);
-  const resizeRef = useRef<{ panel: PanelId; sign: 1 | -1; startX: number; startWidth: number; width: number } | null>(null);
-  const [layoutOrder, setLayoutOrder] = useState<PanelId[]>(storedPanelOrder);
+  const resizeRef = useRef<{
+    axis: "x" | "y"; before: PanelId; after: PanelId; start: number; span: number;
+    beforeWeight: number; afterWeight: number;
+  } | null>(null);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  const [panelLayout, setPanelLayout] = useState<PanelLayout<PanelId>>(storedPanelLayout);
+  const [panelWeights, setPanelWeights] = useState<PanelWeights>(storedPanelWeights);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
@@ -562,7 +591,6 @@ function App() {
   // Embedded Chromium problem panel. The native view is positioned over `.problem-host`;
   // React only owns the rectangle, the toolbar and the status it is told about.
   const [problemPanelOpen, setProblemPanelOpen] = useState(() => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
-  const [problemPanelWidth, setProblemPanelWidth] = useState(() => Number(localStorage.getItem("mild-problem-panel-width")) || 460);
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus>({ available: false, open: false, visible: false, url: "", title: "", loading: false, canGoBack: false, canGoForward: false });
   const [problemUrlDraft, setProblemUrlDraft] = useState("");
   const problemHostRef = useRef<HTMLDivElement | null>(null);
@@ -908,41 +936,60 @@ function App() {
     });
   }, [customFonts]);
 
-  const panelWidthOf = (panel: PanelId) => panel === "tests" ? testPanelWidth : panel === "problem" ? problemPanelWidth : explorerWidth;
-
-  /** `sign` is +1 when the panel sits left of the divider being dragged, -1 when right. */
-  const startPanelResize = (panel: PanelId, sign: 1 | -1, event: ReactPointerEvent<HTMLDivElement>) => {
+  /**
+   * Dividers trade weight between the two panels they sit between, so the rest of the
+   * workspace keeps the size it had. Weight is a share of the container, which keeps a
+   * layout looking the same when the window is resized.
+   */
+  const startPanelResize = (
+    axis: "x" | "y",
+    before: PanelId,
+    after: PanelId,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
     event.preventDefault();
-    const startWidth = panelWidthOf(panel);
-    resizeRef.current = { panel, sign, startX: event.clientX, startWidth, width: startWidth };
+    const box = workspace.getBoundingClientRect();
+    resizeRef.current = {
+      axis, before, after,
+      start: axis === "x" ? event.clientX : event.clientY,
+      span: axis === "x" ? box.width : box.height,
+      beforeWeight: weightOf(before, axis === "x" ? "width" : "height"),
+      afterWeight: weightOf(after, axis === "x" ? "width" : "height"),
+    };
     event.currentTarget.setPointerCapture(event.pointerId);
-    document.body.classList.add("panel-resizing");
+    document.body.classList.add(axis === "x" ? "panel-resizing" : "panel-resizing-y");
   };
 
   useEffect(() => {
     const resize = (event: PointerEvent) => {
       const current = resizeRef.current;
-      if (!current) return;
-      const delta = event.clientX - current.startX;
-      const limit = current.panel === "problem" ? 900 : 520;
-      const width = Math.max(190, Math.min(limit, current.startWidth + current.sign * delta));
-      current.width = width;
-      if (current.panel === "tests") setTestPanelWidth(width);
-      else if (current.panel === "problem") setProblemPanelWidth(width);
-      else setExplorerWidth(width);
+      if (!current || !current.span) return;
+      const moved = (current.axis === "x" ? event.clientX : event.clientY) - current.start;
+      const total = current.beforeWeight + current.afterWeight;
+      // The pair keeps its combined weight; the pointer decides how it is split.
+      const share = (current.beforeWeight / total) + moved / current.span * (total / 1);
+      const limit = 0.08 * total;
+      const beforeWeight = Math.max(limit, Math.min(total - limit, share * total));
+      const key = current.axis === "x" ? "width" : "height";
+      setPanelWeights((weights) => ({
+        ...weights,
+        [current.before]: { ...weights[current.before], [key]: beforeWeight },
+        [current.after]: { ...weights[current.after], [key]: total - beforeWeight },
+      }));
     };
     const finish = () => {
-      const current = resizeRef.current;
-      if (!current) return;
-      localStorage.setItem(current.panel === "tests" ? "mild-test-panel-width" : current.panel === "problem" ? "mild-problem-panel-width" : "mild-explorer-width", String(current.width));
+      if (!resizeRef.current) return;
       resizeRef.current = null;
       document.body.classList.remove("panel-resizing");
+      document.body.classList.remove("panel-resizing-y");
     };
     window.addEventListener("pointermove", resize);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
-  }, [explorerWidth, problemPanelWidth, testPanelWidth]);
+  }, []);
 
   const activateTab = (tab: ProblemTab) => {
     clearDiagnostics();
@@ -2484,7 +2531,10 @@ function App() {
   const showExplorer = explorerVisible && Boolean(workspacePath);
   const showProblemPanel = problemPanelOpen;
   const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
-  const orderedPanels = layoutOrder.filter(panelShown);
+  const shownLayout = visibleLayout(panelLayout, panelShown);
+  const weightOf = (id: PanelId, axis: "width" | "height") =>
+    panelWeights[id]?.[axis] ?? (axis === "width" ? DEFAULT_WEIGHT[id] : 1);
+  const panelRects = layoutRects(shownLayout, weightOf);
   // The problem page is a native view over the webview, so CSS stacking cannot put a modal,
   // popover or menu above it: hide it while anything floats over the workspace.
   const [overlayOpen, setOverlayOpen] = useState(false);
@@ -2495,40 +2545,123 @@ function App() {
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
   // the effects of a moved subtree in development: @monaco-editor/react disposes its editor
   // in that pass without recreating it, and the next setModel throws and unmounts the app.
-  const panelStyle = (id: PanelId, part: "panel" | "resizer"): CSSProperties => ({ order: orderedPanels.indexOf(id) * 2 - (part === "resizer" ? 1 : 0) });
-  /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
-  const resizeTargetAt = (index: number): { panel: PanelId; sign: 1 | -1 } | null => {
-    const left = orderedPanels[index - 1];
-    const right = orderedPanels[index];
-    if (left && left !== "editor") return { panel: left, sign: 1 };
-    if (right && right !== "editor") return { panel: right, sign: -1 };
-    return null;
+  /**
+   * Panels are placed by percentage rather than reordered in the DOM. React moves a keyed
+   * subtree when its position changes, and in development StrictMode re-runs the effects of
+   * a moved subtree, which made the Monaco wrapper dispose its editor and take the whole
+   * tree down with it.
+   */
+  const panelStyle = (id: PanelId): CSSProperties => {
+    const rect = panelRects.get(id);
+    if (!rect) return { display: "none" };
+    return { left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` };
   };
+  /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
+  /**
+   * One divider per gap: between neighbouring columns, and between panels stacked in a
+   * column. Dragging one moves weight from the panel on one side to the other.
+   */
+  const dividers = shownLayout.flatMap((column, index) => {
+    const between: Array<{ key: string; axis: "x" | "y"; before: PanelId; after: PanelId; style: CSSProperties }> = [];
+    if (index > 0) {
+      const before = shownLayout[index - 1][0];
+      const after = column[0];
+      const rect = panelRects.get(after)!;
+      between.push({ key: `col-${after}`, axis: "x", before, after, style: { left: `${rect.left}%`, top: 0, height: "100%" } });
+    }
+    column.forEach((panel, row) => {
+      if (row === 0) return;
+      const rect = panelRects.get(panel)!;
+      between.push({
+        key: `row-${panel}`, axis: "y", before: column[row - 1], after: panel,
+        style: { left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%` },
+      });
+    });
+    return between;
+  });
   const togglePanel = (id: PanelId) => {
     if (id === "tests") setTestPanelVisible((visible) => !visible);
     else if (id === "problem") setProblemPanelOpen((open) => !open);
     else if (id === "explorer") setExplorerVisible((visible) => !visible);
   };
-  /** Drop `id` at `target`'s slot; the rest keep their relative order. */
-  const movePanelTo = (id: PanelId, target: PanelId) => setLayoutOrder((order) => {
-    if (id === target) return order;
-    const without = order.filter((item) => item !== id);
-    const at = without.indexOf(target);
-    return [...without.slice(0, at), id, ...without.slice(at)];
-  });
-  const shiftPanel = (id: PanelId, direction: -1 | 1) => setLayoutOrder((order) => {
-    const from = order.indexOf(id);
-    const to = from + direction;
-    if (from < 0 || to < 0 || to >= order.length) return order;
-    const next = [...order];
-    [next[from], next[to]] = [next[to], next[from]];
-    return next;
-  });
+  /** Put `id` against one edge of `target`: beside it as a column, or into its stack. */
+  const dropPanelOn = (id: PanelId, target: PanelId, edge: Edge) =>
+    setPanelLayout((layout) => dropPanel(layout, id, target, edge));
+  const shiftPanel = (id: PanelId, direction: -1 | 1) => setPanelLayout((layout) => moveToColumn(layout, id, direction));
+  const stackPanel = (id: PanelId, direction: -1 | 1) => setPanelLayout((layout) => moveWithinColumn(layout, id, direction));
+  const dividePanel = (id: PanelId) => setPanelLayout((layout) => splitPanel(layout, id));
+
+  /** The grip in a panel's top-left corner drags it exactly as its status-bar chip does. */
+  const panelGrip = (id: PanelId) => (
+    <button
+      type="button"
+      className="panel-grip"
+      title={t("panelGrip")}
+      aria-label={`${chipLabel(id)}: ${t("panelGrip")}`}
+      onPointerDown={(event) => startPanelDrag(id, event)}
+      onPointerMove={trackPanelDrag}
+      onPointerUp={finishPanelDrag}
+      onPointerCancel={finishPanelDrag}
+    >⠿</button>
+  );
+
+  /**
+   * Dragging a chip onto a panel places it against the edge the pointer is nearest. Pointer
+   * events with a capture, the same mechanism the dividers use; HTML5 drag and drop was
+   * unreliable in this webview.
+   */
+  const [panelDrag, setPanelDrag] = useState<{ id: PanelId; over: { target: PanelId; edge: Edge } | null } | null>(null);
+  const panelDragRef = useRef<{ id: PanelId; over: { target: PanelId; edge: Edge } | null; moved: boolean } | null>(null);
+
+  const startPanelDrag = (id: PanelId, event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    panelDragRef.current = { id, over: null, moved: false };
+    // Capture keeps the moves coming when the pointer leaves the grip; not every pointer
+    // can be captured, and the drag still works from the events that follow.
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* keep dragging */ }
+  };
+
+  const trackPanelDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = panelDragRef.current;
+    const workspace = workspaceRef.current;
+    if (!drag || !workspace) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      setPanelDrag({ id: drag.id, over: null });
+      document.body.classList.add("panel-dragging");
+    }
+    const box = workspace.getBoundingClientRect();
+    const x = ((event.clientX - box.left) / (box.width || 1)) * 100;
+    const y = ((event.clientY - box.top) / (box.height || 1)) * 100;
+    let over: { target: PanelId; edge: Edge } | null = null;
+    for (const [target, rect] of panelRects) {
+      if (x < rect.left || x > rect.left + rect.width || y < rect.top || y > rect.top + rect.height) continue;
+      if (target !== drag.id) over = { target, edge: edgeAt(rect, x, y) };
+      break;
+    }
+    drag.over = over;
+    setPanelDrag({ id: drag.id, over });
+  };
+
+  const finishPanelDrag = () => {
+    const drag = panelDragRef.current;
+    panelDragRef.current = null;
+    document.body.classList.remove("panel-dragging");
+    setPanelDrag(null);
+    if (!drag) return false;
+    if (drag.over) {
+      if (!panelShown(drag.id)) togglePanel(drag.id);
+      dropPanelOn(drag.id, drag.over.target, drag.over.edge);
+    }
+    // A press that never moved is a click on the chip, which toggles the panel.
+    return drag.moved;
+  };
   const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
   /** The user's choice for a panel, before the gates (open tabs, a workspace) that may hide it anyway. */
   const panelWanted = (id: PanelId) => id === "editor" || (id === "tests" ? testPanelVisible : id === "problem" ? problemPanelOpen : explorerVisible);
   const resetLayout = () => {
-    setLayoutOrder([...PANEL_IDS]);
+    setPanelLayout(columnsFromOrder(PANEL_IDS));
+    setPanelWeights({});
     setTestPanelVisible(true);
     setExplorerVisible(true);
     setProblemPanelOpen(false);
@@ -2557,8 +2690,12 @@ function App() {
   }, [problemPanelOpen]);
 
   useEffect(() => {
-    localStorage.setItem("mild-panel-order", JSON.stringify(layoutOrder));
-  }, [layoutOrder]);
+    localStorage.setItem("mild-panel-layout", JSON.stringify(panelLayout));
+  }, [panelLayout]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-panel-weights", JSON.stringify(panelWeights));
+  }, [panelWeights]);
 
   useEffect(() => {
     if (!layoutMenuOpen) return;
@@ -2606,7 +2743,7 @@ function App() {
     observer.observe(host);
     window.addEventListener("resize", report);
     return () => { observer.disconnect(); window.removeEventListener("resize", report); };
-  }, [browserStatus.available, browserStatus.open, explorerWidth, layoutOrder, overlayOpen, problemPanelWidth, showExplorer, showProblemPanel, showTestPanel, testPanelWidth, uiZoom]);
+  }, [browserStatus.available, browserStatus.open, overlayOpen, panelLayout, panelWeights, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
@@ -2956,11 +3093,6 @@ function App() {
   // what the field held when the dialog opened rather than what it holds now.
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, folderName, folderNameOpen, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
-  // Built here rather than in CSS so hiding a panel also removes its grid track and resizer.
-  const workspaceColumns = orderedPanels
-    .flatMap((id, index) => [...(index > 0 ? ["5px"] : []), id === "editor" ? "minmax(0, 1fr)" : `var(--${id}-width)`])
-    .join(" ");
-
   const summary = useMemo(() => {
     if (running) return "running tests…";
     if (!tests.some((test) => test.status !== "idle")) return "ready";
@@ -3121,10 +3253,26 @@ function App() {
           ))}
         </div>
       </nav>
-      <section className="workspace" style={{ "--tests-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
-        {PANEL_IDS.filter(panelShown).map((id) => { const index = orderedPanels.indexOf(id); return (<Fragment key={id}>
-          {index > 0 && <div className={`panel-resizer resizer-before-${id}`} style={panelStyle(id, "resizer")} onPointerDown={(event) => { const target = resizeTargetAt(index); if (target) startPanelResize(target.panel, target.sign, event); }} role="separator" aria-label="Resize panel" aria-orientation="vertical" />}
-          {id === "tests" && <aside className="test-panel" style={panelStyle(id, "panel")}>
+      <section className="workspace" ref={workspaceRef}>
+        {dividers.map((divider) => (
+          <div
+            key={divider.key}
+            className={`panel-resizer panel-resizer-${divider.axis}`}
+            style={divider.style}
+            onPointerDown={(event) => startPanelResize(divider.axis, divider.before, divider.after, event)}
+            role="separator"
+            aria-label="Resize panel"
+            aria-orientation={divider.axis === "x" ? "vertical" : "horizontal"}
+          />
+        ))}
+        {panelDrag && [...panelRects].map(([id, rect]) => (
+          <div key={`drop-${id}`} className="panel-drop-zone" style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }} aria-hidden="true">
+            {panelDrag.over?.target === id && <span className={`panel-drop-edge edge-${panelDrag.over.edge}`} />}
+          </div>
+        ))}
+        {PANEL_IDS.filter(panelShown).map((id) => (<Fragment key={id}>
+          {id === "tests" && <aside className="test-panel" style={panelStyle(id)}>
+            {panelGrip(id)}
             <div className="panel-heading">
               <div className="panel-modes">
                 <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
@@ -3215,7 +3363,8 @@ function App() {
               </div>
             </div>}
           </aside>}
-          {id === "editor" && <section className="editor-area" style={panelStyle(id, "panel")}>
+          {id === "editor" && <section className="editor-area" style={panelStyle(id)}>
+          {panelGrip(id)}
           {tabs.length ? <>
           <Editor
             beforeMount={beforeMount}
@@ -3261,7 +3410,8 @@ function App() {
             <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>}
-        {id === "problem" && <aside className="problem-panel" style={panelStyle(id, "panel")} aria-label="Problem browser">
+        {id === "problem" && <aside className="problem-panel" style={panelStyle(id)} aria-label="Problem browser">
+          {panelGrip(id)}
           <div className="problem-toolbar">
             <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
             <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
@@ -3279,7 +3429,8 @@ function App() {
             ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
             : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
         </aside>}
-        {id === "explorer" && <aside className="file-explorer" style={panelStyle(id, "panel")} aria-label="Saved files">
+        {id === "explorer" && <aside className="file-explorer" style={panelStyle(id)} aria-label="Saved files">
+          {panelGrip(id)}
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
             <span className="explorer-chevron">⌄</span>
             <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
@@ -3302,7 +3453,7 @@ function App() {
             {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
           </div>
         </aside>}
-        </Fragment>); })}
+        </Fragment>))}
       </section>
 
       {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
@@ -3620,11 +3771,18 @@ function App() {
         </span>
         <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
           <button className={`layout-button ${layoutMenuOpen ? "active" : ""}`} onClick={() => setLayoutMenuOpen((open) => !open)} aria-haspopup="dialog" aria-expanded={layoutMenuOpen} title={t("layoutTitle")}>⇄</button>
-          {layoutOrder.map((id) => (
-            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""}`}
+          {PANEL_IDS.map((id) => (
+            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""} ${id === "editor" ? "fixed" : ""} ${panelDrag?.id === id ? "dragging" : ""}`}
               aria-pressed={id === "editor" ? undefined : panelShown(id)} data-panel={id}
-              onClick={() => togglePanel(id)}
-              onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); } }}
+              onPointerDown={(event) => startPanelDrag(id, event)}
+              onPointerMove={trackPanelDrag}
+              onPointerUp={() => { if (!finishPanelDrag()) togglePanel(id); }}
+              onPointerCancel={finishPanelDrag}
+              onKeyDown={(event) => {
+                if (!event.altKey) return;
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); shiftPanel(id, event.key === "ArrowLeft" ? -1 : 1); }
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); stackPanel(id, event.key === "ArrowUp" ? -1 : 1); }
+              }}
             >{chipLabel(id)}</button>
           ))}
         </div>
@@ -3632,16 +3790,19 @@ function App() {
           <div className="layout-head"><strong>{t("layoutTitle")}</strong><button className="layout-close" onClick={() => setLayoutMenuOpen(false)} aria-label="close">×</button></div>
           <p>{t("layoutHint")}</p>
           <div className="layout-rows">
-            {layoutOrder.map((id, index) => (
+            {PANEL_IDS.map((id) => { const at = locate(shownLayout, id); const stack = at ? shownLayout[at.column] : []; return (
               <div className="layout-row" key={id} data-panel={id}>
                 <span className="layout-name">{chipLabel(id)}</span>
-                <button onClick={() => shiftPanel(id, -1)} disabled={index === 0} aria-label={`move ${chipLabel(id)} left`} title="◀">◀</button>
-                <button onClick={() => shiftPanel(id, 1)} disabled={index === layoutOrder.length - 1} aria-label={`move ${chipLabel(id)} right`} title="▶">▶</button>
+                <button onClick={() => shiftPanel(id, -1)} disabled={!at || (at.column === 0 && stack.length === 1)} aria-label={`move ${chipLabel(id)} left`} title={t("layoutMoveLeft")}>◀</button>
+                <button onClick={() => shiftPanel(id, 1)} disabled={!at || (at.column === shownLayout.length - 1 && stack.length === 1)} aria-label={`move ${chipLabel(id)} right`} title={t("layoutMoveRight")}>▶</button>
+                <button onClick={() => stackPanel(id, -1)} disabled={!at || at.row === 0} aria-label={`move ${chipLabel(id)} up`} title={t("layoutMoveUp")}>▲</button>
+                <button onClick={() => stackPanel(id, 1)} disabled={!at || at.row === stack.length - 1} aria-label={`move ${chipLabel(id)} down`} title={t("layoutMoveDown")}>▼</button>
+                <button onClick={() => dividePanel(id)} disabled={!at || stack.length === 1} aria-label={`split ${chipLabel(id)} into its own column`} title={t("layoutSplit")}>⇥</button>
                 {id === "editor"
                   ? <span className="layout-always">{t("layoutShow")}</span>
                   : <label className="layout-show"><input type="checkbox" checked={panelWanted(id)} onChange={() => togglePanel(id)} />{t("layoutShow")}</label>}
               </div>
-            ))}
+            ); })}
           </div>
           <div className="layout-foot"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div>
         </div>}

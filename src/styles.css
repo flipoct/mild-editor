@@ -96,11 +96,36 @@ select, .run-top { height: 28px; border: 1px solid #4b4d46; border-radius: 6px; 
 .run-top:hover { background: #39382f; }
 button:disabled { opacity: .55; cursor: default; }
 
-.workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: var(--test-panel-width, 306px) 5px minmax(0, 1fr) 5px var(--explorer-width, 218px); }
-.panel-resizer { position: relative; z-index: 5; background: #272824; cursor: col-resize; touch-action: none; }
-.panel-resizer::after { content: ""; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
-.panel-resizer:hover::after, body.panel-resizing .panel-resizer::after { background: #b39a68; }
+.workspace { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+/* Panels are placed by percentage, so hiding or moving one never reorders the DOM. */
+.workspace > .test-panel, .workspace > .editor-area, .workspace > .problem-panel, .workspace > .file-explorer { position: absolute; }
+.panel-resizer { position: absolute; z-index: 5; background: #272824; touch-action: none; }
+.panel-resizer-x { width: 5px; cursor: col-resize; }
+.panel-resizer-y { height: 5px; cursor: row-resize; }
+.panel-resizer::after { content: ""; position: absolute; background: transparent; transition: background .12s; }
+.panel-resizer-x::after { inset: 0 2px; }
+.panel-resizer-y::after { inset: 2px 0; }
+.panel-resizer:hover::after, body.panel-resizing .panel-resizer-x::after, body.panel-resizing-y .panel-resizer-y::after { background: #b39a68; }
 body.panel-resizing { cursor: col-resize !important; user-select: none; }
+body.panel-resizing-y { cursor: row-resize !important; user-select: none; }
+body.panel-dragging { cursor: grabbing !important; user-select: none; }
+/* Shown only while a chip is being dragged; the bar marks the edge it would land against. */
+.panel-drop-zone { position: absolute; z-index: 40; pointer-events: none; outline: 1px solid #b39a6844; outline-offset: -1px; }
+.panel-drop-edge { position: absolute; background: #b39a68cc; }
+.panel-drop-edge.edge-left, .panel-drop-edge.edge-right { top: 0; bottom: 0; width: 34%; }
+.panel-drop-edge.edge-left { left: 0; }
+.panel-drop-edge.edge-right { right: 0; }
+.panel-drop-edge.edge-top, .panel-drop-edge.edge-bottom { left: 0; right: 0; height: 34%; }
+.panel-drop-edge.edge-top { top: 0; }
+.panel-drop-edge.edge-bottom { bottom: 0; }
+.panel-chip.dragging { opacity: .55; }
+/* A grip in every panel's top-left corner. It stays out of the way until the pointer is on
+   the panel, because the editor has no header of its own to put it in. */
+.panel-grip { position: absolute; z-index: 30; left: 2px; top: 2px; width: 17px; height: 17px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #85867e; font-size: 11px; line-height: 1; cursor: grab; opacity: 0; transition: opacity .12s, background .12s; touch-action: none; }
+.test-panel:hover > .panel-grip, .editor-area:hover > .panel-grip, .problem-panel:hover > .panel-grip, .file-explorer:hover > .panel-grip, .panel-grip:focus-visible { opacity: 1; }
+.panel-grip:hover { background: #3b3c37; color: #d1cec3; }
+body.panel-dragging .panel-grip { cursor: grabbing; }
+.test-panel > .panel-heading, .problem-panel > .problem-toolbar, .file-explorer > .explorer-folder { padding-left: 22px; }
 .test-panel { min-height: 0; display: flex; flex-direction: column; background: #292a26; border-right: 1px solid #41423c; }
 .panel-heading { min-width: 0; height: 43px; flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 0 10px; color: #aaa99f; font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; border-bottom: 1px solid #3b3c37; white-space: nowrap; }
 .panel-heading > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
