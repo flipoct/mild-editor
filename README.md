@@ -130,6 +130,8 @@ npm run build:cef    # tauri build with the CEF layer (framework + helpers bundl
 
 The CEF layer lives in `src-tauri/tauri.cef.conf.json` and is opt-in: the Tauri build script validates every bundled framework and resource path at compile time, so listing CEF in the always-on config would break builds that do not have it. Plain `npm run dev` / `npm run tauri:build` still work and ship an app whose problem panel reports itself unavailable. The panel is macOS-only for now; the Windows code path exists but the installer does not yet ship CEF next to the executable.
 
+Extensions are installed from **Settings → problem browser**: paste a Chrome Web Store link or extension id, and the app downloads the `.crx`, unpacks it into its profile and loads it on the next start (the page offers a restart). Competitive Companion, Carrot and AtCoder Better all work this way; the app already listens for Competitive Companion on port 10043.
+
 Useful switches while developing: `MILD_CEF_DEBUG_PORT=9336` opens the DevTools protocol on the panel, `MILD_CEF_EXTENSIONS=/path/a,/path/b` loads unpacked extensions, and `VITE_PROBLEM_PANEL_OPEN=1` / `VITE_PROBLEM_PANEL_URL=…` open and seed the panel on first run.
 
 ## Build locally
