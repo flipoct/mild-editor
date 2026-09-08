@@ -52,6 +52,9 @@ type PanelMode = "tests" | "interactive";
 type PanelId = "tests" | "editor" | "problem" | "explorer";
 const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
 const storedPanelOrder = (): PanelId[] => {
+  // VITE_PANEL_ORDER=problem,tests,editor,explorer (development only) overrides the stored order.
+  const forced = String(import.meta.env.VITE_PANEL_ORDER || "").split(",").filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId));
+  if (forced.length) return [...new Set([...forced, ...PANEL_IDS])];
   try {
     const parsed = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
     const order = Array.isArray(parsed) ? parsed.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
@@ -2390,6 +2393,11 @@ function App() {
   const showProblemPanel = problemPanelOpen;
   const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
   const orderedPanels = layoutOrder.filter(panelShown);
+  // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
+  // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
+  // the effects of a moved subtree in development: @monaco-editor/react disposes its editor
+  // in that pass without recreating it, and the next setModel throws and unmounts the app.
+  const panelStyle = (id: PanelId, part: "panel" | "resizer"): CSSProperties => ({ order: orderedPanels.indexOf(id) * 2 - (part === "resizer" ? 1 : 0) });
   /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
   const resizeTargetAt = (index: number): { panel: PanelId; sign: 1 | -1 } | null => {
     const left = orderedPanels[index - 1];
@@ -2984,9 +2992,9 @@ function App() {
         </div>
       </nav>
       <section className="workspace" style={{ "--tests-width": `${testPanelWidth}px`, "--explorer-width": `${explorerWidth}px`, "--problem-width": `${problemPanelWidth}px`, gridTemplateColumns: workspaceColumns } as CSSProperties}>
-        {orderedPanels.map((id, index) => (<Fragment key={id}>
-          {index > 0 && <div className={`panel-resizer resizer-before-${id}`} onPointerDown={(event) => { const target = resizeTargetAt(index); if (target) startPanelResize(target.panel, target.sign, event); }} role="separator" aria-label="Resize panel" aria-orientation="vertical" />}
-          {id === "tests" && <aside className="test-panel">
+        {PANEL_IDS.filter(panelShown).map((id) => { const index = orderedPanels.indexOf(id); return (<Fragment key={id}>
+          {index > 0 && <div className={`panel-resizer resizer-before-${id}`} style={panelStyle(id, "resizer")} onPointerDown={(event) => { const target = resizeTargetAt(index); if (target) startPanelResize(target.panel, target.sign, event); }} role="separator" aria-label="Resize panel" aria-orientation="vertical" />}
+          {id === "tests" && <aside className="test-panel" style={panelStyle(id, "panel")}>
             <div className="panel-heading">
               <div className="panel-modes">
                 <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
@@ -3077,7 +3085,7 @@ function App() {
               </div>
             </div>}
           </aside>}
-          {id === "editor" && <section className="editor-area">
+          {id === "editor" && <section className="editor-area" style={panelStyle(id, "panel")}>
           {tabs.length ? <>
           <Editor
             beforeMount={beforeMount}
@@ -3123,7 +3131,7 @@ function App() {
             <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>}
-        {id === "problem" && <aside className="problem-panel" aria-label="Problem browser">
+        {id === "problem" && <aside className="problem-panel" style={panelStyle(id, "panel")} aria-label="Problem browser">
           <div className="problem-toolbar">
             <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
             <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
@@ -3140,7 +3148,7 @@ function App() {
             ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
             : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
         </aside>}
-        {id === "explorer" && <aside className="file-explorer" aria-label="Saved files">
+        {id === "explorer" && <aside className="file-explorer" style={panelStyle(id, "panel")} aria-label="Saved files">
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
             <span className="explorer-chevron">⌄</span>
             <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
@@ -3163,7 +3171,7 @@ function App() {
             {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
           </div>
         </aside>}
-        </Fragment>))}
+        </Fragment>); })}
       </section>
 
       {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
