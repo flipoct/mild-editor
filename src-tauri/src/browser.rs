@@ -29,6 +29,8 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// Set while the app itself closes the browser, so `do_close` lets CEF proceed.
 static CLOSING_BY_APP: AtomicBool = AtomicBool::new(false);
+/// Set at shutdown so the tab host, which otherwise refuses to close, can go.
+static TAB_HOST_MAY_CLOSE: AtomicBool = AtomicBool::new(false);
 /// Guards against re-entering `do_message_loop_work` from inside itself.
 static PUMPING: AtomicBool = AtomicBool::new(false);
 /// Why the one allowed CEF initialisation failed, if it did.
@@ -465,6 +467,15 @@ pub fn shutdown(app: &AppHandle) {
             CLOSING_BY_APP.store(true, Ordering::SeqCst);
             host.close_browser(1);
         }
+    }
+    // The hidden tab host is a views window. Left alive into cef::shutdown() it took the
+    // views layer down with it on Windows (`Check failed: !is_destroyed_`, then an access
+    // violation in libcef) every time the app exited with the panel open, so it is closed
+    // here, ahead of the shutdown, like the panel browser.
+    TAB_HOST_MAY_CLOSE.store(true, Ordering::SeqCst);
+    shared.tab_host_popups.lock().expect("tab host popups").clear();
+    if let Some(window) = shared.tab_host.lock().expect("tab host").take() {
+        window.close();
     }
     // Let the close round-trip through CEF's threads before shutdown.
     for _ in 0..20 {
@@ -1316,9 +1327,9 @@ wrap_window_delegate! {
         }
 
         /// The host must outlive every extension request: Chromium treats the last
-        /// browser window closing as the end of the session.
+        /// browser window closing as the end of the session. Only shutdown may close it.
         fn can_close(&self, _window: Option<&mut cef::Window>) -> i32 {
-            0
+            TAB_HOST_MAY_CLOSE.load(Ordering::SeqCst) as i32
         }
 
         fn window_runtime_style(&self) -> RuntimeStyle {
