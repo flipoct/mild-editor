@@ -2417,6 +2417,13 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             macos_menu::install(app.handle())?;
+            // Start in the real macOS full screen — its own Space with the menu bar out of
+            // the way — rather than the configured size in the middle of the display. An
+            // undecorated window ignores `maximized` in the config, and maximising it only
+            // fills the work area, which is not what full screen means here.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_fullscreen(true);
+            }
             browser::prepare(app.handle());
             start_debug_probe(app.handle().clone());
             Ok(())
