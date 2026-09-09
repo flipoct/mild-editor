@@ -1,9 +1,7 @@
-# Windows and Linux are only built by the release workflow, which runs after a tag is
-# pushed — a break there costs a release. These two platforms need no CEF (the problem
-# panel compiles to its stub), so checking them on every pull request is cheap.
-#
-# macOS is left out on purpose: its build needs the CEF binaries, which take several
-# minutes to download and build a wrapper for.
+# Windows and Linux are only built in full by the release workflow, which runs after a tag
+# is pushed — a break there costs a release. Both compile here on every pull request, but
+# only far enough to prove the code compiles: `cargo check` does no code generation, and
+# nothing here needs the built frontend.
 name: Check
 
 on:
@@ -16,8 +14,26 @@ concurrency:
   group: check-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Nothing here is run under a debugger, and on Windows writing the debug info costs more
+  # than the compile it belongs to.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_TERM_COLOR: always
+
 jobs:
-  check:
+  # TypeScript and the bundle, once — neither depends on the platform.
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  rust:
     strategy:
       fail-fast: false
       matrix:
@@ -28,30 +44,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
       - uses: dtolnay/rust-toolchain@stable
 
-      # Compiling the dependency graph from scratch is almost the whole of this job; cached
-      # it drops from minutes to seconds. Keyed per platform by the action itself.
+      # Compiling the dependency graph from scratch is almost the whole of this job, and
+      # Windows builds the embedded Chromium wrapper as well.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
+      # Only what the build scripts look for. The tray, SVG and patchelf packages the
+      # release workflow installs are for bundling, which nothing here does.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev
 
-      - run: npm ci
-      - run: npm run build
+      # --all-targets covers the binaries: `cargo test --lib` alone once let a
+      # platform-specific dependency in the CEF helper binary through to a release build.
+      - name: Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
-      # One pass, not two: `cargo check --all-targets` followed by `cargo test` compiled the
-      # same graph twice. --all-targets is what matters — `cargo test --lib` alone once let
-      # a macOS-only dependency in the CEF helper binary through to the release build.
-      - name: Build and test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+      # The tests are plain logic with no platform behaviour in them, so one platform is
+      # enough and it may as well be the quick one.
+      - name: Test
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib

@@ -1,11 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.9.0
 
-- The problem browser can be a window of its own. **Settings → problem browser → placement** switches between the panel in the workspace and a separate window, which can go on another screen; the status-bar chip, *View → Problem Browser* and `Ctrl+W` show and hide it either way, and the window carries the same toolbar and import button.
+- The problem browser can be a window of its own. **Settings → problem browser → placement** switches between the panel in the workspace and a separate window with the app's own title bar, which can go on another screen; the status-bar chip, *View → Problem Browser* and `Ctrl+W` show and hide it either way, and the window carries the same toolbar and import button.
 - `Ctrl+W` closes what has the keyboard: the problem browser when its page or URL field is focused, otherwise the file in the editor, and typing resumes in the file that takes its place.
 - Panel dividers are twice as wide to grab, and the strip over the problem page, which the native view used to cover, can be grabbed too.
 - Dragging a divider moves it as far as the pointer moves. It used to run ahead by the number of panels' worth of weight, so the problem panel shot across the window from a small drag.
+- **Settings → problem browser** scrolls, so a long extension list no longer runs off the page.
+- Windows: `npm run build:cef:win` runs its staging script through Windows PowerShell rather than `pwsh`, which not every machine has.
+
+## 1.8.1
+
+- macOS: open in full screen instead of a window sized to part of the display. The `maximized` setting in the window config has no effect on an undecorated macOS window, so it opened at 1280×800 in the middle of the screen every time.
 
 ## 1.8.0
 
