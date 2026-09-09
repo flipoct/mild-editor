@@ -52,11 +52,13 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Only what the build scripts look for. The tray, SVG and patchelf packages the
+      # release workflow installs are for bundling, which nothing here does.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev
 
       # --all-targets covers the binaries: `cargo test --lib` alone once let a
       # platform-specific dependency in the CEF helper binary through to a release build.
