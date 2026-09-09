@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.1
+
+- macOS: open in full screen instead of a window sized to part of the display. The `maximized` setting in the window config has no effect on an undecorated macOS window, so it opened at 1280×800 in the middle of the screen every time.
+
 ## 1.8.0
 
 - Panels can be stacked as well as placed side by side. The workspace is now a set of columns, each holding one or more panels top to bottom, so the problem page can sit under the code rather than beside it.

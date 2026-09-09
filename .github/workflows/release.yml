@@ -94,12 +94,12 @@ jobs:
         shell: pwsh
         run: scripts/prepare-cef.ps1
 
-      - name: Test application
-        # --all-targets so a binary that fails to compile is reported here rather than
-        # part-way through the bundle step.
-        run: |
-          npm run build
-          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+      # tauri-action compiles the crate itself straight after this, so checking it here
+      # would be the same work twice; the Check workflow has already compiled every
+      # platform on the way to main. Only the tests, and only where they are quick.
+      - name: Test
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -112,16 +112,11 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.8.0
+            ## What's changed in v1.8.1
 
-            - **Panels stack as well as sit side by side.** The workspace is a set of columns, each holding one or more panels top to bottom, so the problem page can go under the code instead of beside it.
-            - **Drag to arrange.** Take a panel by the grip in its top-left corner, or by its chip in the status bar, and drop it against an edge: left or right for a column of its own, top or bottom to stack it in that column.
-            - **Resize both ways.** Dividers between columns set widths, dividers between stacked panels set heights, and the pair keeps its combined size so nothing else moves.
-            - **Less chrome.** The layout popover is gone, since dragging covers every move it offered; the status-bar chips now only show and hide panels, and Settings → appearance restores the default arrangement.
-            - **The problem panel comes to Windows.** The installer now ships the embedded Chromium, so the panel, its import button and the extensions work the same as on macOS. The portable build is a zip with the runtime beside the exe.
-            - The problem panel and the panel chips follow the selected theme instead of keeping their own greys.
+            - **macOS opens in full screen.** The window used to open at a fixed size in the middle of the display on every launch.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.8.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.8.1/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

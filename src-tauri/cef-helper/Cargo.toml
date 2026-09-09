@@ -9,7 +9,7 @@
 # crate is compiled once.
 [package]
 name = "mild-editor-cef-helper"
-version = "1.8.0"
+version = "1.8.1"
 description = "CEF sub-process helper for Mild Editor"
 authors = ["mild editor"]
 edition = "2021"
