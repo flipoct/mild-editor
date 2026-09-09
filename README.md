@@ -132,7 +132,7 @@ The Edit menu restores the standard macOS text-editing shortcuts, and the editor
 
 ## Problem panel (embedded Chromium)
 
-The problem panel is a real Chromium (CEF) hosted inside the editor window, so Chrome extensions run against the problem page. It is pinned to CEF 151.3.24: 152.0.5 hangs every network request on macOS 26, verified against CEF's own sample.
+The problem panel is a real Chromium (CEF) hosted inside the editor window, so Chrome extensions run against the problem page. **Settings → problem browser → placement** moves it into a window of its own instead (`src/ProblemWindow.tsx`, a second Tauri window that hosts the same view); the panel and the window are shown and hidden by the same chip, menu item and `Ctrl+W`. It is pinned to CEF 151.3.24: 152.0.5 hangs every network request on macOS 26, verified against CEF's own sample.
 
 The panel's `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once. It asks Competitive Companion to parse the page, so every judge the extension supports works; without it the built-in importer handles AtCoder, Codeforces and doj.kr. The panel is a native view layered over the window, so it is hidden automatically while a dialog or menu is open.
 

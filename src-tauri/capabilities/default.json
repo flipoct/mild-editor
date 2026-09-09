@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "Default capability for Mild Editor",
   "windows": [
-    "main"
+    "main",
+    "problem"
   ],
   "permissions": [
     "core:default",

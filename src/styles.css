@@ -99,12 +99,17 @@ button:disabled { opacity: .55; cursor: default; }
 .workspace { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 /* Panels are placed by percentage, so hiding or moving one never reorders the DOM. */
 .workspace > .test-panel, .workspace > .editor-area, .workspace > .problem-panel, .workspace > .file-explorer { position: absolute; }
-.panel-resizer { position: absolute; z-index: 5; background: #272824; touch-action: none; }
-.panel-resizer-x { width: 5px; cursor: col-resize; }
-.panel-resizer-y { height: 5px; cursor: row-resize; }
+/* A divider is 10px wide (PANEL_DIVIDER_HIT in App.tsx), centred on the boundary between
+   two panels; only the 5px gutter on the far side of the boundary is painted. */
+.panel-resizer { position: absolute; z-index: 5; background: transparent; touch-action: none; }
+.panel-resizer-x { width: 10px; cursor: col-resize; }
+.panel-resizer-y { height: 10px; cursor: row-resize; }
+.panel-resizer::before { content: ""; position: absolute; background: #272824; }
+.panel-resizer-x::before { top: 0; bottom: 0; left: 5px; width: 5px; }
+.panel-resizer-y::before { left: 0; right: 0; top: 5px; height: 5px; }
 .panel-resizer::after { content: ""; position: absolute; background: transparent; transition: background .12s; }
-.panel-resizer-x::after { inset: 0 2px; }
-.panel-resizer-y::after { inset: 2px 0; }
+.panel-resizer-x::after { inset: 0 2px 0 7px; }
+.panel-resizer-y::after { inset: 7px 0 2px; }
 .panel-resizer:hover::after, body.panel-resizing .panel-resizer-x::after, body.panel-resizing-y .panel-resizer-y::after { background: #b39a68; }
 body.panel-resizing { cursor: col-resize !important; user-select: none; }
 body.panel-resizing-y { cursor: row-resize !important; user-select: none; }
@@ -378,6 +383,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .snippet-monaco { min-height: 0; flex: 1; overflow: hidden; border: 1px solid #454640; border-radius: 7px; background: #232420; }
 .snippet-monaco:focus-within { border-color: #746e5b; }
 .language-server-settings { flex: 1; display: flex; flex-direction: column; padding-top: 20px; }
+/* The extension list grows with what is installed, so this page scrolls like appearance does. */
+.browser-settings { min-height: 0; overflow: auto; padding-right: 8px; }
 .lsp-state { display: flex; align-items: center; gap: 11px; padding: 13px 14px; border: 1px solid #41423c; border-radius: 8px; background: #252622; }
 .lsp-state .lsp-dot { width: 9px; height: 9px; flex: 0 0 auto; }
 .lsp-state div { display: grid; gap: 3px; }
@@ -404,7 +411,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .status-settings svg { width: 14px; height: 14px; fill: currentColor; }
 
 :root[data-theme] ::selection { background: var(--selection); }
-:root[data-theme] .app-shell, :root[data-theme] .panel-resizer { background: var(--bg-1); color: var(--text); }
+:root[data-theme] .app-shell, :root[data-theme] .panel-resizer::before { background: var(--bg-1); color: var(--text); }
 :root[data-theme] .window-titlebar, :root[data-theme] .statusbar { background: var(--bg-0); border-color: var(--border); }
 :root[data-theme] .problem-tabs, :root[data-theme] .test-panel, :root[data-theme] .test-actions, :root[data-theme] .file-explorer { background: var(--bg-1); border-color: var(--border); }
 :root[data-theme] .problem-tab, :root[data-theme] .explorer-folder, :root[data-theme] .snippet-list, :root[data-theme] .lsp-state { background: var(--bg-2); border-color: var(--border); color: var(--muted); }
@@ -504,7 +511,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 :root[data-theme] .delete-test:hover, :root[data-theme] .explorer-delete:hover, :root[data-theme] .snippet-delete:hover { background: color-mix(in srgb, var(--danger) 20%, var(--bg-2)); color: var(--danger); }
 /* The problem panel and the panel chips arrived after the theme block above and carried
    their own greys; these keep them on the selected theme. */
-:root[data-theme] .problem-panel { background: var(--bg-1); border-color: var(--border); }
+:root[data-theme] .problem-panel, :root[data-theme] .problem-window { background: var(--bg-1); border-color: var(--border); }
 :root[data-theme] .problem-toolbar { border-color: var(--border); }
 :root[data-theme] .problem-toolbar button { color: var(--muted); }
 :root[data-theme] .problem-toolbar button:hover:not(:disabled) { background: var(--bg-3); border-color: var(--border); color: var(--text); }
@@ -576,7 +583,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .app-shell[data-wallpaper] .editor-area {
   background: color-mix(in srgb, var(--bg-editor) var(--acrylic-opacity), transparent);
 }
-.app-shell[data-wallpaper] .panel-resizer { background: color-mix(in srgb, var(--bg-1) var(--acrylic-opacity), transparent); }
+.app-shell[data-wallpaper] .panel-resizer::before { background: color-mix(in srgb, var(--bg-1) var(--acrylic-opacity), transparent); }
 .app-shell[data-wallpaper] .problem-tab,
 .app-shell[data-wallpaper] .explorer-folder,
 .app-shell[data-wallpaper] .explorer-controls,
@@ -680,6 +687,10 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 /* Problem panel: a native Chromium view is laid over .problem-host, so the host itself only
    paints the empty state and keeps the space reserved. */
 .problem-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #292a26; border-left: 1px solid #41423c; }
+/* The same toolbar and host fill the separate problem window (src/ProblemWindow.tsx). */
+.problem-window { position: fixed; inset: 0; display: grid; grid-template-rows: 34px auto minmax(0, 1fr); background: #292a26; }
+:root[data-platform="mac"] .problem-window { grid-template-rows: auto auto minmax(0, 1fr); }
+.problem-window > .problem-host { position: relative; }
 .problem-toolbar { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-bottom: 1px solid #41423c; }
 .problem-toolbar button { height: 24px; min-width: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #b9b6ab; font-size: 13px; line-height: 1; cursor: pointer; }
 .problem-toolbar button:hover:not(:disabled) { background: #33342f; border-color: #454640; }

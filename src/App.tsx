@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
+import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
 import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
 import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
 import { renderTemplateWithCursor } from "./templateParser";
@@ -54,6 +55,8 @@ type PanelId = "tests" | "editor" | "problem" | "explorer";
 const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
 /** Relative size a panel takes before anyone drags a divider, roughly the old fixed widths. */
 const DEFAULT_WEIGHT: Record<PanelId, number> = { tests: 1, editor: 3.2, problem: 2, explorer: 0.75 };
+/** Width of the strip a divider can be grabbed by, in CSS pixels (see .panel-resizer). */
+const PANEL_DIVIDER_HIT = 10;
 type PanelWeights = Partial<Record<PanelId, { width?: number; height?: number }>>;
 
 const storedPanelLayout = (): PanelLayout<PanelId> => {
@@ -95,7 +98,8 @@ type BrowserExtension = { id: string; name: string; version: string; path: strin
 const TAMPERMONKEY_ID = "dhdgffkkebhmkfjojejmpbldmpobfkfo";
 /** AtCoder Better! only runs under Tampermonkey; Greasy Fork serves the script by id. */
 const ATCODER_BETTER_USERSCRIPT = "https://greasyfork.org/scripts/471106/code/atcoder-better.user.js";
-type BrowserStatus = { available: boolean; error?: string | null; open: boolean; visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean };
+/** Where the problem browser lives: a panel in the workspace, or a window of its own. */
+type ProblemBrowserMode = "panel" | "window";
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
 type InteractiveExitEvent = { sessionId: string; code: number | null; timeMs: number; stopped: boolean };
@@ -416,7 +420,7 @@ const messages = {
     refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
     browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "drag to move this panel", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:",
+    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "drag to move this panel", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "placement", problemBrowserInPanel: "panel in the workspace", problemBrowserInWindow: "separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
     sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
     welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
@@ -444,7 +448,7 @@ const messages = {
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
-    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:",
+    chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
@@ -590,10 +594,17 @@ function App() {
   // Embedded Chromium problem panel. The native view is positioned over `.problem-host`;
   // React only owns the rectangle, the toolbar and the status it is told about.
   const [problemPanelOpen, setProblemPanelOpen] = useState(() => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (localStorage.getItem("mild-problem-panel") ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1");
-  const [browserStatus, setBrowserStatus] = useState<BrowserStatus>({ available: false, open: false, visible: false, url: "", title: "", loading: false, canGoBack: false, canGoForward: false });
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus>(IDLE_BROWSER_STATUS);
   const [problemUrlDraft, setProblemUrlDraft] = useState("");
   const problemHostRef = useRef<HTMLDivElement | null>(null);
   const problemUrlEditingRef = useRef(false);
+  const [problemBrowserMode, setProblemBrowserMode] = useState<ProblemBrowserMode>(() => localStorage.getItem("mild-problem-browser-mode") === "window" ? "window" : "panel");
+  // True from the browser view taking the keyboard until this page gets it back. The
+  // view is native, so `document.activeElement` does not know about it.
+  const cefFocusedRef = useRef(false);
+  // When the browser was last closed by Ctrl+W: on macOS the same keystroke can reach
+  // both the menu bar and the view, and the second arrival must not close a file too.
+  const browserClosedAtRef = useRef(0);
   const [organizeImports, setOrganizeImports] = useState(() => localStorage.getItem("mild-organize-imports") === "1");
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
   const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
@@ -944,6 +955,7 @@ function App() {
     axis: "x" | "y",
     before: PanelId,
     after: PanelId,
+    pair: number,
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     const workspace = workspaceRef.current;
@@ -953,7 +965,9 @@ function App() {
     resizeRef.current = {
       axis, before, after,
       start: axis === "x" ? event.clientX : event.clientY,
-      span: axis === "x" ? box.width : box.height,
+      // Pixels the two panels cover together: their combined weight maps onto this, so
+      // the divider follows the pointer one-to-one.
+      span: (axis === "x" ? box.width : box.height) * pair,
       beforeWeight: weightOf(before, axis === "x" ? "width" : "height"),
       afterWeight: weightOf(after, axis === "x" ? "width" : "height"),
     };
@@ -968,9 +982,8 @@ function App() {
       const moved = (current.axis === "x" ? event.clientX : event.clientY) - current.start;
       const total = current.beforeWeight + current.afterWeight;
       // The pair keeps its combined weight; the pointer decides how it is split.
-      const share = (current.beforeWeight / total) + moved / current.span * (total / 1);
       const limit = 0.08 * total;
-      const beforeWeight = Math.max(limit, Math.min(total - limit, share * total));
+      const beforeWeight = Math.max(limit, Math.min(total - limit, current.beforeWeight + moved / current.span * total));
       const key = current.axis === "x" ? "width" : "height";
       setPanelWeights((weights) => ({
         ...weights,
@@ -1531,6 +1544,32 @@ function App() {
     }
     closeProblem(id);
   };
+
+  /** Ctrl+W with the problem browser focused: the panel or window goes, and typing resumes in the editor. */
+  const closeProblemBrowser = () => {
+    browserClosedAtRef.current = Date.now();
+    cefFocusedRef.current = false;
+    setProblemPanelOpen(false);
+    editorRef.current?.focus();
+  };
+
+  /**
+   * Ctrl+W closes what has the keyboard: the problem browser when its page or URL field
+   * does, otherwise the file in the editor.
+   */
+  const closeWithShortcut = () => {
+    if (Date.now() - browserClosedAtRef.current < 400) return;
+    const inToolbar = document.activeElement instanceof Element && Boolean(document.activeElement.closest(".problem-panel"));
+    if (problemPanelOpen && (cefFocusedRef.current || inToolbar)) {
+      closeProblemBrowser();
+      return;
+    }
+    if (activeTab) requestCloseProblem(activeTab.id);
+  };
+  const closeWithShortcutRef = useRef(closeWithShortcut);
+  closeWithShortcutRef.current = closeWithShortcut;
+  const closeProblemBrowserRef = useRef(closeProblemBrowser);
+  closeProblemBrowserRef.current = closeProblemBrowser;
 
   const beforeMount: BeforeMount = (monaco) => {
     const monacoChrome = (panel: string, field: string, border: string, selected: string, accent: string) => ({
@@ -2272,6 +2311,8 @@ function App() {
       setImportingAtCoder(false);
     }
   };
+  const importFromProblemPageRef = useRef(importFromProblemPage);
+  importFromProblemPageRef.current = importFromProblemPage;
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2544,7 +2585,7 @@ function App() {
 
   const showTestPanel = testPanelVisible && tabs.length > 0;
   const showExplorer = explorerVisible && Boolean(workspacePath);
-  const showProblemPanel = problemPanelOpen;
+  const showProblemPanel = problemPanelOpen && problemBrowserMode === "panel";
   const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
   const shownLayout = visibleLayout(panelLayout, panelShown);
   const weightOf = (id: PanelId, axis: "width" | "height") =>
@@ -2577,23 +2618,39 @@ function App() {
    * column. Dragging one moves weight from the panel on one side to the other.
    */
   const dividers = shownLayout.flatMap((column, index) => {
-    const between: Array<{ key: string; axis: "x" | "y"; before: PanelId; after: PanelId; style: CSSProperties }> = [];
+    // `pair` is the share of the workspace the two panels cover together, along the
+    // divider's axis. The divider is centred on the boundary, half over each panel.
+    const between: Array<{ key: string; axis: "x" | "y"; before: PanelId; after: PanelId; pair: number; style: CSSProperties }> = [];
     if (index > 0) {
       const before = shownLayout[index - 1][0];
       const after = column[0];
       const rect = panelRects.get(after)!;
-      between.push({ key: `col-${after}`, axis: "x", before, after, style: { left: `${rect.left}%`, top: 0, height: "100%" } });
+      const pair = (panelRects.get(before)!.width + rect.width) / 100;
+      between.push({ key: `col-${after}`, axis: "x", before, after, pair, style: { left: `calc(${rect.left}% - ${PANEL_DIVIDER_HIT / 2}px)`, top: 0, height: "100%" } });
     }
     column.forEach((panel, row) => {
       if (row === 0) return;
       const rect = panelRects.get(panel)!;
+      const pair = (panelRects.get(column[row - 1])!.height + rect.height) / 100;
       between.push({
-        key: `row-${panel}`, axis: "y", before: column[row - 1], after: panel,
-        style: { left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%` },
+        key: `row-${panel}`, axis: "y", before: column[row - 1], after: panel, pair,
+        style: { left: `${rect.left}%`, top: `calc(${rect.top}% - ${PANEL_DIVIDER_HIT / 2}px)`, width: `${rect.width}%` },
       });
     });
     return between;
   });
+  // The problem page is a native view, so a divider's half over it cannot be grabbed:
+  // the host steps back from those edges, and the divider is whole again.
+  const problemHostInset = {
+    left: dividers.some((divider) => divider.axis === "x" && divider.after === "problem"),
+    right: dividers.some((divider) => divider.axis === "x" && divider.before === "problem"),
+    bottom: dividers.some((divider) => divider.axis === "y" && divider.before === "problem"),
+  };
+  const problemHostStyle: CSSProperties = {
+    marginLeft: problemHostInset.left ? PANEL_DIVIDER_HIT / 2 : 0,
+    marginRight: problemHostInset.right ? PANEL_DIVIDER_HIT / 2 : 0,
+    marginBottom: problemHostInset.bottom ? PANEL_DIVIDER_HIT / 2 : 0,
+  };
   const togglePanel = (id: PanelId) => {
     if (id === "tests") setTestPanelVisible((visible) => !visible);
     else if (id === "problem") setProblemPanelOpen((open) => !open);
@@ -2664,6 +2721,8 @@ function App() {
     if (drag.over) dropPanelOn(drag.id, drag.over.target, drag.over.edge);
   };
   const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
+  /** A chip is lit while its panel is on screen; the problem chip also while the browser has its own window up. */
+  const chipActive = (id: PanelId) => id === "problem" ? problemPanelOpen : panelShown(id);
   /** The user's choice for a panel, before the gates (open tabs, a workspace) that may hide it anyway. */
   const panelWanted = (id: PanelId) => id === "editor" || (id === "tests" ? testPanelVisible : id === "problem" ? problemPanelOpen : explorerVisible);
   const resetLayout = () => {
@@ -2696,6 +2755,60 @@ function App() {
     localStorage.setItem("mild-problem-panel", problemPanelOpen ? "1" : "0");
   }, [problemPanelOpen]);
 
+  const activeSourceUrlRef = useRef(activeTab?.sourceUrl || "");
+  activeSourceUrlRef.current = activeTab?.sourceUrl || "";
+  // The page the browser is on, kept so a move between panel and window can reopen it.
+  const lastBrowserUrlRef = useRef("");
+  if (browserStatus.url) lastBrowserUrlRef.current = browserStatus.url;
+
+  // Moving the browser between the panel and its own window. The view cannot change
+  // windows, so the page is reopened in the new host: the window is destroyed when the
+  // panel takes over, and the window's page opens what it is handed the other way round.
+  const previousBrowserModeRef = useRef(problemBrowserMode);
+  useEffect(() => {
+    localStorage.setItem("mild-problem-browser-mode", problemBrowserMode);
+    if (previousBrowserModeRef.current === problemBrowserMode) return;
+    previousBrowserModeRef.current = problemBrowserMode;
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const url = lastBrowserUrlRef.current || activeSourceUrlRef.current;
+    if (problemBrowserMode === "panel") {
+      void invoke("problem_window_close").catch(() => undefined).then(() => { if (url && problemPanelOpen) openProblemUrl(url); });
+    } else if (url && problemPanelOpen) {
+      invoke("problem_window_open", { url }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [problemBrowserMode]);
+
+  // In window mode the chip shows and hides the window.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window) || problemBrowserMode !== "window" || !browserStatus.available) return;
+    if (problemPanelOpen) invoke("problem_window_open", { url: "" }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    else void invoke("problem_window_hide").catch(() => undefined);
+  }, [problemBrowserMode, problemPanelOpen, browserStatus.available]);
+
+  // What the browser sends back, whichever window it is in: its import button, Ctrl+W
+  // pressed in the page, its focus, and the window being hidden by its own close button.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const stops: Array<() => void> = [];
+    let disposed = false;
+    const track = (promise: Promise<() => void>) => { void promise.then((stop) => { if (disposed) stop(); else stops.push(stop); }); };
+    track(listen(PROBLEM_WINDOW_IMPORT_EVENT, () => { void importFromProblemPageRef.current(); }));
+    track(listen<{ action: string }>("browser-hotkey", (event) => { if (event.payload.action === "close") closeProblemBrowserRef.current(); }));
+    track(listen("browser-focus", () => { cefFocusedRef.current = true; }));
+    track(listen("problem-window-hidden", () => { setProblemPanelOpen(false); cefFocusedRef.current = false; editorRef.current?.focus(); }));
+    // The keyboard is back in this page: a click or focus anywhere in it says so.
+    const regained = () => { cefFocusedRef.current = false; };
+    document.addEventListener("focusin", regained);
+    document.addEventListener("pointerdown", regained);
+    return () => {
+      disposed = true;
+      stops.forEach((stop) => stop());
+      document.removeEventListener("focusin", regained);
+      document.removeEventListener("pointerdown", regained);
+    };
+  }, []);
+
   useEffect(() => {
     localStorage.setItem("mild-panel-layout", JSON.stringify(panelLayout));
   }, [panelLayout]);
@@ -2722,7 +2835,7 @@ function App() {
   // The native view sits over `.problem-host`: report the host's rectangle whenever it
   // moves or resizes, and hide the view while the host is not on screen at all.
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window) || !browserStatus.available) return;
+    if (!("__TAURI_INTERNALS__" in window) || !browserStatus.available || problemBrowserMode === "window") return;
     const host = problemHostRef.current;
     if (!showProblemPanel || !host) {
       if (browserStatus.open) void invoke("browser_set_visible", { visible: false }).catch(() => undefined);
@@ -2738,17 +2851,18 @@ function App() {
     observer.observe(host);
     window.addEventListener("resize", report);
     return () => { observer.disconnect(); window.removeEventListener("resize", report); };
-  }, [browserStatus.available, browserStatus.open, overlayOpen, panelLayout, panelWeights, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
+  }, [browserStatus.available, browserStatus.open, overlayOpen, panelLayout, panelWeights, problemBrowserMode, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
   useEffect(() => {
-    if (!showProblemPanel || !browserStatus.available) return;
+    if (!problemPanelOpen || !browserStatus.available) return;
     const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
     if (!url || url === browserStatus.url) return;
-    openProblemUrl(url);
+    if (problemBrowserMode === "window") invoke("problem_window_open", { url }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    else openProblemUrl(url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab?.sourceUrl, browserStatus.available, showProblemPanel]);
+  }, [activeTab?.sourceUrl, browserStatus.available, problemPanelOpen, problemBrowserMode]);
 
   // Tampermonkey installs a userscript from its dashboard, which the backend drives once
   // the panel is on screen; the host element only exists after the panel renders.
@@ -2759,13 +2873,13 @@ function App() {
     setPendingUserscript(url);
   };
   useEffect(() => {
-    if (!pendingUserscript || !showProblemPanel || !browserStatus.available) return;
-    const bounds = problemHostBounds();
-    if (!bounds) return;
+    if (!pendingUserscript || !problemPanelOpen || !browserStatus.available) return;
+    const bounds = problemBrowserMode === "window" ? null : problemHostBounds();
+    if (problemBrowserMode === "panel" && !bounds) return;
     setPendingUserscript("");
     invoke("browser_install_userscript", { url: pendingUserscript, bounds }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingUserscript, showProblemPanel, browserStatus.available]);
+  }, [pendingUserscript, problemPanelOpen, problemBrowserMode, browserStatus.available]);
 
   const refreshBrowserExtensions = () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2895,7 +3009,7 @@ function App() {
         case "file:open": void openProblem(); break;
         case "file:save": void saveProblem(); break;
         case "file:import": beginImport(); break;
-        case "file:close-tab": if (activeTab) requestCloseProblem(activeTab.id); break;
+        case "file:close-tab": closeWithShortcutRef.current(); break;
         case "view:toggle-explorer": setExplorerVisible((visible) => !visible); break;
         case "view:toggle-tests": setTestPanelVisible((visible) => !visible); break;
         case "view:panel-tests": setTestPanelVisible(true); setPanelMode("tests"); break;
@@ -2954,7 +3068,7 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
         event.preventDefault();
-        if (activeTab) requestCloseProblem(activeTab.id);
+        closeWithShortcut();
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && ["=", "+"].includes(event.key)) {
         event.preventDefault();
@@ -3254,7 +3368,7 @@ function App() {
             key={divider.key}
             className={`panel-resizer panel-resizer-${divider.axis}`}
             style={divider.style}
-            onPointerDown={(event) => startPanelResize(divider.axis, divider.before, divider.after, event)}
+            onPointerDown={(event) => startPanelResize(divider.axis, divider.before, divider.after, divider.pair, event)}
             role="separator"
             aria-label="Resize panel"
             aria-orientation={divider.axis === "x" ? "vertical" : "horizontal"}
@@ -3421,7 +3535,7 @@ function App() {
             <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close">×</button>
           </div>
           {browserStatus.available
-            ? <div className="problem-host" ref={problemHostRef}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
+            ? <div className="problem-host" ref={problemHostRef} style={problemHostStyle}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
             : <div className="problem-host problem-unavailable"><p className="problem-hint"><strong>{t("problemUnavailable")}</strong><br />{browserStatus.error || "CEF is not initialised"}</p></div>}
         </aside>}
         {id === "explorer" && <aside className="file-explorer" style={panelStyle(id)} aria-label="Saved files">
@@ -3665,6 +3779,8 @@ function App() {
                   <button className="subtle-button extension-userscript" disabled={!tampermonkeyLoaded} title={tampermonkeyLoaded ? ATCODER_BETTER_USERSCRIPT : t("browserNeedsTampermonkey")} onClick={() => installUserscript(ATCODER_BETTER_USERSCRIPT)}>{t("browserInstallAtCoderBetter")}</button>
                 </div>
               </div>
+              <div className="appearance-group"><label>{t("problemBrowserPlacement")}<select value={problemBrowserMode} onChange={(event) => setProblemBrowserMode(event.target.value === "window" ? "window" : "panel")} disabled={!browserStatus.available}><option value="panel">{t("problemBrowserInPanel")}</option><option value="window">{t("problemBrowserInWindow")}</option></select></label></div>
+              <p className="settings-help">{t("problemBrowserPlacementHelp")}</p>
               <p className="settings-help">{t("browserExtensionsHelp")}</p>
               <label className="clangd-path-label">{t("browserExtensionSource")}<span className="extension-install"><input value={extensionSource} onChange={(event) => setExtensionSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void installBrowserExtension(); } }} placeholder="https://chromewebstore.google.com/detail/…" spellCheck={false} disabled={extensionBusy || !browserStatus.available} /><button className="primary-button" onClick={() => void installBrowserExtension()} disabled={extensionBusy || !extensionSource.trim() || !browserStatus.available}>{extensionBusy ? t("browserExtensionInstalling") : t("browserExtensionInstall")}</button></span></label>
               {extensionError && <p className="settings-help extension-error">{extensionError}</p>}
@@ -3768,8 +3884,8 @@ function App() {
         </span>
         <div className="panel-chips" role="toolbar" aria-label="panels" title={t("chipHint")}>
           {PANEL_IDS.filter((id) => id !== "editor").map((id) => (
-            <button key={id} className={`panel-chip ${panelShown(id) ? "active" : ""}`}
-              aria-pressed={panelShown(id)} data-panel={id}
+            <button key={id} className={`panel-chip ${chipActive(id) ? "active" : ""}`}
+              aria-pressed={chipActive(id)} data-panel={id}
               onClick={() => togglePanel(id)}
             >{chipLabel(id)}</button>
           ))}

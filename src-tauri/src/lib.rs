@@ -857,8 +857,12 @@ fn stop_run(state: tauri::State<'_, RunState>) {
     state.0.store(true, Ordering::Relaxed);
 }
 
+/// Async so the windows are destroyed from the event loop rather than from inside the
+/// webview callback that delivered the command (see `browser::problem_window_open`).
 #[tauri::command]
-fn close_app(window: tauri::Window) {
+async fn close_app(window: tauri::Window) {
+    // The problem window, shown or hidden, would keep the process alive by itself.
+    let _ = browser::close_problem_window(window.app_handle());
     let _ = window.destroy();
 }
 
@@ -2481,6 +2485,10 @@ pub fn run() {
             browser::browser_extension_remove,
             browser::browser_import_page,
             browser::browser_install_userscript,
+            browser::problem_window_open,
+            browser::problem_window_hide,
+            browser::problem_window_close,
+            browser::problem_window_take_url,
             dev_workspace_path,
             debug_report
         ])
@@ -2488,10 +2496,19 @@ pub fn run() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = window.emit("native-close-requested", ());
+                    // The problem window only ever hides: its page and browser are kept
+                    // for the next time, and the app window is told so its chip follows.
+                    if window.label() == browser::PROBLEM_WINDOW {
+                        browser::hide_problem_window(window.app_handle());
+                    } else {
+                        let _ = window.emit("native-close-requested", ());
+                    }
                 }
                 tauri::WindowEvent::Moved(_) => {
                     browser::window_moved(window, &window.state::<browser::BrowserState>());
+                }
+                tauri::WindowEvent::Destroyed if window.label() == browser::PROBLEM_WINDOW => {
+                    browser::host_destroyed(window, &window.state::<browser::BrowserState>());
                 }
                 tauri::WindowEvent::Destroyed => {
                     let state = window.state::<ClangdState>();

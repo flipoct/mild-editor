@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Window};
 
 pub const STATUS_EVENT: &str = "browser-status";
+pub const PROBLEM_WINDOW: &str = "problem";
 const REASON: &str = "The problem browser is not available on this platform yet.";
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -50,6 +51,34 @@ pub fn prepare(app: &AppHandle) {
 pub fn shutdown(_app: &AppHandle) {}
 
 pub fn window_moved(_window: &Window, _state: &BrowserState) {}
+
+pub fn host_destroyed(_window: &Window, _state: &BrowserState) {}
+
+pub fn hide_problem_window(_app: &AppHandle) {}
+
+#[tauri::command]
+pub async fn problem_window_open(_app: AppHandle, _url: String) -> Result<(), String> {
+    Err(REASON.into())
+}
+
+#[tauri::command]
+pub fn problem_window_hide(_app: AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn problem_window_close(_app: AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn close_problem_window(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub fn problem_window_take_url(_state: tauri::State<'_, BrowserState>) -> Option<String> {
+    None
+}
 
 #[tauri::command]
 pub fn browser_status(_state: tauri::State<'_, BrowserState>) -> PanelStatus {
@@ -108,7 +137,7 @@ pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _
 }
 
 #[tauri::command]
-pub fn browser_install_userscript(_window: Window, _state: tauri::State<'_, BrowserState>, _url: String, _bounds: PanelBounds) -> Result<(), String> {
+pub fn browser_install_userscript(_window: Window, _state: tauri::State<'_, BrowserState>, _url: String, _bounds: Option<PanelBounds>) -> Result<(), String> {
     Err("The problem browser is not available on this platform yet.".into())
 }
 

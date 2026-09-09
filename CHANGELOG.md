@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The problem browser can be a window of its own. **Settings → problem browser → placement** switches between the panel in the workspace and a separate window, which can go on another screen; the status-bar chip, *View → Problem Browser* and `Ctrl+W` show and hide it either way, and the window carries the same toolbar and import button.
+- `Ctrl+W` closes what has the keyboard: the problem browser when its page or URL field is focused, otherwise the file in the editor, and typing resumes in the file that takes its place.
+- Panel dividers are twice as wide to grab, and the strip over the problem page, which the native view used to cover, can be grabbed too.
+- Dragging a divider moves it as far as the pointer moves. It used to run ahead by the number of panels' worth of weight, so the problem panel shot across the window from a small drag.
+
 ## 1.8.0
 
 - Panels can be stacked as well as placed side by side. The workspace is now a set of columns, each holding one or more panels top to bottom, so the problem page can sit under the code rather than beside it.

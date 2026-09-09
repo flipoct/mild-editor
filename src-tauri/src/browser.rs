@@ -88,7 +88,21 @@ pub struct Shared {
     tab_host_popups: Mutex<Vec<BrowserView>>,
     /// Userscript URL to feed Tampermonkey's dashboard once it has loaded in the panel.
     pending_userscript: Mutex<Option<String>>,
+    /// Label of the Tauri window the browser view lives in: the app window when the
+    /// panel is part of the workspace, [`PROBLEM_WINDOW`] when it has a window of its own.
+    host: Mutex<Option<String>>,
+    /// URL the separate problem window should open once its page is up and has reported
+    /// a rectangle for the view (see `problem_window_open`).
+    pending_url: Mutex<Option<String>>,
 }
+
+/// Label of the separate problem window, when the user prefers one to the panel.
+pub const PROBLEM_WINDOW: &str = "problem";
+/// Event carrying a shortcut pressed inside the browser view (`{ action: "close" }`), for
+/// the app window to act on as it would on the same keys pressed in its own page.
+pub const HOTKEY_EVENT: &str = "browser-hotkey";
+/// Event sent when the browser view takes keyboard focus.
+pub const FOCUS_EVENT: &str = "browser-focus";
 
 /// Tauri-managed handle to the panel.
 #[derive(Clone, Default)]
@@ -561,6 +575,68 @@ wrap_client! {
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(MildLoadHandler::new(self.shared.clone(), self.app.clone()))
         }
+
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            Some(MildKeyboardHandler::new(self.app.clone()))
+        }
+
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(MildFocusHandler::new(self.app.clone()))
+        }
+    }
+}
+
+/// The native event that accompanies a key event: a `MSG` on Windows, an opaque pointer
+/// (the `NSEvent`) on macOS. Only the shape differs; the handler never reads it.
+#[cfg(target_os = "windows")]
+type OsKeyEvent<'a> = Option<&'a mut cef::sys::MSG>;
+#[cfg(target_os = "macos")]
+type OsKeyEvent<'a> = *mut u8;
+
+/// `cef_event_flags_t` bits the handler looks at.
+const EVENTFLAG_SHIFT_DOWN: u32 = 1 << 1;
+const EVENTFLAG_CONTROL_DOWN: u32 = 1 << 2;
+const EVENTFLAG_ALT_DOWN: u32 = 1 << 3;
+const EVENTFLAG_COMMAND_DOWN: u32 = 1 << 7;
+/// Virtual key code of W, the same on both platforms in `windows_key_code`.
+const VK_W: i32 = 0x57;
+
+wrap_keyboard_handler! {
+    struct MildKeyboardHandler {
+        app: AppHandle,
+    }
+
+    impl KeyboardHandler {
+        /// Keys pressed while the page has focus never reach the app's webview, so the
+        /// shortcuts the editor answers to are picked up here. Ctrl+W (⌘W on macOS)
+        /// closes the panel or window the browser is in; the app decides which.
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: OsKeyEvent<'_>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+            let Some(event) = event else { return 0 };
+            if event.type_ != KeyEventType::RAWKEYDOWN && event.type_ != KeyEventType::KEYDOWN {
+                return 0;
+            }
+            let primary = if cfg!(target_os = "macos") { EVENTFLAG_COMMAND_DOWN } else { EVENTFLAG_CONTROL_DOWN };
+            let modifiers = event.modifiers & (EVENTFLAG_SHIFT_DOWN | EVENTFLAG_CONTROL_DOWN | EVENTFLAG_ALT_DOWN | EVENTFLAG_COMMAND_DOWN);
+            if modifiers == primary && event.windows_key_code == VK_W {
+                let _ = self.app.emit(HOTKEY_EVENT, serde_json::json!({ "action": "close" }));
+                return 1;
+            }
+            0
+        }
+    }
+}
+
+wrap_focus_handler! {
+    struct MildFocusHandler {
+        app: AppHandle,
+    }
+
+    impl FocusHandler {
+        /// Lets the app window know its own page has lost the keyboard to the browser,
+        /// which its `document.activeElement` cannot tell it.
+        fn on_got_focus(&self, _browser: Option<&mut Browser>) {
+            let _ = self.app.emit(FOCUS_EVENT, ());
+        }
     }
 }
 
@@ -573,6 +649,12 @@ wrap_display_handler! {
     impl DisplayHandler {
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(CefString::to_string).unwrap_or_default();
+            // The separate window carries the page title, as a browser window would.
+            if self.shared.host.lock().expect("host").as_deref() == Some(PROBLEM_WINDOW) {
+                if let Some(window) = self.app.get_webview_window(PROBLEM_WINDOW) {
+                    let _ = window.set_title(&if title.is_empty() { "Problem".to_string() } else { format!("{title} — Problem") });
+                }
+            }
             self.shared.update(&self.app, |status| status.title = title);
         }
 
@@ -598,7 +680,8 @@ wrap_life_span_handler! {
             let Some(browser) = browser.cloned() else { return };
             *self.shared.browser.lock().expect("browser") = Some(browser.clone());
             if let Some(bounds) = self.shared.pending_bounds.lock().expect("pending bounds").take() {
-                if let Some(window) = self.app.get_webview_window("main") {
+                let host = self.shared.host.lock().expect("host").clone().unwrap_or_else(|| "main".into());
+                if let Some(window) = self.app.get_webview_window(&host) {
                     let _ = platform::apply_bounds(&window.as_ref().window(), &browser, &bounds);
                 }
                 *self.shared.last_bounds.lock().expect("last bounds") = Some(bounds);
@@ -642,13 +725,25 @@ wrap_life_span_handler! {
             1
         }
 
-        fn on_before_close(&self, _browser: Option<&mut Browser>) {
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
             CLOSING_BY_APP.store(false, Ordering::SeqCst);
-            *self.shared.browser.lock().expect("browser") = None;
+            // When the browser moves between the panel and its own window the new one may
+            // be created before the old one finishes closing; only the current one counts.
+            let closing = browser.map(|browser| browser.identifier());
+            let mut current = self.shared.browser.lock().expect("browser");
+            if closing.is_some() && current.as_ref().map(|browser| browser.identifier()) != closing {
+                return;
+            }
+            *current = None;
+            drop(current);
             self.shared.update(&self.app, |status| {
                 status.open = false;
                 status.visible = false;
                 status.loading = false;
+                status.url.clear();
+                status.title.clear();
+                status.can_go_back = false;
+                status.can_go_forward = false;
             });
         }
     }
@@ -750,16 +845,25 @@ pub fn browser_open(window: Window, state: tauri::State<'_, BrowserState>, url: 
             return;
         }
         let existing = shared.browser.lock().expect("browser").clone();
+        let same_host = shared.host.lock().expect("host").as_deref() == Some(target.label());
         match existing {
-            Some(browser) => {
+            Some(browser) if same_host => {
                 let _ = platform::apply_bounds(&target, &browser, &bounds);
                 platform::set_hidden(&browser, false);
                 if let Some(frame) = browser.main_frame() {
                     frame.load_url(Some(&CefString::from(url.as_str())));
                 }
+                *shared.last_bounds.lock().expect("last bounds") = Some(bounds);
                 shared.update(&app, |status| status.visible = true);
             }
-            None => {
+            existing => {
+                // A browser in another window (the panel moving to its own window, or
+                // back) cannot be re-parented: it is closed and a new one created here.
+                if let Some(host) = existing.as_ref().and_then(|browser| browser.host()) {
+                    CLOSING_BY_APP.store(true, Ordering::SeqCst);
+                    host.close_browser(1);
+                }
+                *shared.host.lock().expect("host") = Some(target.label().to_string());
                 *shared.pending_bounds.lock().expect("pending bounds") = Some(bounds);
                 if let Err(error) = create_browser(&target, &shared, &app, &url, bounds) {
                     shared.update(&app, |status| status.error = Some(error));
@@ -767,6 +871,186 @@ pub fn browser_open(window: Window, state: tauri::State<'_, BrowserState>, url: 
             }
         }
     })
+}
+
+/// Which window the browser view is in, if any.
+pub fn host_label(state: &BrowserState) -> Option<String> {
+    state.0.host.lock().expect("host").clone()
+}
+
+/// The window hosting the view is going away: the view goes with it, so the browser is
+/// closed first. Runs on the main thread, from the window's destroy event.
+pub fn host_destroyed(window: &Window, state: &BrowserState) {
+    if host_label(state).as_deref() != Some(window.label()) {
+        return;
+    }
+    *state.0.host.lock().expect("host") = None;
+    *state.0.last_bounds.lock().expect("last bounds") = None;
+    if let Some(host) = state.0.browser.lock().expect("browser").as_ref().and_then(|browser| browser.host()) {
+        CLOSING_BY_APP.store(true, Ordering::SeqCst);
+        host.close_browser(1);
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The separate problem window. Its page (see src/ProblemWindow.tsx) hosts the view the
+// same way the panel does, so the commands above serve both; these only manage the
+// window itself and hand the page the URL it should open.
+
+const PROBLEM_WINDOW_HIDDEN_EVENT: &str = "problem-window-hidden";
+const PROBLEM_WINDOW_NAVIGATE_EVENT: &str = "problem-window-navigate";
+
+/// Show the problem window, creating it on first use, and open `url` in it when given.
+///
+/// Async on purpose: a synchronous command runs on the main thread inside the WebView2
+/// callback that delivered it, and creating another webview there never completes (wry
+/// pumps messages waiting for the new controller, which the browser process only
+/// finishes once the callback returns). From the pool the work reaches the main thread
+/// through the event loop instead.
+#[tauri::command]
+pub async fn problem_window_open(app: AppHandle, url: String) -> Result<(), String> {
+    open_problem_window(&app, url)
+}
+
+fn open_problem_window(app: &AppHandle, url: String) -> Result<(), String> {
+    let shared = app.state::<BrowserState>().0.clone();
+    if !shared.status.lock().expect("panel status").available {
+        return Err(shared.status.lock().expect("panel status").error.clone().unwrap_or_else(|| "CEF is not available".into()));
+    }
+    if let Some(window) = app.get_webview_window(PROBLEM_WINDOW) {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        set_problem_view_hidden(app, false);
+        if url.is_empty() {
+            return Ok(());
+        }
+        let hosted = shared.host.lock().expect("host").as_deref() == Some(PROBLEM_WINDOW) && shared.browser.lock().expect("browser").is_some();
+        if hosted {
+            let shared = shared.clone();
+            return app.run_on_main_thread(move || {
+                if let Some(frame) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.main_frame()) {
+                    frame.load_url(Some(&CefString::from(url.as_str())));
+                }
+            }).map_err(|error| error.to_string());
+        }
+        // The page is up but has no browser yet (or the browser is still in the panel):
+        // it opens the URL itself, from its own rectangle.
+        *shared.pending_url.lock().expect("pending url") = Some(url.clone());
+        let _ = app.emit_to(PROBLEM_WINDOW, PROBLEM_WINDOW_NAVIGATE_EVENT, url);
+        return Ok(());
+    }
+    if !url.is_empty() {
+        *shared.pending_url.lock().expect("pending url") = Some(url);
+    }
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        // The same chrome as the app window (see tauri.conf.json and tauri.macos.conf.json):
+        // the page draws the title bar and, on Windows, the controls; macOS keeps its
+        // traffic lights over the bar the page leaves room for.
+        let builder = tauri::WebviewWindowBuilder::new(&handle, PROBLEM_WINDOW, tauri::WebviewUrl::App("index.html".into()))
+            .title("Problem")
+            .inner_size(960.0, 760.0)
+            .min_inner_size(420.0, 320.0)
+            .shadow(true);
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .decorations(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(8.0, 18.0));
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.decorations(false);
+        let built = builder.build();
+        // Two callers can race to create it (the chip and the page to open arrive
+        // together); the second finds it there, which is fine.
+        if let Err(error) = built {
+            if !matches!(error, tauri::Error::WebviewLabelAlreadyExists(_)) {
+                eprintln!("[cef] problem window: {error}");
+            }
+        }
+    }).map_err(|error| error.to_string())
+}
+
+/// Hide the problem window, keeping its page and browser for the next time.
+#[tauri::command]
+pub fn problem_window_hide(app: AppHandle) -> Result<(), String> {
+    hide_problem_window(&app);
+    Ok(())
+}
+
+pub fn hide_problem_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(PROBLEM_WINDOW) {
+        let _ = window.hide();
+    }
+    // On Windows the view is a window owned by the problem window, and hiding an owner
+    // leaves its owned windows on screen (only minimising takes them along), so the
+    // view is hidden by hand; elsewhere this only pauses its rendering.
+    set_problem_view_hidden(app, true);
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.set_focus();
+    }
+    let _ = app.emit_to("main", PROBLEM_WINDOW_HIDDEN_EVENT, ());
+}
+
+/// Hide or show the view while it lives in the problem window. Hops to the main thread,
+/// which runs it straight away when already there.
+fn set_problem_view_hidden(app: &AppHandle, hidden: bool) {
+    let shared = app.state::<BrowserState>().0.clone();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if shared.host.lock().expect("host").as_deref() != Some(PROBLEM_WINDOW) {
+            return;
+        }
+        if let Some(browser) = shared.browser.lock().expect("browser").clone() {
+            platform::set_hidden(&browser, hidden);
+            shared.update(&handle, |status| status.visible = !hidden);
+        }
+    });
+}
+
+/// Close the problem window for good, e.g. when the browser goes back into the panel.
+/// The browser is closed ahead of the window so the view is gone before its parent.
+/// Async for the same reason as `problem_window_open`.
+#[tauri::command]
+pub async fn problem_window_close(app: AppHandle) -> Result<(), String> {
+    close_problem_window(&app)
+}
+
+/// Also called when the app window goes, so the problem window does not keep the
+/// process alive on its own.
+pub fn close_problem_window(app: &AppHandle) -> Result<(), String> {
+    let shared = app.state::<BrowserState>().0.clone();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if shared.host.lock().expect("host").as_deref() == Some(PROBLEM_WINDOW) {
+            if let Some(host) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.host()) {
+                CLOSING_BY_APP.store(true, Ordering::SeqCst);
+                host.close_browser(1);
+            }
+            *shared.host.lock().expect("host") = None;
+            // The view's window is owned by the problem window; destroying the owner
+            // first would take the view down under Chromium (`Check failed:
+            // !is_destroyed_`). Pump until `on_before_close` has cleared the browser.
+            if INITIALIZED.load(Ordering::SeqCst) {
+                for _ in 0..200 {
+                    if shared.browser.lock().expect("browser").is_none() {
+                        break;
+                    }
+                    do_message_loop_work();
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+        if let Some(window) = handle.get_webview_window(PROBLEM_WINDOW) {
+            let _ = window.destroy();
+        }
+    }).map_err(|error| error.to_string())
+}
+
+/// The URL the problem window's page should open on start-up, handed over once.
+#[tauri::command]
+pub fn problem_window_take_url(state: tauri::State<'_, BrowserState>) -> Option<String> {
+    state.0.pending_url.lock().expect("pending url").take()
 }
 
 fn create_browser(window: &Window, shared: &Arc<Shared>, app: &AppHandle, url: &str, bounds: PanelBounds) -> Result<(), String> {
@@ -788,6 +1072,11 @@ pub fn browser_set_bounds(window: Window, state: tauri::State<'_, BrowserState>,
     let shared = state.0.clone();
     let target = window.clone();
     on_main(&window, move || {
+        // Only the window the view lives in may place it; a page in the other window
+        // (the panel while the browser has its own window, say) is stale.
+        if shared.host.lock().expect("host").as_deref() != Some(target.label()) {
+            return;
+        }
         let browser = shared.browser.lock().expect("browser").clone();
         match browser {
             Some(browser) => {
@@ -805,6 +1094,9 @@ pub fn browser_set_bounds(window: Window, state: tauri::State<'_, BrowserState>,
 pub fn window_moved(window: &Window, state: &BrowserState) {
     #[cfg(target_os = "windows")]
     {
+        if host_label(state).as_deref() != Some(window.label()) {
+            return;
+        }
         let bounds = state.0.last_bounds.lock().expect("last bounds").clone();
         let browser = state.0.browser.lock().expect("browser").clone();
         if let (Some(bounds), Some(browser)) = (bounds, browser) {
@@ -821,7 +1113,11 @@ pub fn window_moved(window: &Window, state: &BrowserState) {
 pub fn browser_set_visible(window: Window, state: tauri::State<'_, BrowserState>, visible: bool) -> Result<(), String> {
     let shared = state.0.clone();
     let app = window.app_handle().clone();
+    let target = window.clone();
     on_main(&window, move || {
+        if shared.host.lock().expect("host").as_deref() != Some(target.label()) {
+            return;
+        }
         if let Some(browser) = shared.browser.lock().expect("browser").clone() {
             platform::set_hidden(&browser, !visible);
             shared.update(&app, |status| status.visible = visible);
@@ -1479,8 +1775,10 @@ fn random_token() -> String {
 /// (it asks Chromium for a new tab), but the dashboard's "Install from URL" can, so the
 /// panel loads that dashboard and `MildLoadHandler` fills the form in; Tampermonkey's
 /// confirmation then appears in the panel like any other page.
+/// `bounds` is the panel's rectangle; without one the dashboard opens in the separate
+/// problem window instead.
 #[tauri::command]
-pub fn browser_install_userscript(window: Window, state: tauri::State<'_, BrowserState>, url: String, bounds: PanelBounds) -> Result<(), String> {
+pub fn browser_install_userscript(window: Window, state: tauri::State<'_, BrowserState>, url: String, bounds: Option<PanelBounds>) -> Result<(), String> {
     let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
     let tampermonkey = dir.join(TAMPERMONKEY_ID);
     if !tampermonkey.join("manifest.json").is_file() {
@@ -1491,7 +1789,19 @@ pub fn browser_install_userscript(window: Window, state: tauri::State<'_, Browse
     }
     let dashboard = format!("chrome-extension://{}/options.html#nav=utils", unpacked_extension_id(&tampermonkey));
     *state.0.pending_userscript.lock().expect("pending userscript") = Some(url);
-    browser_open(window, state, dashboard, bounds)
+    match bounds {
+        Some(bounds) => browser_open(window, state, dashboard, bounds),
+        None => {
+            // Off the main thread, as `problem_window_open` explains.
+            let app = window.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = open_problem_window(&app, dashboard) {
+                    eprintln!("[cef] problem window: {error}");
+                }
+            });
+            Ok(())
+        }
+    }
 }
 
 /// Asks Competitive Companion to parse the page in the panel: the editor's toolbar button

@@ -14,7 +14,7 @@
     "dev:cef": "scripts/prepare-cef.sh debug && tauri dev --config src-tauri/tauri.dev.conf.json --config src-tauri/tauri.cef.conf.json",
     "build:cef": "scripts/prepare-cef.sh release && tauri build --config src-tauri/tauri.cef.conf.json",
     "dev:cef:win": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "build:cef:win": "pwsh scripts/prepare-cef.ps1 && tauri build --config src-tauri/tauri.cef.windows.conf.json"
+    "build:cef:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-cef.ps1 && tauri build --config src-tauri/tauri.cef.windows.conf.json"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
