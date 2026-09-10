@@ -112,14 +112,12 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.9.0
+            ## What's changed in v1.9.1
 
-            - **The problem browser can be a window of its own.** Settings → problem browser → placement moves it out of the workspace into a separate window with the app's own title bar, handy for a second screen. The chip, the View menu and `Ctrl+W` show and hide it either way, and the import button works from there too.
-            - **`Ctrl+W` closes what has the keyboard**: the problem browser when its page or URL field is focused, otherwise the file, and typing resumes in the next file.
-            - **Panel dividers are easier to grab** (twice as wide, including over the problem page) and follow the pointer one-to-one instead of racing ahead.
-            - Settings → problem browser scrolls.
+            - **The problem window stays where it is.** In window mode, switching to another file changes the page without bringing the window forward, lifting it above other windows or taking the keyboard from the editor. A page that finishes loading no longer takes focus in either mode.
+            - **Browser shortcuts with the problem page focused**: `Ctrl`/`Alt` + `←` `→` go back and forward, `F5` and `Ctrl+R` reload, `Ctrl+F5`, `Shift+F5` or `Ctrl+Shift+R` reload past the cache (`⌘` for `Ctrl` on macOS).
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.9.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.9.1/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

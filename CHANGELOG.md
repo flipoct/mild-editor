@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.9.1
 
 - In window mode, switching to another file changes the page in the problem window without bringing the window forward or taking the keyboard from the editor. A page that finishes loading no longer takes focus either, in the panel or the window.
 - Browser shortcuts work with the problem page focused: `Ctrl`/`Alt` with the left and right arrows go back and forward, `F5` and `Ctrl+R` reload, and `Ctrl+F5`, `Shift+F5` or `Ctrl+Shift+R` reload past the cache. (`⌘` in place of `Ctrl` on macOS.)
