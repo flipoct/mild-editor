@@ -2774,7 +2774,7 @@ function App() {
     if (problemBrowserMode === "panel") {
       void invoke("problem_window_close").catch(() => undefined).then(() => { if (url && problemPanelOpen) openProblemUrl(url); });
     } else if (url && problemPanelOpen) {
-      invoke("problem_window_open", { url }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+      invoke("problem_window_open", { url, focus: true }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [problemBrowserMode]);
@@ -2782,7 +2782,7 @@ function App() {
   // In window mode the chip shows and hides the window.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window) || problemBrowserMode !== "window" || !browserStatus.available) return;
-    if (problemPanelOpen) invoke("problem_window_open", { url: "" }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    if (problemPanelOpen) invoke("problem_window_open", { url: "", focus: true }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
     else void invoke("problem_window_hide").catch(() => undefined);
   }, [problemBrowserMode, problemPanelOpen, browserStatus.available]);
 
@@ -2859,7 +2859,8 @@ function App() {
     if (!problemPanelOpen || !browserStatus.available) return;
     const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
     if (!url || url === browserStatus.url) return;
-    if (problemBrowserMode === "window") invoke("problem_window_open", { url }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+    // Following a file changes the page only; the window stays where it is in the stack.
+    if (problemBrowserMode === "window") invoke("problem_window_open", { url, focus: false }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
     else openProblemUrl(url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.sourceUrl, browserStatus.available, problemPanelOpen, problemBrowserMode]);

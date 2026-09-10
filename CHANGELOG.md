@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- In window mode, switching to another file changes the page in the problem window without bringing the window forward or taking the keyboard from the editor. A page that finishes loading no longer takes focus either, in the panel or the window.
+- Browser shortcuts work with the problem page focused: `Ctrl`/`Alt` with the left and right arrows go back and forward, `F5` and `Ctrl+R` reload, and `Ctrl+F5`, `Shift+F5` or `Ctrl+Shift+R` reload past the cache. (`⌘` in place of `Ctrl` on macOS.)
+
 ## 1.9.0
 
 - The problem browser can be a window of its own. **Settings → problem browser → placement** switches between the panel in the workspace and a separate window with the app's own title bar, which can go on another screen; the status-bar chip, *View → Problem Browser* and `Ctrl+W` show and hide it either way, and the window carries the same toolbar and import button.

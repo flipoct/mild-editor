@@ -57,7 +57,7 @@ pub fn host_destroyed(_window: &Window, _state: &BrowserState) {}
 pub fn hide_problem_window(_app: &AppHandle) {}
 
 #[tauri::command]
-pub async fn problem_window_open(_app: AppHandle, _url: String) -> Result<(), String> {
+pub async fn problem_window_open(_app: AppHandle, _url: String, _focus: bool) -> Result<(), String> {
     Err(REASON.into())
 }
 

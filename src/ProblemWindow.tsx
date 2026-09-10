@@ -131,12 +131,25 @@ export default function ProblemWindow() {
   }, [status.available]);
 
   // Ctrl+W / ⌘W in the toolbar hides the window, as it does with the view focused (the
-  // backend forwards that one to the app window).
+  // backend forwards that one to the app window). The browser keys work here as well,
+  // except in the URL field, where the arrows edit text.
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if ((isMac ? event.metaKey : event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "w") {
+      const primary = isMac ? event.metaKey : event.ctrlKey;
+      if (primary && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "w") {
         event.preventDefault();
         void invoke("problem_window_hide").catch(() => undefined);
+        return;
+      }
+      const inField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+      const history = (primary || event.altKey) && !inField;
+      const action = history && event.key === "ArrowLeft" ? "back"
+        : history && event.key === "ArrowRight" ? "forward"
+          : event.key === "F5" || (primary && event.key.toLowerCase() === "r") ? "reload"
+            : null;
+      if (action) {
+        event.preventDefault();
+        void invoke("browser_go", { action }).catch(() => undefined);
       }
     };
     window.addEventListener("keydown", handleKey);

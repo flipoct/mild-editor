@@ -598,7 +598,11 @@ const EVENTFLAG_SHIFT_DOWN: u32 = 1 << 1;
 const EVENTFLAG_CONTROL_DOWN: u32 = 1 << 2;
 const EVENTFLAG_ALT_DOWN: u32 = 1 << 3;
 const EVENTFLAG_COMMAND_DOWN: u32 = 1 << 7;
-/// Virtual key code of W, the same on both platforms in `windows_key_code`.
+/// Virtual key codes, the same on both platforms in `windows_key_code`.
+const VK_LEFT: i32 = 0x25;
+const VK_RIGHT: i32 = 0x27;
+const VK_F5: i32 = 0x74;
+const VK_R: i32 = 0x52;
 const VK_W: i32 = 0x57;
 
 wrap_keyboard_handler! {
@@ -609,16 +613,44 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         /// Keys pressed while the page has focus never reach the app's webview, so the
         /// shortcuts the editor answers to are picked up here. Ctrl+W (⌘W on macOS)
-        /// closes the panel or window the browser is in; the app decides which.
-        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: OsKeyEvent<'_>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+        /// closes the panel or window the browser is in; the app decides which. The
+        /// browser's own history and reload keys are handled here too, since an Alloy
+        /// browser has no Chrome UI to provide them: Ctrl/⌘ or Alt with the left and
+        /// right arrows for back and forward (outside text fields, where Ctrl+arrow
+        /// moves by a word), F5 and Ctrl/⌘+R to reload, Ctrl+F5, Shift+F5 or
+        /// Ctrl/⌘+Shift+R to reload past the cache.
+        fn on_pre_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: OsKeyEvent<'_>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
             let Some(event) = event else { return 0 };
             if event.type_ != KeyEventType::RAWKEYDOWN && event.type_ != KeyEventType::KEYDOWN {
                 return 0;
             }
             let primary = if cfg!(target_os = "macos") { EVENTFLAG_COMMAND_DOWN } else { EVENTFLAG_CONTROL_DOWN };
             let modifiers = event.modifiers & (EVENTFLAG_SHIFT_DOWN | EVENTFLAG_CONTROL_DOWN | EVENTFLAG_ALT_DOWN | EVENTFLAG_COMMAND_DOWN);
-            if modifiers == primary && event.windows_key_code == VK_W {
+            let key = event.windows_key_code;
+            if modifiers == primary && key == VK_W {
                 let _ = self.app.emit(HOTKEY_EVENT, serde_json::json!({ "action": "close" }));
+                return 1;
+            }
+            let Some(browser) = browser else { return 0 };
+            let in_text_field = event.focus_on_editable_field != 0;
+            let history = (modifiers == primary || modifiers == EVENTFLAG_ALT_DOWN) && !in_text_field;
+            if history && key == VK_LEFT {
+                browser.go_back();
+                return 1;
+            }
+            if history && key == VK_RIGHT {
+                browser.go_forward();
+                return 1;
+            }
+            let reload = (key == VK_F5 && modifiers == 0) || (key == VK_R && modifiers == primary);
+            let hard_reload = (key == VK_F5 && (modifiers == EVENTFLAG_CONTROL_DOWN || modifiers == EVENTFLAG_SHIFT_DOWN))
+                || (key == VK_R && modifiers == (primary | EVENTFLAG_SHIFT_DOWN));
+            if hard_reload {
+                browser.reload_ignore_cache();
+                return 1;
+            }
+            if reload {
+                browser.reload();
                 return 1;
             }
             0
@@ -632,6 +664,13 @@ wrap_focus_handler! {
     }
 
     impl FocusHandler {
+        /// A page that has just loaded asks for the keyboard; the browser follows the
+        /// active file, so granting it would pull typing out of the editor on every
+        /// switch. Only a click or the Tab key (the system source) moves focus here.
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, source: FocusSource) -> ::std::os::raw::c_int {
+            (source == FocusSource::NAVIGATION) as ::std::os::raw::c_int
+        }
+
         /// Lets the app window know its own page has lost the keyboard to the browser,
         /// which its `document.activeElement` cannot tell it.
         fn on_got_focus(&self, _browser: Option<&mut Browser>) {
@@ -908,18 +947,26 @@ const PROBLEM_WINDOW_NAVIGATE_EVENT: &str = "problem-window-navigate";
 /// finishes once the callback returns). From the pool the work reaches the main thread
 /// through the event loop instead.
 #[tauri::command]
-pub async fn problem_window_open(app: AppHandle, url: String) -> Result<(), String> {
-    open_problem_window(&app, url)
+pub async fn problem_window_open(app: AppHandle, url: String, focus: bool) -> Result<(), String> {
+    open_problem_window(&app, url, focus)
 }
 
-fn open_problem_window(app: &AppHandle, url: String) -> Result<(), String> {
+/// `focus` brings the window forward; following the active file passes false so the
+/// page changes without taking the keyboard from the editor.
+fn open_problem_window(app: &AppHandle, url: String, focus: bool) -> Result<(), String> {
     let shared = app.state::<BrowserState>().0.clone();
     if !shared.status.lock().expect("panel status").available {
         return Err(shared.status.lock().expect("panel status").error.clone().unwrap_or_else(|| "CEF is not available".into()));
     }
     if let Some(window) = app.get_webview_window(PROBLEM_WINDOW) {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+        // Showing a window that is already up activates it on Windows, so only a hidden
+        // one is shown; a page change alone must not bring the window forward.
+        if !window.is_visible().unwrap_or(false) {
+            window.show().map_err(|error| error.to_string())?;
+        }
+        if focus {
+            window.set_focus().map_err(|error| error.to_string())?;
+        }
         set_problem_view_hidden(app, false);
         if url.is_empty() {
             return Ok(());
@@ -1795,7 +1842,7 @@ pub fn browser_install_userscript(window: Window, state: tauri::State<'_, Browse
             // Off the main thread, as `problem_window_open` explains.
             let app = window.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = open_problem_window(&app, dashboard) {
+                if let Err(error) = open_problem_window(&app, dashboard, true) {
                     eprintln!("[cef] problem window: {error}");
                 }
             });
