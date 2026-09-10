@@ -46,6 +46,17 @@ jobs:
         with:
           targets: ${{ startsWith(matrix.platform, 'macos') && matrix.target || '' }}
 
+      # The Windows job is the longest of the four and most of it is compiling the
+      # dependency graph and the embedded Chromium wrapper, both of which are the same
+      # from one release to the next. Only this platform is cached: a repository holds
+      # 10 GB of caches, and a release target for every platform would not fit beside the
+      # pull request checks, which are the ones worth keeping warm. The other three jobs
+      # finish before this one regardless.
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.platform == 'windows-latest'
+        with:
+          workspaces: src-tauri
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
