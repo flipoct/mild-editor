@@ -960,14 +960,15 @@ fn open_problem_window(app: &AppHandle, url: String, focus: bool) -> Result<(), 
     }
     if let Some(window) = app.get_webview_window(PROBLEM_WINDOW) {
         // Showing a window that is already up activates it on Windows, so only a hidden
-        // one is shown; a page change alone must not bring the window forward.
+        // one is shown, together with its view; a page change alone must neither bring
+        // the window forward nor lift it above whatever covers it.
         if !window.is_visible().unwrap_or(false) {
             window.show().map_err(|error| error.to_string())?;
+            set_problem_view_hidden(app, false);
         }
         if focus {
             window.set_focus().map_err(|error| error.to_string())?;
         }
-        set_problem_view_hidden(app, false);
         if url.is_empty() {
             return Ok(());
         }
@@ -2101,7 +2102,7 @@ mod win {
     use tauri::Window;
     use windows_sys::Win32::Foundation::{HWND, POINT};
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE};
 
     /// Tauri hands out the `windows` crate's HWND and CEF's bindings declare their own
     /// (`cef::sys::HWND`, a pointer to an opaque `HWND__`); both wrap the same handle.
@@ -2163,11 +2164,15 @@ mod win {
         Ok(())
     }
 
+    /// Shown and hidden without touching the z-order or activation: `ShowWindow` on a
+    /// window that is already visible would lift it above whatever covers it, which a
+    /// page change behind the app window must not do.
     pub fn set_hidden(browser: &cef::Browser, hidden: bool) {
         if let Some(host) = browser.host() {
             let hwnd = raw_handle(&host);
             if !hwnd.is_null() {
-                unsafe { ShowWindow(hwnd, if hidden { SW_HIDE } else { SW_SHOWNA }) };
+                let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | if hidden { SWP_HIDEWINDOW } else { SWP_SHOWWINDOW };
+                unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0, flags) };
             }
             host.was_hidden(hidden as i32);
         }
