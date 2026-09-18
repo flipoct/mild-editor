@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Icon } from "./icons";
+import { DEFAULT_FLOAT_TOLERANCE, diffLines, outputsMatch, splitFlags } from "./judge";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -13,13 +15,17 @@ import { isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
 import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
 import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
+import { fillSubmitFormScript, submitTarget } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
 import packageInfo from "../package.json";
 
 type Language = "cpp" | "python";
 /** Competitive-programming verdicts. `ac`/`wa` come from comparing streams, the rest from the runner. */
-type Status = "idle" | "running" | "ac" | "wa" | "tle" | "re" | "ce" | "stopped";
-type Verdict = "ok" | "ce" | "re" | "tle" | "limit" | "stopped";
+type Status = "idle" | "running" | "ac" | "wa" | "tle" | "mle" | "re" | "ce" | "stopped";
+type Verdict = "ok" | "ce" | "re" | "tle" | "mle" | "limit" | "stopped";
+/** A problem's own limits, as its judge states them. Either may be unknown. */
+type ProblemLimits = { timeLimitMs?: number; memoryLimitMb?: number };
+type CompileProfile = "release" | "debug";
 type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 type UiLocale = "en" | "ko";
@@ -38,6 +44,7 @@ type TestCase = {
   status: Status;
   open: boolean;
   timeMs?: number;
+  memoryKb?: number;
 };
 
 type NativeRunResult = {
@@ -46,6 +53,7 @@ type NativeRunResult = {
   stdout: string;
   stderr: string;
   timeMs: number;
+  memoryKb?: number | null;
   verdict: Verdict;
 };
 
@@ -117,6 +125,7 @@ type ProblemTab = {
   sourceUrl?: string;
   judgeStatus?: string;
   submissionUrl?: string;
+  limits?: ProblemLimits;
   modifiedAt?: number;
 };
 
@@ -140,6 +149,7 @@ type LoadedWorkspace = {
     source?: ProblemSource;
     sourceUrl?: string;
     judgeStatus?: string;
+    limits?: ProblemLimits;
     modifiedAt: number;
   }>;
 };
@@ -152,6 +162,7 @@ type ImportedAtCoderProblem = {
   sourceUrl: string;
   /** Contest name, when the importer knows one; only Competitive Companion sends it. */
   contest?: string;
+  limits?: ProblemLimits;
 };
 
 type CodeSnippet = {
@@ -169,7 +180,7 @@ type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory
 /** Explorer row whose name is being edited in place. */
 type ExplorerRename = { kind: "file"; filename: string } | { kind: "directory"; path: string };
 type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
-type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; modifiedAt: number };
+type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number };
 
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
 type BackgroundImageFile = { bytes: number[]; mime: string };
@@ -184,7 +195,6 @@ type CompanionProblem = {
   batch?: { id: string; size: number };
 };
 type CompanionStatus = { listening: boolean; port: number | null };
-type DiffRow = { line: number; expected: string | null; actual: string | null; same: boolean; whitespaceOnly: boolean };
 
 const templates: Record<Language, string> = {
   cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    \${cursor}int a, b;\n    cin >> a >> b;\n    cout << a + b << '\\n';\n    return 0;\n}\n`,
@@ -237,36 +247,65 @@ const storedWallpaperLayout = (): WallpaperLayout => {
   return stored && wallpaperLayouts.includes(stored) ? stored : "cover";
 };
 
-const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
+/**
+ * Development only: `?demo` fills the browser preview (`npm run dev:web`) with a workspace,
+ * so the interface can be looked at without the Tauri backend. `?demo=settings` also opens
+ * the settings dialog.
+ */
+const DEMO_MODE = import.meta.env.DEV ? new URLSearchParams(window.location.search).get("demo") : null;
+const demoTests: TestCase[] = [
+  { id: 1, name: "sample 1", input: "3\n1 2 3\n", expected: "6", output: "6\n", error: "", status: "ac", open: false, timeMs: 12 },
+  { id: 2, name: "sample 2", input: "4\n10 20 30 40\n", expected: "100\n7", output: "100\n9\n", error: "", status: "wa", open: true, timeMs: 15 },
+  { id: 3, name: "sample 3", input: "1\n1000000000\n", expected: "1000000000", output: "", error: "Error: TLE (2s)", status: "tle", open: false, timeMs: 2000 },
+  { id: 4, name: "test 4", input: "0\n", expected: "0", output: "", error: "", status: "idle", open: false },
+];
+const demoCode = "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    int n;\n    cin >> n;\n    long long sum = 0;\n    for (int i = 0; i < n; i++) {\n        long long x;\n        cin >> x;\n        sum += x;\n    }\n    cout << sum << \"\\n\";\n    return 0;\n}\n";
+const demoTabs: ProblemTab[] = DEMO_MODE === null ? [] : [
+  { id: "demo-a", title: "A - Sum", filename: "AtCoder/abc400/A_Sum.cpp", language: "cpp", codes: { cpp: demoCode, python: "" }, tests: demoTests, source: "atcoder", judgeStatus: "AC" },
+  { id: "demo-b", title: "B - Pairs", filename: "AtCoder/abc400/B_Pairs.cpp", language: "cpp", codes: { cpp: demoCode, python: "" }, tests: demoTests, dirty: true, source: "atcoder", judgeStatus: "WA" },
+  { id: "demo-c", title: "C - Graph", filename: "AtCoder/abc400/C_Graph.py", language: "python", codes: { cpp: "", python: "print(1)\n" }, tests: demoTests, source: "atcoder" },
+  { id: "demo-d", title: "Watermelon", filename: "Codeforces/A_Watermelon.cpp", language: "cpp", codes: { cpp: demoCode, python: "" }, tests: demoTests, source: "codeforces" },
+];
+
 const verdictLabels: Record<Status, string> = {
-  idle: "", running: "…", ac: "AC", wa: "WA", tle: "TLE", re: "RE", ce: "CE", stopped: "—",
+  idle: "", running: "…", ac: "AC", wa: "WA", tle: "TLE", mle: "MLE", re: "RE", ce: "CE", stopped: "—",
 };
 /** Turns one runner result into a verdict. Only a clean exit can still be judged against the expected output. */
-const judge = (result: NativeRunResult, expected: string): Status => {
+const judge = (result: NativeRunResult, expected: string, tolerance: number): Status => {
   if (result.verdict === "limit") return "re";
   if (result.verdict !== "ok") return result.verdict;
-  return normalize(result.stdout) === normalize(expected) ? "ac" : "wa";
+  return outputsMatch(expected, result.stdout, tolerance) ? "ac" : "wa";
 };
-const finalVerdicts: Status[] = ["ac", "wa", "tle", "re", "ce", "stopped"];
-const diffLines = (expected: string, actual: string): DiffRow[] => {
-  const left = normalize(expected).split("\n");
-  const right = normalize(actual).split("\n");
-  const rows: DiffRow[] = [];
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const expectedLine = index < left.length ? left[index] : null;
-    const actualLine = index < right.length ? right[index] : null;
-    const same = expectedLine === actualLine;
-    rows.push({
-      line: index + 1,
-      expected: expectedLine,
-      actual: actualLine,
-      same,
-      // The classic contest trap: identical tokens, different spacing.
-      whitespaceOnly: !same && (expectedLine ?? "").replace(/\s+/g, "") === (actualLine ?? "").replace(/\s+/g, ""),
-    });
-  }
-  return rows;
+const finalVerdicts: Status[] = ["ac", "wa", "tle", "mle", "re", "ce", "stopped"];
+const formatMemory = (kb: number) => kb >= 1024 * 1024 ? `${(kb / 1024 / 1024).toFixed(2)} GB` : kb >= 10 * 1024 ? `${Math.round(kb / 1024)} MB` : `${(kb / 1024).toFixed(1)} MB`;
+
+/** A timed practice or a live round: a countdown, and when each problem of the folder was solved. */
+type ContestState = { startedAt: number; durationMin: number; folder: string; solved: Record<string, number> };
+const contestStorageKey = (workspace: string | null) => `mild-contest:${workspace ?? ""}`;
+const loadContest = (workspace: string | null): ContestState | null => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(contestStorageKey(workspace)) || "null") as ContestState | null;
+    return stored && Number.isFinite(stored.startedAt) && stored.durationMin > 0 ? { ...stored, solved: stored.solved || {} } : null;
+  } catch { return null; }
 };
+const formatClock = (ms: number) => {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${Math.floor(total / 3600)}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+};
+const isAccepted = (status: string | undefined) => status === "AC" || status === "OK";
+
+const DEFAULT_TIME_LIMIT_MS = 2000;
+/** An unoptimised, instrumented build is several times slower, so a Debug run gets this much more time. */
+const DEBUG_TIME_FACTOR = 3;
+/** MinGW ships no sanitizer runtimes, so the Windows default stops at the checked containers. */
+const DEFAULT_PROFILE_FLAGS: Record<CompileProfile, string> = {
+  release: "-O2",
+  debug: /windows/i.test(navigator.userAgent)
+    ? "-O0 -g -DLOCAL -D_GLIBCXX_DEBUG -Wall -Wextra -Wshadow"
+    : "-O0 -g -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Wshadow",
+};
+const storedProfileFlags = (profile: CompileProfile) => localStorage.getItem(`mild-compile-flags-${profile}`) ?? DEFAULT_PROFILE_FLAGS[profile];
 const visibleWhitespace = (value: string) => value.replace(/ /g, "·").replace(/\t/g, "⇥");
 const combinedRunOutput = (output: string, error: string) => error
   ? `${output}${output && !output.endsWith("\n") ? "\n" : ""}${error.replace(/^\s+/, "")}`
@@ -322,6 +361,7 @@ const companionToImported = (problem: CompanionProblem): ImportedAtCoderProblem 
     tests: problem.tests.map((test, index) => ({ name: `test ${index + 1}`, input: test.input, expected: test.output })),
     source,
     sourceUrl: problem.url,
+    limits: problem.timeLimit || problem.memoryLimit ? { timeLimitMs: problem.timeLimit || undefined, memoryLimitMb: problem.memoryLimit || undefined } : undefined,
   };
 };
 const loadSnippets = (): CodeSnippet[] => {
@@ -411,34 +451,46 @@ type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; rece
 
 const messages = {
   en: {
-    updates: "updates", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "check for updates", updatesIdle: "not checked yet", updatesChecking: "checking…", updatesUpToDate: "up to date", updatesAvailable: "update available:", updatesInstall: "update and restart", updatesDownloading: "downloading update…", updatesInstalling: "installing… the app will restart", updatesInstalled: "update installed — restart the app to finish", updatesError: "update failed", updatesRetry: "retry", updatesLater: "later", updatesDev: "not available in the development build",
-    appearance: "appearance", template: "template", snippets: "snippets", judge: "online judges", languageServer: "language server",
-    preferences: "preferences", interfaceLanguage: "interface language", english: "English", korean: "Korean", interfaceScale: "interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
+    submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.",
+    contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root",
+    timeLimit: "Time limit", memoryLimit: "Memory limit", debugTimeNote: "The Debug profile runs with three times the time limit, because an unoptimised build is that much slower.", compileProfile: "Compile profile",
+    buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
+    judging: "Judging", floatTolerance: "Floating-point tolerance", floatToleranceOff: "Off (exact match)", floatToleranceHelp: "When the expected output holds a decimal, an answer within this absolute or relative error is accepted. Integers and words are always compared exactly.",
+    noWorkspace: "No workspace", unsavedWorkspace: "Unsaved workspace", snippetPlaceholder: "Snippet…", insert: "Insert", run: "Run", runTests: "Run tests", stop: "Stop", addTest: "Add test", errorTitle: "Something went wrong", theme: "Theme",
+    updates: "Updates", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
+    appearance: "Appearance", template: "Template", snippets: "Snippets", judge: "Online judges", languageServer: "Language server",
+    preferences: "Preferences", interfaceLanguage: "Interface language", english: "English", korean: "Korean", interfaceScale: "Interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
-    local: "local / other", saveTemplate: "save template", applyEditor: "apply to editor", reset: "reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.", organizeImports: "file imports into folders", organizeImportsHelp: "Off by default: every import lands in the workspace root. On, an imported problem goes into its judge's folder, and a contest gets a folder of its own inside it — Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. Files already saved are left where they are.",
-    refreshNow: "refresh now", refreshing: "refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
-    newWorkspace: "new workspace", openWorkspace: "open workspace", import: "import", open: "open", save: "save", new: "new",
-    browserSettings: "problem browser", browserExtensions: "extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "web store link or id", browserExtensionInstall: "install", browserExtensionInstalling: "installing…", browserExtensionRemove: "remove", browserBuiltin: "built-in", browserDefaultsTitle: "included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "no extensions installed", browserRestartNeeded: "restart to apply the changes", browserRestartNow: "restart now", browserRestartDev: "development build: quit and run npm run dev:cef again", browserPending: "after restart",
-    chipTests: "tests", chipEditor: "code", chipProblem: "problem", chipExplorer: "files", chipHint: "click to show or hide", layoutTitle: "panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "drag to move this panel", layoutReset: "default layout", problemPanel: "problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "placement", problemBrowserInPanel: "panel in the workspace", problemBrowserInWindow: "separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
-    testCases: "test cases", input: "input", expected: "expected", output: "output", useOutput: "use output", runToSee: "run to see output",
-    sort: "sort", show: "show", latestModified: "latest modified", problemNumber: "problem number", name: "name", allSources: "all sources", noFiles: "no matching files", newFile: "new file", newFolder: "new folder",
-    welcomeTagline: "lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
-    appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "editor font", editorFontSize: "code font size", addFont: "add font file", remove: "remove",
-    backgroundImage: "background image", chooseBackground: "choose image", clearBackground: "remove image", acrylicOpacity: "panel opacity", acrylicBlur: "background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "no image selected",
-    wallpaperLayout: "image layout", wallpaperCover: "fill", wallpaperContain: "fit", wallpaperStretch: "stretch", wallpaperOriginal: "original size", wallpaperTile: "tile", wallpaperCustom: "custom size", wallpaperScale: "image size", wallpaperPositionX: "horizontal position", wallpaperPositionY: "vertical position", resetWallpaperLayout: "reset layout",
-    importSamples: "import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "cancel",
+    local: "Local / other", saveTemplate: "Save template", applyEditor: "Apply to editor", reset: "Reset",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "Default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.", organizeImports: "File imports into folders", organizeImportsHelp: "Off by default: every import lands in the workspace root. On, an imported problem goes into its judge's folder, and a contest gets a folder of its own inside it — Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. Files already saved are left where they are.",
+    refreshNow: "Refresh now", refreshing: "Refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "Choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
+    newWorkspace: "New workspace", openWorkspace: "Open workspace", import: "Import", open: "Open", save: "Save", new: "New",
+    browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
+    chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
+    testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
+    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
+    welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
+    appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
+    backgroundImage: "Background image", chooseBackground: "Choose image", clearBackground: "Remove image", acrylicOpacity: "Panel opacity", acrylicBlur: "Background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "No image selected",
+    wallpaperLayout: "Image layout", wallpaperCover: "Fill", wallpaperContain: "Fit", wallpaperStretch: "Stretch", wallpaperOriginal: "Original size", wallpaperTile: "Tile", wallpaperCustom: "Custom size", wallpaperScale: "Image size", wallpaperPositionX: "Horizontal position", wallpaperPositionY: "Vertical position", resetWallpaperLayout: "Reset layout",
+    importSamples: "Import samples", onlineProblem: "Online judge problem", importHelp: "A contest URL imports its listed problems. A supported problem URL imports one problem with sample test cases.", cancel: "Cancel",
     snippetsHelp: "Create a named snippet, choose its language, and insert it from the title bar or by typing snippet::name and pressing Tab or Enter.",
-    companion: "Competitive Companion", companionEnable: "listen for problems", companionPort: "port",
+    companion: "Competitive Companion", companionEnable: "Listen for problems", companionPort: "Port",
     companionHelp: "Competitive Companion is built into the problem panel: open a problem or contest page there and press its import button. Mild Editor creates the files and sample tests automatically. The extension in your regular browser works too, as long as it sends to this port.",
     companionListening: "listening", companionOff: "off", companionPortInUse: "port unavailable",
-    diff: "diff", showDiff: "compare", showRaw: "raw output", diffExpected: "expected", diffActual: "output", diffWhitespace: "whitespace only",
-    interactive: "interactive", interactiveStart: "start interactive run", interactiveSend: "send", interactiveEof: "end input",
+    diff: "Diff", showDiff: "Compare", showRaw: "Raw output", diffExpected: "Expected", diffActual: "Output", diffWhitespace: "Whitespace only",
+    interactive: "Interactive", interactiveStart: "Start interactive run", interactiveSend: "Send", interactiveEof: "End input",
     interactiveHint: "Run the solution, then answer it yourself: read what the program prints and type the interactor's reply. Enter sends a line, Shift+Enter adds one.",
-    interactiveReply: "your reply", interactiveStarted: "program started", interactiveStopped: "stopped", interactiveExited: "exited with code",
-    interactiveEofSent: "input closed (EOF)", interactiveIdle: "not running",
+    interactiveReply: "Your reply", interactiveStarted: "Program started", interactiveStopped: "Stopped", interactiveExited: "Exited with code",
+    interactiveEofSent: "Input closed (EOF)", interactiveIdle: "Not running",
   },
   ko: {
+    submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.",
+    contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트",
+    timeLimit: "시간 제한", memoryLimit: "메모리 제한", debugTimeNote: "Debug 프로필은 최적화 없는 빌드가 그만큼 느리기 때문에 시간 제한의 3배로 실행합니다.", compileProfile: "컴파일 프로필",
+    buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
+    judging: "채점", floatTolerance: "실수 오차 허용", floatToleranceOff: "끔 (완전 일치)", floatToleranceHelp: "예상 출력에 소수가 있을 때, 절대 또는 상대 오차가 이 값 이내인 답을 정답으로 처리합니다. 정수와 문자열은 항상 그대로 비교합니다.",
+    noWorkspace: "워크스페이스 없음", unsavedWorkspace: "저장되지 않은 워크스페이스", snippetPlaceholder: "스니펫…", insert: "삽입", run: "실행", runTests: "테스트 실행", stop: "중지", addTest: "테스트 추가", errorTitle: "문제가 발생했습니다", theme: "테마",
     updates: "업데이트", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
@@ -471,21 +523,21 @@ const messages = {
 function App() {
   const [language, setLanguage] = useState<Language>(() => (localStorage.getItem("mild-language") as Language) || "cpp");
   const [codes, setCodes] = useState<Record<Language, string>>(() => ({
-    cpp: localStorage.getItem("mild-code-cpp") || storedTemplate("cpp"),
+    cpp: DEMO_MODE !== null ? demoCode : localStorage.getItem("mild-code-cpp") || storedTemplate("cpp"),
     python: localStorage.getItem("mild-code-python") || storedTemplate("python"),
   }));
-  const [tests, setTests] = useState<TestCase[]>(initialTests);
+  const [tests, setTests] = useState<TestCase[]>(DEMO_MODE !== null ? demoTests : initialTests);
   const [running, setRunning] = useState(false);
   const runCancelledRef = useRef(false);
   const testSaveTimerRef = useRef<number | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(Boolean(DEMO_MODE?.startsWith("settings")));
   const [templateLanguage, setTemplateLanguage] = useState<Language>(language);
   const [templateSource, setTemplateSource] = useState<ProblemSource>("other");
   const [draftTemplates, setDraftTemplates] = useState<Record<string, string>>(loadTemplateDrafts);
-  const [tabs, setTabs] = useState<ProblemTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState("");
-  const [workspacePath, setWorkspacePath] = useState<string | null>(null);
-  const [savedFiles, setSavedFiles] = useState<ProblemTab[]>([]);
+  const [tabs, setTabs] = useState<ProblemTab[]>(demoTabs.slice(0, 3));
+  const [activeTabId, setActiveTabId] = useState(demoTabs[0]?.id ?? "");
+  const [workspacePath, setWorkspacePath] = useState<string | null>(DEMO_MODE !== null ? "C:/contests/september" : null);
+  const [savedFiles, setSavedFiles] = useState<ProblemTab[]>(demoTabs);
   const [workspaceDirectories, setWorkspaceDirectories] = useState<string[]>([]);
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const resizeRef = useRef<{
@@ -530,7 +582,7 @@ function App() {
   const [atCoderUrl, setAtCoderUrl] = useState("");
   const [importingAtCoder, setImportingAtCoder] = useState(false);
   const importInFlightRef = useRef(false);
-  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "language-server" | "updates" | "browser">("template");
+  const [settingsPage, setSettingsPage] = useState<"appearance" | "template" | "snippets" | "judge" | "build" | "language-server" | "updates" | "browser">(DEMO_MODE === "settings-appearance" ? "appearance" : DEMO_MODE === "settings-judge" ? "judge" : DEMO_MODE === "settings-build" ? "build" : DEMO_MODE === "settings-snippets" ? "snippets" : "template");
   const [browserExtensions, setBrowserExtensions] = useState<BrowserExtension[]>([]);
   const [extensionSource, setExtensionSource] = useState("");
   const [extensionBusy, setExtensionBusy] = useState(false);
@@ -551,7 +603,7 @@ function App() {
   const [defaultLanguage, setDefaultLanguage] = useState<Language>(() => (localStorage.getItem("mild-default-language") || localStorage.getItem("mild-contest-import-language")) as Language || "cpp");
   const [atcoderLibraryPath, setAtcoderLibraryPath] = useState(() => localStorage.getItem("mild-atcoder-library-path") || "");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
-  const [uiTheme, setUiTheme] = useState<UiTheme>(() => (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
+  const [uiTheme, setUiTheme] = useState<UiTheme>(() => (DEMO_MODE !== null && new URLSearchParams(window.location.search).get("theme") as UiTheme) || (localStorage.getItem("mild-ui-theme") as UiTheme) || "pastel");
   const [backgroundImagePath, setBackgroundImagePath] = useState(() => "__TAURI_INTERNALS__" in window ? localStorage.getItem("mild-background-image") || "" : "");
   const [backgroundImageUrl, setBackgroundImageUrl] = useState("");
   const [backgroundImageError, setBackgroundImageError] = useState("");
@@ -691,7 +743,7 @@ function App() {
     return root.children;
   }, [explorerFiles, workspaceDirectories]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting")].includes(fileStatus)
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening")].includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
@@ -908,6 +960,23 @@ function App() {
     localStorage.setItem("mild-atcoder-library-path", atcoderLibraryPath.trim());
   }, [atcoderLibraryPath]);
 
+  // Build and judging preferences (Settings → build & judging).
+  const [compileProfile, setCompileProfile] = useState<CompileProfile>(() => localStorage.getItem("mild-compile-profile") === "debug" ? "debug" : "release");
+  const [profileFlags, setProfileFlags] = useState<Record<CompileProfile, string>>(() => ({ release: storedProfileFlags("release"), debug: storedProfileFlags("debug") }));
+  const [precompileHeaders, setPrecompileHeaders] = useState(() => localStorage.getItem("mild-precompile-headers") !== "0");
+  const [floatTolerance, setFloatTolerance] = useState(() => {
+    const stored = localStorage.getItem("mild-float-tolerance");
+    return stored === null ? DEFAULT_FLOAT_TOLERANCE : Number(stored) || 0;
+  });
+  useEffect(() => {
+    localStorage.setItem("mild-compile-profile", compileProfile);
+    localStorage.setItem("mild-compile-flags-release", profileFlags.release);
+    localStorage.setItem("mild-compile-flags-debug", profileFlags.debug);
+    localStorage.setItem("mild-precompile-headers", precompileHeaders ? "1" : "0");
+    localStorage.setItem("mild-float-tolerance", String(floatTolerance));
+  }, [compileProfile, profileFlags, precompileHeaders, floatTolerance]);
+  const buildOptions = () => ({ compileFlags: splitFlags(profileFlags[compileProfile]), precompileHeaders });
+
   useEffect(() => {
     if (fontOptions.length && !fontOptions.some((font) => font.id === editorFont)) setEditorFont(fontOptions[0].id);
   }, [fontOptions, editorFont]);
@@ -1067,7 +1136,7 @@ function App() {
     id: crypto.randomUUID(), title: file.title, filename: file.filename, language: file.language,
     codes: { cpp: storedTemplate("cpp", file.source || "other"), python: storedTemplate("python", file.source || "other"), [file.language]: file.code },
     tests: hydrateTests(file.tests),
-    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, modifiedAt: file.modifiedAt,
+    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt,
   });
 
   const changeActiveLanguage = async (next: Language) => {
@@ -1418,7 +1487,7 @@ function App() {
     const saved = await invoke<LoadedWorkspace>("save_workspace", {
       request: {
         folderPath: workspacePath,
-        problems: persistedTabs.map((tab) => ({ filename: tab.filename, title: tab.title, language: tab.language, code: tab.codes[tab.language], tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })), source: tab.source, sourceUrl: tab.sourceUrl, judgeStatus: tab.judgeStatus, modifiedAt: tab.modifiedAt })),
+        problems: persistedTabs.map((tab) => ({ filename: tab.filename, title: tab.title, language: tab.language, code: tab.codes[tab.language], tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })), source: tab.source, sourceUrl: tab.sourceUrl, judgeStatus: tab.judgeStatus, limits: tab.limits, modifiedAt: tab.modifiedAt })),
       },
     });
     setWorkspacePath(saved.folderPath);
@@ -1738,18 +1807,43 @@ function App() {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     const model = editor?.getModel();
-    if (model && monaco) monaco.editor.setModelMarkers(model, "mild-compiler", []);
+    if (model && monaco) {
+      monaco.editor.setModelMarkers(model, "mild-compiler", []);
+      monaco.editor.setModelMarkers(model, "mild-compiler-warnings", []);
+    }
     diagnosticDecorationsRef.current?.clear();
   };
 
-  const showDiagnostics = (stderr: string) => {
+  /** Warnings from a build that succeeded: marked in the editor, without taking the caret or hiding any output. */
+  const showCompileWarnings = (stderr: string) => {
+    const monaco = monacoRef.current;
+    const model = editorRef.current?.getModel();
+    if (!monaco || !model) return;
+    const markers: Monaco.editor.IMarkerData[] = [];
+    for (const match of stderr.matchAll(/main\.cpp:(\d+):(\d+):\s+warning:\s+(.+)/g)) {
+      const line = Math.min(Number(match[1]), model.getLineCount());
+      const column = Math.min(Number(match[2]), model.getLineMaxColumn(line));
+      const word = model.getWordAtPosition({ lineNumber: line, column });
+      markers.push({ startLineNumber: line, startColumn: word?.startColumn ?? column, endLineNumber: line, endColumn: word?.endColumn ?? Math.min(column + 1, model.getLineMaxColumn(line)), message: match[3].trim(), source: "g++", severity: monaco.MarkerSeverity.Warning });
+    }
+    monaco.editor.setModelMarkers(model, "mild-compiler-warnings", markers);
+  };
+
+  /**
+   * Marks what a run reported. A compile error takes over: the caret moves to it and the test
+   * shows no output. A failure at run time (a sanitizer report, a Python exception) only
+   * marks its line, and the test keeps its output.
+   */
+  const showDiagnostics = (stderr: string, compileError = true) => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     const model = editor?.getModel();
     if (!editor || !monaco || !model) return false;
 
     const markers: Monaco.editor.IMarkerData[] = [];
-    const cppPattern = /main\.cpp:(\d+):(\d+):\s+(fatal error|error|warning):\s+(.+)/g;
+    const cppPattern = compileError
+      ? /main\.cpp:(\d+):(\d+):\s+(fatal error|error|warning):\s+(.+)/g
+      : /main\.cpp:(\d+):(\d+):\s+(runtime error):\s+(.+)/g;
     for (const match of stderr.matchAll(cppPattern)) {
       const line = Math.min(Number(match[1]), model.getLineCount());
       const column = Math.min(Number(match[2]), model.getLineMaxColumn(line));
@@ -1766,7 +1860,9 @@ function App() {
 
     if (language === "python") {
       const pythonMatches = [...stderr.matchAll(/File ".*main\.py", line (\d+)/g)];
-      const syntaxMessage = stderr.match(/(?:SyntaxError|IndentationError|TabError):\s*(.+)/)?.[0];
+      const syntaxMessage = stderr.match(/(?:SyntaxError|IndentationError|TabError):\s*(.+)/)?.[0]
+        // An exception at run time ends the traceback with its own line.
+        ?? (compileError ? undefined : stderr.split("\n").map((line) => line.trim()).filter((line) => /^\w+(?:\.\w+)*(?:Error|Exception|Interrupt)\b/.test(line)).at(-1));
       const lastMatch = pythonMatches.at(-1);
       if (lastMatch && syntaxMessage) {
         const line = Math.min(Number(lastMatch[1]), model.getLineCount());
@@ -1798,6 +1894,10 @@ function App() {
         showIfCollapsed: true,
       },
     })));
+    if (markers.length && !compileError) {
+      editor.revealLineInCenterIfOutsideViewport(markers[0].startLineNumber);
+      return false;
+    }
     if (markers.length) {
       editor.revealPositionInCenter({ lineNumber: markers[0].startLineNumber, column: markers[0].startColumn });
       editor.setPosition({ lineNumber: markers[0].startLineNumber, column: markers[0].startColumn });
@@ -1987,7 +2087,7 @@ function App() {
             tests: tab.tests.map(({ name, input, expected }) => ({ name, input, expected })),
             source: tab.source,
             sourceUrl: tab.sourceUrl,
-            judgeStatus: tab.judgeStatus,
+            judgeStatus: tab.judgeStatus, limits: tab.limits,
             modifiedAt: tab.modifiedAt,
           })),
         },
@@ -2040,7 +2140,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
       }));
       setWorkspacePath(loaded.folderPath);
       setPanelMode(loaded.panelMode === "interactive" ? "interactive" : "tests");
@@ -2068,7 +2168,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
       }));
       let restoredFilenames: string[] = [];
       let restoredActiveFilename = "";
@@ -2168,6 +2268,7 @@ function App() {
         tests: hydrateTests(problem.tests),
         source: problem.source,
         sourceUrl: problem.sourceUrl,
+        limits: problem.limits,
         modifiedAt: Date.now(),
       };
     });
@@ -2376,14 +2477,14 @@ function App() {
     void commitWorkspaceRename(current, draft.value);
   };
 
-  const autoSaveTests = (nextTests: TestCase[]) => {
+  const autoSaveTests = (nextTests: TestCase[], limits?: ProblemLimits) => {
     if (!workspacePath || !activeTab) return;
     const savedTests = nextTests.map(({ name, input, expected }) => ({ name, input, expected }));
     setSavedFiles((items) => items.map((file) => fileKey(file.filename) === fileKey(activeTab.filename) ? { ...file, tests: nextTests } : file));
     if (testSaveTimerRef.current !== null) window.clearTimeout(testSaveTimerRef.current);
     testSaveTimerRef.current = window.setTimeout(() => {
       testSaveTimerRef.current = null;
-      void invoke("save_workspace_tests", { request: { folderPath: workspacePath, filename: activeTab.filename, tests: savedTests } }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
+      void invoke("save_workspace_tests", { request: { folderPath: workspacePath, filename: activeTab.filename, tests: savedTests, limits } }).catch((error) => setFileStatus(error instanceof Error ? error.message : String(error)));
     }, 250);
   };
 
@@ -2391,6 +2492,20 @@ function App() {
     const next = tests.map((test) => (test.id === id ? { ...test, ...patch } : test));
     setTests(next);
     autoSaveTests(next);
+  };
+
+  /** Limits belong to the file, so they are saved with its test cases. */
+  const updateLimits = (patch: ProblemLimits) => {
+    if (!activeTab) return;
+    const limits = { ...activeTab.limits, ...patch };
+    const update = (file: ProblemTab): ProblemTab => fileKey(file.filename) === fileKey(activeTab.filename) ? { ...file, limits } : file;
+    setTabs((items) => items.map(update));
+    setSavedFiles((items) => items.map(update));
+    autoSaveTests(tests, limits);
+  };
+  const limitInput = (value: string, min: number, max: number) => {
+    const parsed = Math.round(Number(value));
+    return value.trim() && Number.isFinite(parsed) && parsed > 0 ? Math.min(max, Math.max(min, parsed)) : undefined;
   };
 
   const addTest = () => {
@@ -2422,24 +2537,29 @@ function App() {
     const unlisten = await listen<TestResultEvent>("test-result", (event) => {
       if (event.payload.runId !== runId) return;
       const { index, result } = event.payload;
-      const hasEditorDiagnostics = showDiagnostics(result.stderr || "");
+      const hasEditorDiagnostics = showDiagnostics(result.stderr || "", result.verdict === "ce");
       const expected = snapshot[index]?.expected || "";
-      const verdict = judge(result, expected);
+      const verdict = judge(result, expected, floatTolerance);
       setTests((items) => items.map((test, itemIndex) => itemIndex === index
-        ? { ...test, output: hasEditorDiagnostics ? "" : result.stdout, error: hasEditorDiagnostics ? "" : result.stderr, timeMs: result.timeMs, status: verdict, open: verdict === "ac" ? false : test.open }
+        ? { ...test, output: hasEditorDiagnostics ? "" : result.stdout, error: hasEditorDiagnostics ? "" : result.stderr, timeMs: result.timeMs, memoryKb: result.memoryKb ?? undefined, status: verdict, open: verdict === "ac" ? false : test.open }
         : itemIndex === index + 1 && !runCancelledRef.current ? { ...test, status: "running" } : test));
     });
 
     try {
-      await invoke<{ results: NativeRunResult[] }>("run_code", {
+      const response = await invoke<{ results: NativeRunResult[]; compileWarnings?: string }>("run_code", {
         request: {
           language,
           code: codes[language],
           tests: tests.map(({ input, expected }) => ({ input, expected })),
           runId,
           atcoderLibraryPath: atcoderLibraryPath || null,
+          timeLimitMs: (activeTab.limits?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS) * (language === "cpp" && compileProfile === "debug" ? DEBUG_TIME_FACTOR : 1),
+          memoryLimitMb: activeTab.limits?.memoryLimitMb ?? null,
+          ...buildOptions(),
         },
       });
+      // Last, so the per-test results above cannot wipe them.
+      showCompileWarnings(response.compileWarnings || "");
     } catch (error) {
       setTests((items) => items.map((test) => ({ ...test, status: "re", error: error instanceof Error ? error.message : "Execution failed" })));
     } finally {
@@ -2482,6 +2602,7 @@ function App() {
           code: codes[language],
           sessionId,
           atcoderLibraryPath: atcoderLibraryPath || null,
+          ...buildOptions(),
         },
       });
       interactiveInputRef.current?.focus();
@@ -2595,7 +2716,7 @@ function App() {
   // popover or menu above it: hide it while anything floats over the workspace.
   const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
-    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .explorer-context-menu")));
+    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .explorer-context-menu, .contest-popover")));
   });
   // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
@@ -2660,6 +2781,138 @@ function App() {
   const dropPanelOn = (id: PanelId, target: PanelId, edge: Edge) =>
     setPanelLayout((layout) => dropPanel(layout, id, target, edge));
 
+  // ── Submitting through the problem browser ──
+  const browserStatusRef = useRef(browserStatus);
+  browserStatusRef.current = browserStatus;
+  const [submitting, setSubmitting] = useState(false);
+  // While a submission is opening its page, "follow the active file" must not put the problem page back.
+  const submitHoldRef = useRef(false);
+  const submitSolution = async () => {
+    if (!activeTab?.sourceUrl || submitting) return;
+    if (!(await saveProblem())) return;
+    const code = codes[language];
+    // The clipboard is the fallback for every judge, known or not.
+    try { await navigator.clipboard.writeText(code); } catch { /* the form is filled below where possible */ }
+    const target = submitTarget(activeTab.sourceUrl);
+    const url = target?.url ?? activeTab.sourceUrl;
+    const waitFor = async (ready: () => boolean, timeoutMs: number) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (ready()) return true;
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+      }
+      return false;
+    };
+    const pathOf = (value: string) => { try { return new URL(value).pathname.replace(/\/+$/, ""); } catch { return ""; } };
+    setSubmitting(true);
+    submitHoldRef.current = true;
+    setFileStatus(t("submitOpening"));
+    try {
+      if (!browserStatusRef.current.available) throw new Error(`${t("problemUnavailable")} ${browserStatusRef.current.error || ""}`.trim());
+      const alreadyThere = browserStatusRef.current.open && pathOf(browserStatusRef.current.url) === pathOf(url);
+      if (problemBrowserMode === "window") {
+        // The window hosts the browser: it opens (or comes forward) on the page it is handed.
+        if (!problemPanelOpen) setProblemPanelOpen(true);
+        await invoke("problem_window_open", { url: alreadyThere ? "" : url, focus: true });
+      } else {
+        if (!problemPanelOpen) {
+          setProblemPanelOpen(true);
+          // The panel's host element has to be on screen before a browser can be placed over it.
+          await waitFor(() => Boolean(problemHostRef.current), 3000);
+        }
+        if (!alreadyThere) {
+          if (browserStatusRef.current.open) await invoke("browser_navigate", { url });
+          else openProblemUrl(url);
+        }
+      }
+      if (!(await waitFor(() => browserStatusRef.current.open, 8000))) throw new Error(t("submitNoBrowser"));
+      if (!target) { setFileStatus(t("submitCopied")); return; }
+      const arrived = await waitFor(() => !browserStatusRef.current.loading && pathOf(browserStatusRef.current.url) === pathOf(target.url), 20000);
+      if (!arrived) {
+        // A judge sends a logged-out visitor to its login page instead.
+        const reached = browserStatusRef.current.url;
+        setFileStatus(/login|enter/i.test(reached) ? t("submitLogin") : `${t("submitCopied")} (${reached || "no page"})`);
+        return;
+      }
+      const script = fillSubmitFormScript({ code, language, problemIndex: target.problemIndex, problemCode: target.problemCode, generic: target.generic });
+      await invoke("browser_fill_submission", { script });
+      // Again for an editor widget, or a client-rendered form, that arrives after the page does.
+      for (const delay of [1200, 3000]) window.setTimeout(() => void invoke("browser_fill_submission", { script }).catch(() => undefined), delay);
+      setFileStatus(t("submitFilled"));
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmitting(false);
+      // Released a little later: the status events of the navigation are still arriving.
+      window.setTimeout(() => { submitHoldRef.current = false; }, 1500);
+    }
+  };
+
+  // ── Contest mode ──
+  const [contest, setContest] = useState<ContestState | null>(() => DEMO_MODE?.startsWith("contest") ? { startedAt: Date.now() - 47 * 60000, durationMin: 100, folder: "AtCoder/abc400", solved: { [fileKey("AtCoder/abc400/A_Sum.cpp")]: 6 * 60000 + 12000 } } : loadContest(workspacePath));
+  const [contestOpen, setContestOpen] = useState(DEMO_MODE === "contest-open");
+  const [contestMinutes, setContestMinutes] = useState(() => localStorage.getItem("mild-contest-minutes") || "120");
+  const [clock, setClock] = useState(() => Date.now());
+  const contestWorkspaceRef = useRef(workspacePath);
+  useEffect(() => {
+    if (contestWorkspaceRef.current === workspacePath) return;
+    contestWorkspaceRef.current = workspacePath;
+    setContest(loadContest(workspacePath));
+  }, [workspacePath]);
+  useEffect(() => {
+    if (DEMO_MODE !== null) return;
+    if (contest) localStorage.setItem(contestStorageKey(workspacePath), JSON.stringify(contest));
+    else localStorage.removeItem(contestStorageKey(workspacePath));
+  }, [contest, workspacePath]);
+  const contestEndsAt = contest ? contest.startedAt + contest.durationMin * 60000 : 0;
+  const contestRemaining = contest ? contestEndsAt - clock : 0;
+  const contestRunning = Boolean(contest) && contestRemaining > 0;
+  useEffect(() => {
+    if (!contest) return;
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [contest?.startedAt]);
+  // Time is up: the board comes forward once, so the end does not pass unnoticed.
+  const contestWasRunningRef = useRef(contestRunning);
+  useEffect(() => {
+    if (contestWasRunningRef.current && !contestRunning && contest) setContestOpen(true);
+    contestWasRunningRef.current = contestRunning;
+  }, [contestRunning]);
+  const contestProblems = useMemo(() => {
+    if (!contest) return [];
+    const files = savedFiles.length ? savedFiles : tabs;
+    return files
+      .filter((file) => explorerParent(file.filename) === contest.folder)
+      .sort((left, right) => explorerBasename(left.filename).localeCompare(explorerBasename(right.filename), undefined, { numeric: true }));
+  }, [contest?.folder, savedFiles, tabs]);
+  // A verdict of AC from the judge, first seen while the clock runs, is the solve time.
+  useEffect(() => {
+    if (!contest || !contestRunning) return;
+    const fresh = contestProblems.filter((file) => isAccepted(file.judgeStatus) && contest.solved[fileKey(file.filename)] === undefined);
+    if (!fresh.length) return;
+    const elapsed = Date.now() - contest.startedAt;
+    setContest((current) => current && { ...current, solved: { ...current.solved, ...Object.fromEntries(fresh.map((file) => [fileKey(file.filename), elapsed])) } });
+  }, [contestProblems, contestRunning]);
+  const startContest = () => {
+    const minutes = Math.min(24 * 60, Math.max(1, Math.round(Number(contestMinutes)) || 120));
+    localStorage.setItem("mild-contest-minutes", String(minutes));
+    setContestMinutes(String(minutes));
+    setClock(Date.now());
+    setContest({ startedAt: Date.now(), durationMin: minutes, folder: activeTab ? explorerParent(activeTab.filename) : "", solved: {} });
+  };
+  /** What the board shows for one problem: the judge's word first, the local tests otherwise. */
+  const contestProblemState = (file: ProblemTab): { tone: "solved" | "failed" | "ready" | "partial" | "idle"; label: string } => {
+    const solvedAt = contest?.solved[fileKey(file.filename)];
+    if (solvedAt !== undefined || isAccepted(file.judgeStatus)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC" };
+    if (file.judgeStatus) return { tone: "failed", label: file.judgeStatus };
+    const open = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
+    const results = (open?.id === activeTabId ? tests : open?.tests ?? []).filter((test) => finalVerdicts.includes(test.status));
+    if (!results.length) return { tone: "idle", label: "" };
+    const passed = results.filter((test) => test.status === "ac").length;
+    return passed === results.length ? { tone: "ready", label: t("contestReady") } : { tone: "partial", label: `${passed}/${results.length}` };
+  };
+
   /** The grip in a panel's top-left corner drags it exactly as its status-bar chip does. */
   const panelGrip = (id: PanelId) => (
     <button
@@ -2671,7 +2924,7 @@ function App() {
       onPointerMove={trackPanelDrag}
       onPointerUp={finishPanelDrag}
       onPointerCancel={finishPanelDrag}
-    >⠿</button>
+    ><Icon name="grip" size={14} /></button>
   );
 
   /**
@@ -2856,7 +3109,7 @@ function App() {
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
   useEffect(() => {
-    if (!problemPanelOpen || !browserStatus.available) return;
+    if (!problemPanelOpen || !browserStatus.available || submitHoldRef.current) return;
     const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
     if (!url || url === browserStatus.url) return;
     // Following a file changes the page only; the window stays where it is in the stack.
@@ -3134,12 +3387,13 @@ function App() {
       else if (settingsOpen) setSettingsOpen(false);
       else if (atCoderOpen) cancelProblemImport();
       else if (explorerMenu) setExplorerMenu(null);
+      else if (contestOpen) setContestOpen(false);
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3247,7 +3501,7 @@ function App() {
       if (renamingDirectory(node.path)) {
         return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
           <div className="explorer-rename-row explorer-directory-rename" style={{ paddingLeft: `${10 + depth * 14}px` }}>
-            <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg>{renameInput}
+            <Icon name="chevronRight" size={12} className={`explorer-directory-chevron ${collapsed ? "" : "open"}`} /><Icon name={collapsed ? "folder" : "folderOpen"} size={14} />{renameInput}
           </div>
           {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
         </div>];
@@ -3259,7 +3513,7 @@ function App() {
           if (next.has(key)) next.delete(key); else next.add(key);
           return next;
         }); }} onFocus={() => setExplorerSelection({ kind: "directory", path: node.path })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "directory", path: node.path }); setExplorerMenu({ directory: node.path, x: event.clientX, y: event.clientY }); }}>
-          <span className={`explorer-directory-chevron ${collapsed ? "" : "open"}`}>›</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Z" /></svg><span>{node.name}</span>
+          <Icon name="chevronRight" size={12} className={`explorer-directory-chevron ${collapsed ? "" : "open"}`} /><Icon name={collapsed ? "folder" : "folderOpen"} size={14} /><span>{node.name}</span>
         </button>
         {!collapsed && <div className="explorer-tree-children">{renderExplorerTree(node.children, depth + 1)}</div>}
       </div>];
@@ -3278,7 +3532,7 @@ function App() {
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
         {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
       </button>
-      {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>}
+      {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><Icon name="close" size={12} /></button>}
     </div>];
   });
 
@@ -3298,25 +3552,35 @@ function App() {
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo" aria-hidden="true">m</span>
-          <span className="titlebar-name" data-tauri-drag-region>mild editor</span>
+          <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
           {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
-          <span className="titlebar-separator" data-tauri-drag-region>·</span>
-          <span className="titlebar-file" data-tauri-drag-region>{workspacePath ? `${workspacePath.split(/[\\/]/).at(-1)}${activeTab ? ` / ${activeTab.filename}` : ""}` : "no workspace"}</span>
+          <span className="titlebar-file" data-tauri-drag-region>
+            {workspacePath ? <>
+              <span className="crumb">{workspacePath.split(/[\\/]/).filter(Boolean).at(-1)}</span>
+              {activeTab && activeTab.filename.split("/").map((part, index, parts) => <Fragment key={index}><Icon name="chevronRight" size={10} /><span className={`crumb ${index === parts.length - 1 ? "current" : ""}`}>{part}</span></Fragment>)}
+            </> : <span className="crumb">{t("noWorkspace")}</span>}
+          </span>
         </div>
         <div className="titlebar-tools">
           <div className="file-actions">
-            <button onClick={newProblem}>{t("new")}</button>
-            <button onClick={() => void openProblem()}>{t("open")}</button>
-            <button onClick={() => void saveProblem()}>{t("save")}</button>
-            <button className="atcoder-button" onClick={beginImport}>{t("import")}</button>
+            <button onClick={newProblem} title={`${t("new")} (${modLabel}N)`}><Icon name="filePlus" /><span>{t("new")}</span></button>
+            <button onClick={() => void openProblem()} title={`${t("open")} (${modLabel}O)`}><Icon name="folderOpen" /><span>{t("open")}</span></button>
+            <button onClick={() => void saveProblem()} title={`${t("save")} (${modLabel}S)`}><Icon name="save" /><span>{t("save")}</span></button>
+            <button className="atcoder-button" onClick={beginImport} title={`${t("import")} (${modLabel}T)`}><Icon name="download" /><span>{t("import")}</span></button>
           </div>
           <div className="snippet-insert">
             <select value={insertSnippetId} onChange={(event) => setInsertSnippetId(event.target.value)} aria-label="Select a code snippet">
-              <option value="">snippet…</option>
+              <option value="">{t("snippetPlaceholder")}</option>
               {snippets.filter((snippet) => snippet.language === language).map((snippet) => <option value={snippet.id} key={snippet.id}>{snippet.name}</option>)}
             </select>
-            <button onClick={insertSnippet} disabled={!insertSnippetId}>insert</button>
+            <button onClick={insertSnippet} disabled={!insertSnippetId}>{t("insert")}</button>
           </div>
+          <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : run} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
+            <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
+          </button>
+          <button className="submit-top" onClick={() => void submitSolution()} disabled={!activeTab?.sourceUrl || submitting} title={activeTab?.sourceUrl ? t("submitHint") : t("submitNoSource")}>
+            {submitting ? <span className="spinner" /> : <Icon name="send" size={14} />}<span>{t("submit")}</span>
+          </button>
         </div>
         {/* macOS draws its own traffic lights over the title bar; a second set of controls would be redundant. */}
         {!isMac && <div className="window-controls">
@@ -3353,12 +3617,12 @@ function App() {
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
                   finishTabDrag();
                 }}
-              >⠿</span>
-              {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span>{tabRenameDraft?.id === tab.id
+              ><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span></span>
+              {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
                 : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
-                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`}>{tab.dirty ? "●" : "○"}</span><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}
-              <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
+                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} /><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}
+              <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab`}><Icon name="close" size={12} /></button>
             </div>
           ))}
         </div>
@@ -3391,28 +3655,34 @@ function App() {
               {panelMode === "tests" ? <>
                 <span className="count">{tests.length}</span>
                 <button className="panel-run" onClick={run} disabled={running} aria-label="run all tests" title="run tests">
-                  {running ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
+                  {running ? <span className="spinner" /> : <Icon name="play" size={14} />}
                 </button>
-                {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running">■</button>}
+                {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running"><Icon name="stop" size={14} /></button>}
               </> : <>
                 <button className="panel-run" onClick={() => void startInteractive()} disabled={interactiveStarting} aria-label="start interactive run" title={t("interactiveStart")}>
-                  {interactiveStarting ? <span className="spinner" /> : <svg className="play-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 2.4 13 8l-8.75 5.6Z" /></svg>}
+                  {interactiveStarting ? <span className="spinner" /> : <Icon name="play" size={14} />}
                 </button>
-                {interactiveRunning && <button className="panel-stop" onClick={stopInteractive} aria-label="stop interactive run" title="stop running">■</button>}
+                {interactiveRunning && <button className="panel-stop" onClick={stopInteractive} aria-label="stop interactive run" title="stop running"><Icon name="stop" size={14} /></button>}
               </>}
             </div>
             {panelMode === "tests" ? <>
+            <div className="limits-bar">
+              <label title={t("timeLimit")}><Icon name="clock" size={13} /><input type="number" min={100} max={60000} step={100} placeholder={String(DEFAULT_TIME_LIMIT_MS)} value={activeTab?.limits?.timeLimitMs ?? ""} onChange={(event) => updateLimits({ timeLimitMs: limitInput(event.target.value, 100, 60000) })} aria-label={t("timeLimit")} /><span>ms</span></label>
+              <label title={t("memoryLimit")}><Icon name="chip" size={13} /><input type="number" min={1} max={16384} step={16} placeholder="—" value={activeTab?.limits?.memoryLimitMb ?? ""} onChange={(event) => updateLimits({ memoryLimitMb: limitInput(event.target.value, 1, 16384) })} aria-label={t("memoryLimit")} /><span>MB</span></label>
+              {language === "cpp" && compileProfile === "debug" && <span className="limits-note" title={t("debugTimeNote")}>Debug ×{DEBUG_TIME_FACTOR}</span>}
+            </div>
             <div className="test-list">
               {tests.map((test) => (
                 <article className={`test-card ${test.open ? "open" : ""}`} key={test.id}>
                   <div className="test-row">
                     <button className="test-toggle" onClick={() => updateTest(test.id, { open: !test.open })}>
-                      <span>{test.name}</span>
-                      {test.timeMs !== undefined && <span className="time">{test.timeMs} ms</span>}
+                      <Icon name={test.open ? "chevronDown" : "chevronRight"} size={12} className="test-chevron" />
+                      <span className={`signal ${test.status}`} aria-label={test.status} />
+                      <span className="test-name">{test.name}</span>
+                      {test.timeMs !== undefined && <span className="time">{test.timeMs} ms{test.memoryKb ? ` · ${formatMemory(test.memoryKb)}` : ""}</span>}
                     </button>
                     {finalVerdicts.includes(test.status) && <span className={`verdict ${test.status}`}>{verdictLabels[test.status]}</span>}
-                    <span className={`signal ${test.status}`} aria-label={test.status} />
-                    <button className="delete-test" onClick={() => removeTest(test.id)} aria-label={`Delete ${test.name}`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
+                    <button className="delete-test" onClick={() => removeTest(test.id)} aria-label={`Delete ${test.name}`}><Icon name="close" size={12} /></button>
                   </div>
                   {test.open && (
                     <div className="test-fields">
@@ -3423,7 +3693,7 @@ function App() {
                         {test.status === "wa" && !rawOutputTests.includes(test.id)
                           ? <div className="test-diff">
                               <div className="diff-row diff-head"><span className="diff-line" /><span>{t("diffExpected")}</span><span>{t("diffActual")}</span></div>
-                              {diffLines(test.expected, test.output).map((row) => (
+                              {diffLines(test.expected, test.output, floatTolerance).map((row) => (
                                 <div className={`diff-row ${row.same ? "same" : row.whitespaceOnly ? "whitespace" : "different"}`} key={row.line} title={row.whitespaceOnly ? t("diffWhitespace") : undefined}>
                                   <span className="diff-line">{row.line}</span>
                                   <span className="diff-cell">{row.expected === null ? "" : row.whitespaceOnly ? visibleWhitespace(row.expected) : row.expected}</span>
@@ -3438,7 +3708,7 @@ function App() {
                 </article>
               ))}
             </div>
-            <div className="test-actions"><button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case">＋</button></div>
+            <div className="test-actions"><button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case"><Icon name="plus" size={14} /><span>{t("addTest")}</span></button></div>
             </> : <div className="interactive-panel">
               <div className="interactive-log" ref={interactiveLogRef}>
                 {interactiveLog.length
@@ -3514,26 +3784,25 @@ function App() {
           </> : <div className="welcome-screen">
             <div className="welcome-mark">m</div>
             <p className="eyebrow">{t("welcomeTagline")}</p>
-            <h1>mild editor</h1>
+            <h1>Mild Editor</h1>
             <p>{t("welcomeBody")}</p>
             <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>{modLabel}N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>{modLabel}O</kbd></button></div>
-            <small>C++ · Python · sample tests · local save</small>
           </div>}
         </section>}
         {id === "problem" && <aside className="problem-panel" style={panelStyle(id)} aria-label="Problem browser">
           {panelGrip(id)}
           <div className="problem-toolbar">
-            <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back">‹</button>
-            <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward">›</button>
-            <button onClick={() => void invoke("browser_go", { action: browserStatus.loading ? "stop" : "reload" })} disabled={!browserStatus.open} aria-label={browserStatus.loading ? "stop" : "reload"} title={browserStatus.loading ? "stop" : "reload"}>{browserStatus.loading ? "×" : "↻"}</button>
+            <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!browserStatus.canGoBack} aria-label="back" title="back"><Icon name="arrowLeft" size={14} /></button>
+            <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!browserStatus.canGoForward} aria-label="forward" title="forward"><Icon name="arrowRight" size={14} /></button>
+            <button onClick={() => void invoke("browser_go", { action: browserStatus.loading ? "stop" : "reload" })} disabled={!browserStatus.open} aria-label={browserStatus.loading ? "stop" : "reload"} title={browserStatus.loading ? "stop" : "reload"}><Icon name={browserStatus.loading ? "close" : "reload"} size={14} /></button>
             <input className="problem-url" value={problemUrlDraft} placeholder="https://" spellCheck={false}
               onFocus={() => { problemUrlEditingRef.current = true; }}
               onBlur={() => { problemUrlEditingRef.current = false; setProblemUrlDraft(browserStatus.url); }}
               onChange={(event) => setProblemUrlDraft(event.target.value)}
               onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); openProblemUrl(problemUrlDraft); event.currentTarget.blur(); } }}
               aria-label="problem URL" />
-            <button className="problem-import" onClick={() => void importFromProblemPage()} disabled={!browserStatus.open || !browserStatus.url || browserStatus.loading || importingAtCoder} title={t("problemImportHint")}>{t("import")}</button>
-            <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close">×</button>
+            <button className="problem-import" onClick={() => void importFromProblemPage()} disabled={!browserStatus.open || !browserStatus.url || browserStatus.loading || importingAtCoder} title={t("problemImportHint")}><Icon name="download" size={14} />{t("import")}</button>
+            <button onClick={() => setProblemPanelOpen(false)} aria-label="close problem panel" title="close"><Icon name="close" size={14} /></button>
           </div>
           {browserStatus.available
             ? <div className="problem-host" ref={problemHostRef} style={problemHostStyle}>{!browserStatus.open && <p className="problem-hint">{t("problemPanelHint")}</p>}</div>
@@ -3542,16 +3811,15 @@ function App() {
         {id === "explorer" && <aside className="file-explorer" style={panelStyle(id)} aria-label="Saved files">
           {panelGrip(id)}
           <div className="explorer-folder" title={workspacePath || "Save the contest to create a folder"}>
-            <span className="explorer-chevron">⌄</span>
-            <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : "unsaved contest"}</span>
+            <span className="explorer-folder-name">{workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) : t("unsavedWorkspace")}</span>
+            <span className="explorer-header-actions">
+              <button onClick={() => beginBlankFile()} title={t("newFile")} aria-label={t("newFile")}><Icon name="filePlus" /></button>
+              <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><Icon name="folderPlus" /></button>
+            </span>
           </div>
           <div className="explorer-controls">
             <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
             <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
-          </div>
-          <div className="explorer-create-actions">
-            <button onClick={() => beginBlankFile()} title={t("newFile")} aria-label={t("newFile")}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l4 4v9H3v-13Zm1 1v11h8V6H8.5V2.5H4Zm5.5.7V5H11.3L9.5 3.2ZM7.5 7v2H5.5v1h2v2h1v-2h2V9h-2V7h-1Z" /></svg></button>
-            <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h5l1.2 1.5h6.8v9h-13V3Zm1 1v8.5h11v-7H7.2L6 4H2.5Zm5 3v2h-2v1h2v2h1v-2h2V9h-2V7h-1Z" /></svg></button>
           </div>
           <div className="explorer-files" onContextMenu={(event) => {
             if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-delete, .explorer-metadata"))) return;
@@ -3575,10 +3843,10 @@ function App() {
           {updateStatus.phase !== "installed" && <button className="primary-button" onClick={() => void installUpdate()}>{updateStatus.phase === "error" ? t("updatesRetry") : t("updatesInstall")}</button>}
         </span>}
       </aside>}
-      {hasFileStatusError && <section className="error-notice" role="alertdialog" aria-modal="true" aria-labelledby="error-notice-title">
-        <header><strong id="error-notice-title">error</strong><button className="error-close" onClick={() => setFileStatus("ready")} aria-label="close error">×</button></header>
+      {hasFileStatusError && DEMO_MODE === null && <section className="error-notice" role="alertdialog" aria-modal="true" aria-labelledby="error-notice-title">
+        <header><strong id="error-notice-title">{t("errorTitle")}</strong><button className="error-close" onClick={() => setFileStatus("ready")} aria-label="close error"><Icon name="close" size={14} /></button></header>
         <p>{fileStatus}</p>
-        <footer><button className="error-confirm" onClick={() => setFileStatus("ready")}>confirm</button></footer>
+        <footer><button className="error-confirm" onClick={() => setFileStatus("ready")}>OK</button></footer>
       </section>}
 
       {explorerMenu && <div className="explorer-context-menu" ref={explorerMenuRef} style={{ left: explorerMenu.x, top: explorerMenu.y }} role="menu">
@@ -3586,19 +3854,19 @@ function App() {
           <button role="menuitem" onClick={() => beginBlankFile(explorerParent(explorerMenu.file!.filename))}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerParent(explorerMenu.file!.filename))}>{t("newFolder")}</button>
           <div className="explorer-menu-separator" />
-          <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file!); setExplorerMenu(null); }}>import test cases</button>
-          <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>open file location</button>
-          <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>duplicate file</button>
-          <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>set problem source</button>
-          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>rename file</button>
-          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>delete file</button>
+          <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file!); setExplorerMenu(null); }}>Import test cases</button>
+          <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>Open file location</button>
+          <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>Duplicate</button>
+          <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>Set problem source</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>Rename</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>Delete</button>
         </> : explorerMenu.directory ? <>
           <button role="menuitem" onClick={() => beginBlankFile(explorerMenu.directory!)}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerMenu.directory!)}>{t("newFolder")}</button>
           <div className="explorer-menu-separator" />
-          <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>open folder location</button>
-          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>rename folder</button>
-          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>delete folder</button>
+          <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>Open folder location</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>Rename</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>Delete</button>
         </> : <>
           <button role="menuitem" onClick={() => beginBlankFile()}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation()}>{t("newFolder")}</button>
@@ -3612,7 +3880,7 @@ function App() {
             <span className="eyebrow">unsaved changes</span>
             <h2 id="close-confirm-title">{tab?.filename || "file"} is not saved</h2>
             <p>Close this tab and discard its code changes?</p>
-            <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setCloseConfirmTabId(null)}>cancel</button><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>close without saving</button></footer>
+            <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setCloseConfirmTabId(null)}>{t("cancel")}</button><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>Close without saving</button></footer>
           </section>
         </div>;
       })()}
@@ -3620,9 +3888,9 @@ function App() {
       {appCloseConfirm && <div className="modal-backdrop close-confirm" role="presentation">
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="app-close-confirm-title">
           <span className="eyebrow">unsaved changes</span>
-          <h2 id="app-close-confirm-title">save before closing?</h2>
+          <h2 id="app-close-confirm-title">Save before closing?</h2>
           <p>The open source file has unsaved code changes. Save them before closing Mild Editor?</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setAppCloseConfirm(false)}>cancel</button><button className="danger-button" onClick={closeApplication}>close without saving</button><button className="primary-button" onClick={() => void saveAndCloseApplication()}>save and close</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setAppCloseConfirm(false)}>{t("cancel")}</button><button className="danger-button" onClick={closeApplication}>Close without saving</button><button className="primary-button" onClick={() => void saveAndCloseApplication()}>Save and close</button></footer>
         </section>
       </div>}
 
@@ -3631,7 +3899,7 @@ function App() {
           <span className="eyebrow">delete saved file</span>
           <h2 id="delete-confirm-title">Delete {deleteConfirmFile.filename}?</h2>
           <p>This permanently deletes the source file and its saved test cases.</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setDeleteConfirmFile(null)}>cancel</button><button className="danger-button" onClick={() => void deleteSavedFile()}>delete file</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setDeleteConfirmFile(null)}>{t("cancel")}</button><button className="danger-button" onClick={() => void deleteSavedFile()}>Delete file</button></footer>
         </section>
       </div>}
 
@@ -3652,26 +3920,29 @@ function App() {
             <input value={sourceUrlValue} onChange={(event) => setSourceUrlValue(event.target.value)} placeholder="https://..." spellCheck={false} />
           </label>}
           <p>The classification is saved even when the test cases were created manually.</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setSourceFile(null)}>cancel</button><button className="primary-button" onClick={() => void updateProblemSource()}>save</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setSourceFile(null)}>{t("cancel")}</button><button className="primary-button" onClick={() => void updateProblemSource()}>Save</button></footer>
         </section>
       </div>}
 
       {settingsOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-            <header className="settings-header">
-              <div><span className="eyebrow">{t("preferences")}</span><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "updates" ? t("updates") : settingsPage === "browser" ? t("browserSettings") : t("languageServer")}</h2></div>
-              <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
-            </header>
-            <div className="settings-pages">
+            <nav className="settings-pages" aria-label={t("preferences")}>
+              <span className="settings-nav-title">{t("preferences")}</span>
               <button className={settingsPage === "appearance" ? "active" : ""} onClick={() => setSettingsPage("appearance")}>{t("appearance")}</button>
               <button className={settingsPage === "template" ? "active" : ""} onClick={() => setSettingsPage("template")}>{t("template")}</button>
               <button className={settingsPage === "snippets" ? "active" : ""} onClick={() => setSettingsPage("snippets")}>{t("snippets")}</button>
               <button className={settingsPage === "judge" ? "active" : ""} onClick={() => setSettingsPage("judge")}>{t("judge")}</button>
+              <button className={settingsPage === "build" ? "active" : ""} onClick={() => setSettingsPage("build")}>{t("buildSettings")}</button>
               <button className={settingsPage === "language-server" ? "active" : ""} onClick={() => setSettingsPage("language-server")}>{t("languageServer")}</button>
               <button className={settingsPage === "browser" ? "active" : ""} onClick={() => setSettingsPage("browser")}>{t("browserSettings")}</button>
-              <button className={settingsPage === "updates" ? "active" : ""} onClick={() => setSettingsPage("updates")}>{t("updates")}{updateStatus.phase === "available" ? " •" : ""}</button>
-            </div>
+              <button className={settingsPage === "updates" ? "active" : ""} onClick={() => setSettingsPage("updates")}>{t("updates")}{updateStatus.phase === "available" && <i className="nav-dot" />}</button>
+            </nav>
+            <div className="settings-main">
+            <header className="settings-header">
+              <div><h2 id="settings-title">{settingsPage === "appearance" ? t("appearance") : settingsPage === "template" ? t("template") : settingsPage === "snippets" ? t("snippets") : settingsPage === "judge" ? t("judge") : settingsPage === "build" ? t("buildSettings") : settingsPage === "updates" ? t("updates") : settingsPage === "browser" ? t("browserSettings") : t("languageServer")}</h2></div>
+              <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings"><Icon name="close" size={14} /></button>
+            </header>
             {settingsPage === "appearance" ? <div className="appearance-settings">
               <div className="appearance-group"><label>{t("interfaceLanguage")}<select value={uiLocale} onChange={(event) => setUiLocale(event.target.value as UiLocale)}><option value="en">{t("english")}</option><option value="ko">{t("korean")}</option></select></label></div>
               <div className="appearance-group">
@@ -3682,14 +3953,14 @@ function App() {
               <div className="appearance-group"><span>{t("layoutTitle")}</span><div className="companion-controls"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div></div>
               <p className="settings-help">{t("layoutHint")}</p>
               <p className="settings-help">{t("appearanceHelp")}</p>
-              <div className="appearance-group"><span>theme</span><div className="theme-options">
-                <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>pastel dusk</strong><small>muted Sublime-inspired</small></button>
-                <button className={`theme-option midnight ${uiTheme === "midnight" ? "active" : ""}`} onClick={() => setUiTheme("midnight")}><i /><strong>Catppuccin Mocha</strong><small>soft pastel dark</small></button>
-                <button className={`theme-option latte ${uiTheme === "latte" ? "active" : ""}`} onClick={() => setUiTheme("latte")}><i /><strong>Rosé Pine Dawn</strong><small>warm, quiet light</small></button>
-                <button className={`theme-option sakura ${uiTheme === "sakura" ? "active" : ""}`} onClick={() => setUiTheme("sakura")}><i /><strong>Dracula</strong><small>purple, pink and cyan</small></button>
-                <button className={`theme-option blossom ${uiTheme === "blossom" ? "active" : ""}`} onClick={() => setUiTheme("blossom")}><i /><strong>Gruvbox Dark</strong><small>warm retro contrast</small></button>
-                <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord</strong><small>calm arctic blue</small></button>
-                <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>electric city blue</small></button>
+              <div className="appearance-group"><span>{t("theme")}</span><div className="theme-options">
+                <button className={`theme-option pastel ${uiTheme === "pastel" ? "active" : ""}`} onClick={() => setUiTheme("pastel")}><i /><strong>Pastel Dusk</strong><small>Muted, Sublime-inspired</small></button>
+                <button className={`theme-option midnight ${uiTheme === "midnight" ? "active" : ""}`} onClick={() => setUiTheme("midnight")}><i /><strong>Catppuccin Mocha</strong><small>Soft pastel dark</small></button>
+                <button className={`theme-option latte ${uiTheme === "latte" ? "active" : ""}`} onClick={() => setUiTheme("latte")}><i /><strong>Rosé Pine Dawn</strong><small>Warm, quiet light</small></button>
+                <button className={`theme-option sakura ${uiTheme === "sakura" ? "active" : ""}`} onClick={() => setUiTheme("sakura")}><i /><strong>Dracula</strong><small>Purple, pink and cyan</small></button>
+                <button className={`theme-option blossom ${uiTheme === "blossom" ? "active" : ""}`} onClick={() => setUiTheme("blossom")}><i /><strong>Gruvbox Dark</strong><small>Warm retro contrast</small></button>
+                <button className={`theme-option nord ${uiTheme === "nord" ? "active" : ""}`} onClick={() => setUiTheme("nord")}><i /><strong>Nord</strong><small>Calm arctic blue</small></button>
+                <button className={`theme-option tokyo ${uiTheme === "tokyo" ? "active" : ""}`} onClick={() => setUiTheme("tokyo")}><i /><strong>Tokyo Night</strong><small>Electric city blue</small></button>
               </div></div>
               <div className="appearance-group wallpaper-settings">
                 <span>{t("backgroundImage")}</span>
@@ -3721,17 +3992,17 @@ function App() {
               <div className="template-monaco"><Editor beforeMount={beforeMount} onMount={(editor) => { templateEditorRef.current = editor; }} height="100%" language={templateLanguage === "cpp" ? "cpp" : "python"} value={draftTemplates[templateStorageKey(templateSource, templateLanguage)]} onChange={(code) => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
               <footer className="settings-footer">
                 <button className="subtle-button" onClick={() => setDraftTemplates((current) => ({ ...current, [templateStorageKey(templateSource, templateLanguage)]: templates[templateLanguage] }))}>{t("reset")}</button>
-                <button className="subtle-button" onClick={setTemplateCursor}>set cursor here</button>
+                <button className="subtle-button" onClick={setTemplateCursor}>Set cursor here</button>
                 <span className="footer-spacer" />
                 <button className="subtle-button" onClick={applyTemplate}>{t("applyEditor")}</button>
                 <button className="primary-button" onClick={saveTemplates}>{t("saveTemplate")}</button>
               </footer>
             </> : settingsPage === "snippets" ? <div className="snippet-settings">
               <aside className="snippet-list">
-                <button className="new-snippet" onClick={() => setSnippetDraft({ id: crypto.randomUUID(), name: "", language, code: "" })}>＋ new snippet</button>
+                <button className="new-snippet" onClick={() => setSnippetDraft({ id: crypto.randomUUID(), name: "", language, code: "" })}><Icon name="plus" size={13} />New snippet</button>
                 {snippets.map((snippet) => <div className={`snippet-item ${snippet.id === snippetDraft.id ? "active" : ""}`} key={snippet.id}>
                   <button onClick={() => setSnippetDraft(snippet)}><span>{snippet.name}</span><small>{snippet.language}</small></button>
-                  <button className="snippet-delete" onClick={() => deleteSnippet(snippet.id)} aria-label={`Delete ${snippet.name}`}><svg className="close-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 3.2.7-.7L6 5.3l2.8-2.8.7.7L6.7 6l2.8 2.8-.7.7L6 6.7 3.2 9.5l-.7-.7L5.3 6 2.5 3.2Z" /></svg></button>
+                  <button className="snippet-delete" onClick={() => deleteSnippet(snippet.id)} aria-label={`Delete ${snippet.name}`}><Icon name="close" size={12} /></button>
                 </div>)}
               </aside>
               <div className="snippet-form">
@@ -3741,11 +4012,11 @@ function App() {
                   <span>Monaco placeholders are supported: <code>{"${1:value}"}</code> selects the first editable field and <code>{"${0}"}</code> sets the final cursor position. Snippets are stored locally on this device.</span>
                 </div>
                 <div className="snippet-meta">
-                  <input value={snippetDraft.name} onChange={(event) => setSnippetDraft((current) => ({ ...current, name: event.target.value }))} placeholder="snippet name" aria-label="Snippet name" />
+                  <input value={snippetDraft.name} onChange={(event) => setSnippetDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Snippet name" aria-label="Snippet name" />
                   <select value={snippetDraft.language} onChange={(event) => setSnippetDraft((current) => ({ ...current, language: event.target.value as Language }))} aria-label="Snippet language"><option value="cpp">C++</option><option value="python">Python</option></select>
                 </div>
                 <div className="snippet-monaco"><Editor beforeMount={beforeMount} onMount={(editor) => { snippetEditorRef.current = editor; }} height="100%" language={snippetDraft.language === "cpp" ? "cpp" : "python"} value={snippetDraft.code} onChange={(code) => setSnippetDraft((current) => ({ ...current, code: code || "" }))} theme={monacoTheme} options={{ minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, padding: { top: 10, bottom: 10 } }} /></div>
-                <footer className="settings-footer"><button className="subtle-button" onClick={setSnippetCursor}>set cursor here</button><span className="footer-spacer" /><button className="primary-button" onClick={saveSnippet} disabled={!snippetDraft.name.trim() || !snippetDraft.code.trim()}>save snippet</button></footer>
+                <footer className="settings-footer"><button className="subtle-button" onClick={setSnippetCursor}>Set cursor here</button><span className="footer-spacer" /><button className="primary-button" onClick={saveSnippet} disabled={!snippetDraft.name.trim() || !snippetDraft.code.trim()}>Save snippet</button></footer>
               </div>
             </div> : settingsPage === "judge" ? <div className="language-server-settings judge-settings">
               <p className="settings-help">{t("judgeHelp")}</p>
@@ -3769,6 +4040,21 @@ function App() {
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
               <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={() => void refreshSubmissionStatuses()}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
+            </div> : settingsPage === "build" ? <div className="language-server-settings judge-settings">
+              <div className="appearance-group"><span>{t("compileProfiles")}</span></div>
+              <p className="settings-help">{t("compileProfilesHelp")}</p>
+              {(["release", "debug"] as const).map((profile) => (
+                <label className="clangd-path-label" key={profile}>{profile === "release" ? "Release" : "Debug"}
+                  <span className="path-picker"><input value={profileFlags[profile]} onChange={(event) => setProfileFlags((current) => ({ ...current, [profile]: event.target.value }))} spellCheck={false} aria-label={`${profile} flags`} /><button className="subtle-button" onClick={() => setProfileFlags((current) => ({ ...current, [profile]: DEFAULT_PROFILE_FLAGS[profile] }))} disabled={profileFlags[profile] === DEFAULT_PROFILE_FLAGS[profile]}>{t("reset")}</button></span>
+                </label>
+              ))}
+              <label className="clangd-path-label">{t("activeProfile")}<select value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")}><option value="release">Release</option><option value="debug">Debug</option></select></label>
+              <p className="settings-help">{t("activeProfileHelp")}</p>
+              <label className="companion-toggle"><input type="checkbox" checked={precompileHeaders} onChange={(event) => setPrecompileHeaders(event.target.checked)} />{t("precompileHeaders")}</label>
+              <p className="settings-help">{t("precompileHeadersHelp")}</p>
+              <div className="appearance-group"><span>{t("judging")}</span></div>
+              <label className="clangd-path-label">{t("floatTolerance")}<select value={String(floatTolerance)} onChange={(event) => setFloatTolerance(Number(event.target.value))}><option value="0">{t("floatToleranceOff")}</option><option value="0.0001">1e-4</option><option value="0.000001">1e-6</option><option value="1e-9">1e-9</option></select></label>
+              <p className="settings-help">{t("floatToleranceHelp")}</p>
             </div> : settingsPage === "browser" ? <div className="language-server-settings browser-settings">
               <div className={`lsp-state ${browserStatus.available ? "ready" : "error"}`}>
                 <span className="lsp-dot" /><div><strong>{t("problemPanel")}</strong><small>{browserStatus.available ? `CEF · ${browserStatus.open ? browserStatus.url || "open" : "idle"}` : browserStatus.error || "unavailable"}</small></div>
@@ -3798,7 +4084,7 @@ function App() {
             </div> : settingsPage === "updates" ? <div className="language-server-settings updates-settings">
               <div className={`lsp-state ${updateStatus.phase === "up-to-date" ? "ready" : updateStatus.phase === "available" || updateBusy ? "connecting" : updateStatus.phase === "error" ? "error" : "idle"}`}>
                 <span className="lsp-dot" />
-                <div><strong>mild editor v{appVersion}</strong><small>{updateStatusLine}</small></div>
+                <div><strong>Mild Editor v{appVersion}</strong><small>{updateStatusLine}</small></div>
               </div>
               <p className="settings-help">{t("updatesHelp")}</p>
               <div className="companion-controls">
@@ -3814,8 +4100,9 @@ function App() {
               <p className="settings-help">Leave the path empty to search PATH automatically. If LLVM clangd is unavailable, Mild Editor keeps using its built-in lightweight completions.</p>
               <label className="clangd-path-label">{t("aclPath")}<span className="path-picker"><input value={atcoderLibraryPath} onChange={(event) => setAtcoderLibraryPath(event.target.value)} placeholder="C:\\library\\ac-library" spellCheck={false} /><button className="subtle-button" onClick={() => void chooseAtcoderLibrary()}>{t("chooseFolder")}</button></span></label>
               <p className="settings-help">{t("aclHelp")}</p>
-              <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => { setClangdPath(""); localStorage.removeItem("mild-clangd-path"); }}>auto detect</button><button className="primary-button" onClick={() => { localStorage.setItem("mild-clangd-path", clangdPath); void connectClangd(); }}>connect clangd</button></footer>
+              <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => { setClangdPath(""); localStorage.removeItem("mild-clangd-path"); }}>Auto-detect</button><button className="primary-button" onClick={() => { localStorage.setItem("mild-clangd-path", clangdPath); void connectClangd(); }}>Connect clangd</button></footer>
             </div>}
+            </div>
           </section>
         </div>
       )}
@@ -3825,7 +4112,7 @@ function App() {
           <span className="eyebrow">new file</span>
           <h2 id="blank-file-title">Choose a file name{entryParentDirectory ? ` in ${entryParentDirectory}` : ""}</h2>
           <input className="atcoder-url" value={blankFilename} onChange={(event) => setBlankFilename(event.target.value)} autoFocus spellCheck={false} />
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setBlankFilenameOpen(false)}>cancel</button><button className="primary-button" onClick={confirmBlankProblem}>create</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setBlankFilenameOpen(false)}>{t("cancel")}</button><button className="primary-button" onClick={confirmBlankProblem}>Create</button></footer>
         </section>
       </div>}
 
@@ -3834,7 +4121,7 @@ function App() {
           <span className="eyebrow">delete folder</span>
           <h2 id="delete-folder-confirm-title">Delete {deleteConfirmDirectory}?</h2>
           <p>This permanently deletes the folder, every file inside it, and their saved test cases.</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setDeleteConfirmDirectory(null)}>cancel</button><button className="danger-button" onClick={() => void deleteWorkspaceFolder()}>delete folder</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setDeleteConfirmDirectory(null)}>{t("cancel")}</button><button className="danger-button" onClick={() => void deleteWorkspaceFolder()}>Delete folder</button></footer>
         </section>
       </div>}
 
@@ -3843,7 +4130,7 @@ function App() {
           <span className="eyebrow">{t("newFolder")}</span>
           <h2 id="folder-name-title">Choose a folder name{entryParentDirectory ? ` in ${entryParentDirectory}` : ""}</h2>
           <input className="atcoder-url" value={folderName} onChange={(event) => setFolderName(event.target.value)} autoFocus spellCheck={false} />
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setFolderNameOpen(false)}>{t("cancel")}</button><button className="primary-button" onClick={() => void createWorkspaceFolder()}>create</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setFolderNameOpen(false)}>{t("cancel")}</button><button className="primary-button" onClick={() => void createWorkspaceFolder()}>Create</button></footer>
         </section>
       </div>}
 
@@ -3852,7 +4139,7 @@ function App() {
           <span className="eyebrow">file already exists</span>
           <h2 id="import-collision-title">{importCollision.existing.filename} already exists</h2>
           <p>Open the existing file, or import a new copy with the smallest available number suffix.</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setImportCollision(null)}>cancel</button><button className="subtle-button" onClick={() => { openSavedFile(importCollision.existing); setImportCollision(null); }}>open existing</button><button className="primary-button" onClick={() => { const { imported: pending, contestImport } = importCollision; setImportCollision(null); void addImportedProblems(pending, true, contestImport); }}>import copy</button></footer>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setImportCollision(null)}>{t("cancel")}</button><button className="subtle-button" onClick={() => { openSavedFile(importCollision.existing); setImportCollision(null); }}>Open existing</button><button className="primary-button" onClick={() => { const { imported: pending, contestImport } = importCollision; setImportCollision(null); void addImportedProblems(pending, true, contestImport); }}>Import copy</button></footer>
         </section>
       </div>}
 
@@ -3861,7 +4148,7 @@ function App() {
           <section className="atcoder-dialog" role="dialog" aria-modal="true" aria-labelledby="atcoder-title">
             <header className="settings-header">
               <div><span className="eyebrow">{t("importSamples")}</span><h2 id="atcoder-title">{testcaseImportTarget ? `Import test cases · ${testcaseImportTarget.filename}` : t("onlineProblem")}</h2></div>
-              <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import">×</button>
+              <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import"><Icon name="close" size={14} /></button>
             </header>
             <p className="settings-help">{testcaseImportTarget ? "Replace only this file's test cases. Its code and filename stay unchanged." : t("importHelp")}</p>
             <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
@@ -3874,9 +4161,49 @@ function App() {
         </div>
       )}
 
+      {contestOpen && <>
+        <div className="popover-dismiss" onMouseDown={() => setContestOpen(false)} />
+        <section className="contest-popover" role="dialog" aria-label={t("contest")} onKeyDown={(event) => { if (event.key === "Escape") setContestOpen(false); }}>
+          {contest ? <>
+            <header>
+              <div><small>{contestRunning ? t("contestRemaining") : t("contestOver")}</small><strong className={contestRunning && contestRemaining < 10 * 60000 ? "ending" : ""}>{formatClock(contestRemaining)}</strong></div>
+              <div className="contest-meta"><small>{t("contestElapsed")}</small><span>{formatClock(Math.min(clock, contestEndsAt) - contest.startedAt)} / {formatClock(contest.durationMin * 60000)}</span></div>
+            </header>
+            <div className="contest-progress"><i style={{ width: `${Math.min(100, Math.max(0, ((clock - contest.startedAt) / (contest.durationMin * 60000)) * 100))}%` }} /></div>
+            <div className="contest-board">
+              {contestProblems.length ? contestProblems.map((file) => {
+                const state = contestProblemState(file);
+                return <button key={file.id} className={`contest-problem ${state.tone} ${fileKey(file.filename) === fileKey(activeTab?.filename || "") ? "current" : ""}`} onClick={() => openSavedFile(file)} title={file.title || file.filename}>
+                  <strong>{explorerBasename(file.filename).replace(/\.[^.]+$/, "").split(/[_\s]/)[0]}</strong>
+                  <span>{state.label || "—"}</span>
+                </button>;
+              }) : <p className="settings-help">{t("contestNoProblems")}</p>}
+            </div>
+            <footer>
+              <small>{contest.folder || t("contestWorkspaceRoot")} · {Object.keys(contest.solved).length}/{contestProblems.length} {t("contestSolved")}</small>
+              <button className="subtle-button" onClick={() => setContest(null)}>{t("contestEnd")}</button>
+            </footer>
+          </> : <>
+            <header><div><small>{t("contest")}</small><strong className="contest-title">{t("contestNew")}</strong></div></header>
+            <p className="settings-help">{t("contestHelp")}</p>
+            <label className="contest-duration">{t("contestDuration")}
+              <span><input type="number" min={1} max={1440} value={contestMinutes} onChange={(event) => setContestMinutes(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") startContest(); }} autoFocus /><small>{t("contestMinutes")}</small></span>
+            </label>
+            <div className="contest-presets">{[100, 120, 150, 300].map((minutes) => <button key={minutes} className={contestMinutes === String(minutes) ? "active" : ""} onClick={() => setContestMinutes(String(minutes))}>{minutes}</button>)}</div>
+            <footer>
+              <small>{activeTab ? explorerParent(activeTab.filename) || t("contestWorkspaceRoot") : t("contestWorkspaceRoot")}</small>
+              <button className="primary-button" onClick={startContest}><Icon name="timer" size={14} />{t("contestStart")}</button>
+            </footer>
+          </>}
+        </section>
+      </>}
+
       <footer className="statusbar">
-        <span className="wordmark">mild editor <small>v{appVersion}</small></span>
+        <span className="wordmark">v{appVersion}</span>
         {updateStatus.phase === "available" && <button className="status-update" onClick={() => { setSettingsPage("updates"); setSettingsOpen(true); }} title={`${t("updatesAvailable")} v${updateStatus.version}`}>↑ v{updateStatus.version}</button>}
+        <button className={`contest-status ${contest ? (contestRunning ? (contestRemaining < 60000 ? "critical" : contestRemaining < 10 * 60000 ? "ending" : "running") : "over") : ""}`} onClick={() => setContestOpen((open) => !open)} aria-expanded={contestOpen} title={t("contest")}>
+          <Icon name="timer" size={13} />{contest ? (contestRunning ? formatClock(contestRemaining) : t("contestOver")) : t("contest")}
+        </button>
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">
@@ -3888,10 +4215,11 @@ function App() {
             <button key={id} className={`panel-chip ${chipActive(id) ? "active" : ""}`}
               aria-pressed={chipActive(id)} data-panel={id}
               onClick={() => togglePanel(id)}
-            >{chipLabel(id)}</button>
+            ><Icon name={id === "tests" ? "flask" : id === "problem" ? "globe" : "files"} size={13} />{chipLabel(id)}</button>
           ))}
         </div>
-        <button className="status-settings" onClick={openSettings} aria-label="settings" title="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 13a7.7 7.7 0 0 0 .05-1 7.7 7.7 0 0 0-.05-1l2.1-1.64-2-3.46-2.55 1.03a7.5 7.5 0 0 0-1.72-1L14.55 3h-4l-.38 2.93a7.5 7.5 0 0 0-1.72 1L5.9 5.9l-2 3.46L6 11a7.7 7.7 0 0 0-.05 1 7.7 7.7 0 0 0 .05 1l-2.1 1.64 2 3.46 2.55-1.03a7.5 7.5 0 0 0 1.72 1l.38 2.93h4l.38-2.93a7.5 7.5 0 0 0 1.72-1l2.55 1.03 2-3.46L19.1 13ZM12.55 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" /></svg></button>
+        <button className="status-settings" onClick={openSettings} aria-label="settings" title={t("preferences")}><Icon name="settings" size={15} /></button>
+        {(activeTab ? language : defaultLanguage) === "cpp" && <select className={`status-language status-profile ${compileProfile}`} value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")} aria-label={t("compileProfile")} title={`${t("compileProfile")}: ${profileFlags[compileProfile]}`}><option value="release">Release</option><option value="debug">Debug</option></select>}
         <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
           const next = event.target.value as Language;
           if (activeTab) void changeActiveLanguage(next);

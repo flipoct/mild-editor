@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Icon } from "./icons";
 import { isMac } from "./platform";
 
 /** What the backend reports about the embedded browser (`browser_status`, `browser-status`). */
@@ -15,12 +16,12 @@ export const PROBLEM_WINDOW_IMPORT_EVENT = "problem-window-import";
 
 const messages = {
   en: {
-    import: "import",
+    import: "Import",
     importHint: "Import this problem or contest into the editor",
     hint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.",
     unavailable: "The problem browser is not available:",
-    close: "hide this window",
-    minimize: "Minimize window", maximize: "Maximize window", name: "problem",
+    close: "Hide this window",
+    minimize: "Minimize window", maximize: "Maximize window", name: "Problem",
   },
   ko: {
     import: "가져오기",
@@ -164,9 +165,8 @@ export default function ProblemWindow() {
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo" aria-hidden="true">m</span>
-          <span className="titlebar-name" data-tauri-drag-region>mild editor</span>
-          <span className="titlebar-separator" data-tauri-drag-region>·</span>
-          <span className="titlebar-file" data-tauri-drag-region>{status.title ? `${t("name")} / ${status.title}` : t("name")}</span>
+          <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
+          <span className="titlebar-file" data-tauri-drag-region><span className="crumb">{t("name")}</span>{status.title && <><Icon name="chevronRight" size={10} /><span className="crumb current">{status.title}</span></>}</span>
         </div>
         {!isMac && <div className="window-controls">
           <button onClick={() => void getCurrentWindow().minimize()} aria-label={t("minimize")}><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 8.5h8v1H2z" /></svg></button>
@@ -175,17 +175,17 @@ export default function ProblemWindow() {
         </div>}
       </div>
       <div className="problem-toolbar">
-        <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!status.canGoBack} aria-label="back" title="back">‹</button>
-        <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!status.canGoForward} aria-label="forward" title="forward">›</button>
-        <button onClick={() => void invoke("browser_go", { action: status.loading ? "stop" : "reload" })} disabled={!status.open} aria-label={status.loading ? "stop" : "reload"} title={status.loading ? "stop" : "reload"}>{status.loading ? "×" : "↻"}</button>
+        <button onClick={() => void invoke("browser_go", { action: "back" })} disabled={!status.canGoBack} aria-label="back" title="back"><Icon name="arrowLeft" size={14} /></button>
+        <button onClick={() => void invoke("browser_go", { action: "forward" })} disabled={!status.canGoForward} aria-label="forward" title="forward"><Icon name="arrowRight" size={14} /></button>
+        <button onClick={() => void invoke("browser_go", { action: status.loading ? "stop" : "reload" })} disabled={!status.open} aria-label={status.loading ? "stop" : "reload"} title={status.loading ? "stop" : "reload"}><Icon name={status.loading ? "close" : "reload"} size={14} /></button>
         <input className="problem-url" value={urlDraft} placeholder="https://" spellCheck={false}
           onFocus={() => { urlEditingRef.current = true; }}
           onBlur={() => { urlEditingRef.current = false; setUrlDraft(status.url); }}
           onChange={(event) => setUrlDraft(event.target.value)}
           onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); openUrl(urlDraft); event.currentTarget.blur(); } }}
           aria-label="problem URL" />
-        <button className="problem-import" onClick={() => void emit(PROBLEM_WINDOW_IMPORT_EVENT)} disabled={!status.open || !status.url || status.loading} title={t("importHint")}>{t("import")}</button>
-        <button onClick={hide} aria-label={t("close")} title={t("close")}>×</button>
+        <button className="problem-import" onClick={() => void emit(PROBLEM_WINDOW_IMPORT_EVENT)} disabled={!status.open || !status.url || status.loading} title={t("importHint")}><Icon name="download" size={14} />{t("import")}</button>
+        <button onClick={hide} aria-label={t("close")} title={t("close")}><Icon name="close" size={14} /></button>
       </div>
       {status.available
         ? <div className="problem-host" ref={hostRef}>{!status.open && <p className="problem-hint">{t("hint")}</p>}</div>

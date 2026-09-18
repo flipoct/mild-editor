@@ -1880,6 +1880,35 @@ pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>
     Ok(true)
 }
 
+/// Judges whose submit form the editor may fill in. The script comes from the editor's own
+/// frontend, and it still only ever runs on one of these hosts.
+const SUBMIT_HOSTS: [&str; 3] = ["atcoder.jp", "codeforces.com", "doj.kr"];
+
+fn is_submit_host(url: &str) -> bool {
+    let host = url.split("://").nth(1).and_then(|rest| rest.split(['/', '?', '#']).next()).unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or("").split(':').next().unwrap_or("");
+    SUBMIT_HOSTS.iter().any(|site| host == *site || host.ends_with(&format!(".{site}")))
+}
+
+/// Runs the script that fills a judge's submit form with the solution. The page is left for
+/// the user to review and send; nothing is submitted from here.
+#[tauri::command]
+pub fn browser_fill_submission(window: Window, state: tauri::State<'_, BrowserState>, script: String) -> Result<(), String> {
+    let url = state.0.status.lock().expect("panel status").url.clone();
+    if !is_submit_host(&url) {
+        return Err("The page in the problem browser is not a supported submit page.".into());
+    }
+    if state.0.browser.lock().expect("browser").is_none() {
+        return Err("Open a problem page first.".into());
+    }
+    let shared = state.0.clone();
+    on_main(&window, move || {
+        if let Some(frame) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.main_frame()) {
+            frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 0);
+        }
+    })
+}
+
 #[tauri::command]
 pub fn browser_extensions_list(state: tauri::State<'_, BrowserState>) -> Vec<ExtensionInfo> {
     list_extensions(&state.0)

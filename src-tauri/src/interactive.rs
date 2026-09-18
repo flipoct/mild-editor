@@ -12,7 +12,7 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
-use crate::{prepare_program, tool_search_path, CommandExtHidden, PreparedProgram};
+use crate::{prepare_program, tool_search_path, BuildOptions, CommandExtHidden, PreparedProgram};
 
 const MAX_CODE: usize = 100_000;
 const MAX_STREAM_OUTPUT: usize = 1_000_000;
@@ -26,6 +26,8 @@ pub struct StartInteractiveRequest {
     session_id: String,
     #[serde(default)]
     atcoder_library_path: Option<String>,
+    #[serde(flatten)]
+    build: BuildOptions,
 }
 
 #[derive(Deserialize)]
@@ -163,8 +165,9 @@ fn spawn_session(app: tauri::AppHandle, request: StartInteractiveRequest) -> Res
         request.atcoder_library_path.as_deref(),
         cwd,
         true,
+        &request.build,
     )? {
-        PreparedProgram::Ready { command, args } => (command, args),
+        PreparedProgram::Ready { command, args, .. } => (command, args),
         PreparedProgram::CompileError(result) => return Err(result.stderr),
     };
 

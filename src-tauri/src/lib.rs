@@ -8,6 +8,8 @@ pub mod browser;
 pub mod browser;
 mod companion;
 mod interactive;
+mod memory;
+mod pch;
 mod updates;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -132,6 +134,34 @@ struct RunRequest {
     run_id: String,
     #[serde(default)]
     atcoder_library_path: Option<String>,
+    /// The problem's own limits; absent means the 2 s default and no memory limit.
+    #[serde(default)]
+    time_limit_ms: Option<u64>,
+    #[serde(default)]
+    memory_limit_mb: Option<u64>,
+    #[serde(flatten)]
+    build: BuildOptions,
+}
+
+/// How the C++ program is built: the flags of the selected compile profile, and whether
+/// `bits/stdc++.h` may come from a precompiled header. Python ignores both.
+#[derive(Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BuildOptions {
+    #[serde(default)]
+    compile_flags: Option<Vec<String>>,
+    #[serde(default)]
+    precompile_headers: bool,
+}
+
+impl BuildOptions {
+    /// `-O2` is what the runner always used before profiles existed.
+    fn flags(&self) -> Vec<String> {
+        match &self.compile_flags {
+            Some(flags) => flags.iter().map(|flag| flag.trim().to_string()).filter(|flag| !flag.is_empty()).take(64).collect(),
+            None => vec!["-O2".into()],
+        }
+    }
 }
 
 struct RunState(Arc<AtomicBool>);
@@ -168,6 +198,8 @@ enum Verdict {
     Re,
     /// The process was still alive when the time limit expired.
     Tle,
+    /// The process grew past the memory limit.
+    Mle,
     /// The process wrote more than `MAX_OUTPUT` bytes.
     Limit,
     /// The user cancelled the run.
@@ -182,12 +214,17 @@ struct RunResult {
     stdout: String,
     stderr: String,
     time_ms: u128,
+    /// Peak resident memory in KiB, where the platform reports it.
+    memory_kb: Option<u64>,
     verdict: Verdict,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunResponse {
     results: Vec<RunResult>,
+    /// Compiler warnings from a successful build, for the editor to mark.
+    compile_warnings: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -241,6 +278,8 @@ struct WorkspaceProblemInput {
     source_url: Option<String>,
     #[serde(default)]
     judge_status: Option<String>,
+    #[serde(default)]
+    limits: Option<ProblemLimits>,
     #[serde(default)]
     modified_at: Option<u64>,
 }
@@ -452,6 +491,9 @@ struct SaveWorkspaceTestsRequest {
     source: Option<String>,
     #[serde(default)]
     source_url: Option<String>,
+    /// Present when the limits were edited; both fields empty clears them.
+    #[serde(default)]
+    limits: Option<ProblemLimits>,
 }
 
 #[derive(Deserialize)]
@@ -462,6 +504,16 @@ struct UpdateWorkspaceSourceRequest {
     source: String,
     #[serde(default)]
     source_url: Option<String>,
+}
+
+/// A problem's own limits, as the judge states them. Either may be unknown.
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ProblemLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    time_limit_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_limit_mb: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -477,6 +529,8 @@ struct WorkspaceProblemMetadata {
     source_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     judge_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limits: Option<ProblemLimits>,
     #[serde(default)]
     modified_at: u64,
 }
@@ -502,6 +556,7 @@ struct WorkspaceProblemOutput {
     source: Option<String>,
     source_url: Option<String>,
     judge_status: Option<String>,
+    limits: Option<ProblemLimits>,
     modified_at: u64,
 }
 
@@ -522,6 +577,9 @@ struct ImportedAtCoderProblem {
     tests: Vec<SavedTestCase>,
     source: String,
     source_url: String,
+    /// The contest's name, where the importer reads one; it names the contest's folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contest: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -588,7 +646,7 @@ fn execute(
     input: &str,
     timeout: Duration,
 ) -> RunResult {
-    execute_with_cancel(command, args, cwd, input, timeout, None)
+    execute_with_cancel(command, args, cwd, input, timeout, None, None)
 }
 
 fn execute_with_cancel(
@@ -598,6 +656,7 @@ fn execute_with_cancel(
     input: &str,
     timeout: Duration,
     cancelled: Option<&AtomicBool>,
+    memory_limit_kb: Option<u64>,
 ) -> RunResult {
     let started = Instant::now();
     let mut child = match Command::new(command)
@@ -618,6 +677,7 @@ fn execute_with_cancel(
                 stdout: String::new(),
                 stderr: error.to_string(),
                 time_ms: started.elapsed().as_millis(),
+                memory_kb: None,
                 verdict: Verdict::Re,
             }
         }
@@ -639,6 +699,8 @@ fn execute_with_cancel(
         .map(|stderr| thread::spawn(move || read_limited(stderr)));
 
     let mut stopped = false;
+    let mut memory_exceeded = false;
+    let mut memory_kb: Option<u64> = None;
     let status = loop {
         if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
             stopped = true;
@@ -652,8 +714,17 @@ fn execute_with_cancel(
             let _ = child.wait();
             break None;
         }
-        let wait = Duration::from_millis(50).min(timeout - elapsed);
-        match child.wait_timeout(wait) {
+        // Short polls: they are also the memory samples, and on Linux and macOS the only ones.
+        let wait = Duration::from_millis(15).min(timeout - elapsed);
+        let waited = child.wait_timeout(wait);
+        memory_kb = memory_kb.max(memory::peak_memory_kb(&child));
+        if memory_limit_kb.is_some_and(|limit| memory_kb.is_some_and(|used| used > limit)) {
+            memory_exceeded = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        match waited {
             Ok(Some(status)) => break Some(status),
             Ok(None) => continue,
             Err(_) => break None,
@@ -671,6 +742,7 @@ fn execute_with_cancel(
         Some(value) if value.success() => Verdict::Ok,
         Some(_) => Verdict::Re,
         None if stopped => Verdict::Stopped,
+        None if memory_exceeded => Verdict::Mle,
         None => Verdict::Tle,
     };
     if status.is_none() {
@@ -679,6 +751,10 @@ fn execute_with_cancel(
         }
         if stopped {
             stderr.push_str("Error: stopped");
+        } else if memory_exceeded {
+            stderr.push_str(&format!("Error: MLE ({} MB)", memory_limit_kb.unwrap_or(0) / 1024));
+        } else if timeout.subsec_millis() != 0 {
+            stderr.push_str(&format!("Error: TLE ({} ms)", timeout.as_millis()));
         } else {
             stderr.push_str(&format!("Error: TLE ({}s)", timeout.as_secs()));
         }
@@ -697,6 +773,7 @@ fn execute_with_cancel(
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr,
         time_ms: started.elapsed().as_millis(),
+        memory_kb,
         verdict,
     }
 }
@@ -730,7 +807,8 @@ impl CommandExtHidden for Command {
 /// command line that runs it. `unbuffered` only matters for interactive runs, where the
 /// interpreter must not hold a prompt in its own buffer.
 pub(crate) enum PreparedProgram {
-    Ready { command: std::path::PathBuf, args: Vec<String> },
+    /// `warnings` is what the compiler said about a build that succeeded.
+    Ready { command: std::path::PathBuf, args: Vec<String>, warnings: String },
     CompileError(RunResult),
 }
 
@@ -740,6 +818,7 @@ pub(crate) fn prepare_program(
     atcoder_library_path: Option<&str>,
     cwd: &Path,
     unbuffered: bool,
+    build: &BuildOptions,
 ) -> Result<PreparedProgram, String> {
     if language == "cpp" {
         let compiler = find_tool("g++").ok_or_else(|| MISSING_COMPILER.to_string())?;
@@ -747,18 +826,26 @@ pub(crate) fn prepare_program(
         let binary = cwd.join(if cfg!(windows) { "main.exe" } else { "main" });
         fs::write(&source, code).map_err(|error| error.to_string())?;
 
+        let flags = build.flags();
+        let wants_pch = build.precompile_headers && code.contains("bits/stdc++.h");
         let mut compile = None;
         for standard in ["c++20", "c++17", "c++1z", "c++14"] {
-            let compile_args = vec![
-                format!("-std={standard}"),
-                "-O2".into(),
-                "-pipe".into(),
-                atcoder_library_path.filter(|path| !path.trim().is_empty()).map(|path| format!("-I{path}")).unwrap_or_default(),
-                source.to_string_lossy().into_owned(),
-                "-o".into(),
-                binary.to_string_lossy().into_owned(),
-            ].into_iter().filter(|argument| !argument.is_empty()).collect::<Vec<_>>();
-            let result = execute(&compiler, &compile_args, cwd, "", Duration::from_secs(10));
+            let pch_include = wants_pch.then(|| pch::ensure(&compiler, standard, &flags)).flatten();
+            let mut compile_args = vec![format!("-std={standard}")];
+            compile_args.extend(flags.iter().cloned());
+            compile_args.push("-pipe".into());
+            // First on the include path, so `bits/stdc++.h.gch` is found before the header itself.
+            if let Some(directory) = &pch_include {
+                compile_args.push(format!("-I{}", directory.to_string_lossy()));
+            }
+            if let Some(path) = atcoder_library_path.filter(|path| !path.trim().is_empty()) {
+                compile_args.push(format!("-I{path}"));
+            }
+            compile_args.push(source.to_string_lossy().into_owned());
+            compile_args.push("-o".into());
+            compile_args.push(binary.to_string_lossy().into_owned());
+            // Sanitizers and debug containers are slow to build.
+            let result = execute(&compiler, &compile_args, cwd, "", Duration::from_secs(30));
             let unsupported = result.stderr.contains("unrecognized command line option");
             compile = Some(result);
             if compile.as_ref().is_some_and(|value| value.ok) || !unsupported {
@@ -774,7 +861,7 @@ pub(crate) fn prepare_program(
                 ..compile
             }));
         }
-        Ok(PreparedProgram::Ready { command: binary, args: Vec::new() })
+        Ok(PreparedProgram::Ready { command: binary, args: Vec::new(), warnings: compile.stderr })
     } else {
         // Windows keeps `python` first because its `python3` is usually the
         // Microsoft Store execution alias, which opens the Store instead of running.
@@ -790,7 +877,7 @@ pub(crate) fn prepare_program(
             args.push("-u".into());
         }
         args.push(source.to_string_lossy().into_owned());
-        Ok(PreparedProgram::Ready { command: python, args })
+        Ok(PreparedProgram::Ready { command: python, args, warnings: String::new() })
     }
 }
 
@@ -814,33 +901,36 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
         .map_err(|error| error.to_string())?;
     let cwd = directory.path();
 
-    let (command, args) = match prepare_program(
+    let (command, args, compile_warnings) = match prepare_program(
         &request.language,
         &request.code,
         request.atcoder_library_path.as_deref(),
         cwd,
         false,
+        &request.build,
     )? {
-        PreparedProgram::Ready { command, args } => (command, args),
+        PreparedProgram::Ready { command, args, warnings } => (command, args, warnings),
         PreparedProgram::CompileError(result) => {
             let results = request.tests.iter().enumerate().map(|(index, _)| {
                 let _ = app.emit("test-result", TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone() });
                 result.clone()
             }).collect();
-            return Ok(RunResponse { results });
+            return Ok(RunResponse { results, compile_warnings: String::new() });
         }
     };
 
+    let time_limit = Duration::from_millis(request.time_limit_ms.unwrap_or(2000).clamp(100, 60_000));
+    let memory_limit_kb = request.memory_limit_mb.map(|limit| limit.clamp(1, 16_384) * 1024);
     let mut results = Vec::new();
     for (index, test) in request.tests.iter().enumerate() {
         if cancelled.load(Ordering::Relaxed) { break; }
-        let result = execute_with_cancel(&command, &args, cwd, &test.input, Duration::from_secs(2), Some(&cancelled));
+        let result = execute_with_cancel(&command, &args, cwd, &test.input, time_limit, Some(&cancelled), memory_limit_kb);
         let stopped = cancelled.load(Ordering::Relaxed);
         let _ = app.emit("test-result", TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone() });
         results.push(result);
         if stopped { break; }
     }
-    Ok(RunResponse { results })
+    Ok(RunResponse { results, compile_warnings })
 }
 
 #[tauri::command]
@@ -911,6 +1001,9 @@ fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result<(), String
     }
     if request.source_url.is_some() {
         problem.source_url = request.source_url;
+    }
+    if let Some(limits) = request.limits {
+        problem.limits = (limits != ProblemLimits::default()).then_some(limits);
     }
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not save test cases: {error}"))
 }
@@ -1137,7 +1230,7 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
                 tests: Vec::new(),
                 source: Some("other".into()),
                 source_url: None,
-                judge_status: None,
+                judge_status: None, limits: None,
                 modified_at: file_modified_at(&source_path),
             });
         }
@@ -1223,7 +1316,7 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             tests: problem.tests.clone(),
             source: problem.source.clone(),
             source_url: problem.source_url.clone(),
-            judge_status: problem.judge_status.clone(),
+            judge_status: problem.judge_status.clone(), limits: problem.limits,
             modified_at: logical_modified_at,
         };
         if let Some(index) = metadata_problems.iter().position(|item| item.filename == filename) {
@@ -1239,7 +1332,7 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             tests: problem.tests,
             source: problem.source,
             source_url: problem.source_url,
-            judge_status: problem.judge_status,
+            judge_status: problem.judge_status, limits: problem.limits,
             modified_at: logical_modified_at,
         });
     }
@@ -1391,10 +1484,10 @@ fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<Wo
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
     let code = fs::read_to_string(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
-    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), modified_at: file_modified_at(&destination) };
+    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), limits: source_problem.limits, modified_at: file_modified_at(&destination) };
     metadata.problems.push(duplicated.clone());
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
-    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, modified_at: duplicated.modified_at })
+    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, limits: duplicated.limits, modified_at: duplicated.modified_at })
 }
 
 #[tauri::command]
@@ -1418,7 +1511,7 @@ fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<Workspac
     }
     problem.filename = new_filename.clone();
     problem.language = new_language.clone();
-    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), modified_at: problem.modified_at };
+    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), limits: problem.limits, modified_at: problem.modified_at };
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
     Ok(result)
 }
@@ -1453,7 +1546,7 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                         tests: old.tests,
                         source: None,
                         source_url: None,
-                        judge_status: None,
+                        judge_status: None, limits: None,
                         modified_at: 0,
                     }],
                 }
@@ -1479,7 +1572,7 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             tests: problem.tests,
             source: problem.source,
             source_url: problem.source_url,
-            judge_status: problem.judge_status,
+            judge_status: problem.judge_status, limits: problem.limits,
             modified_at: if problem.modified_at > 0 { problem.modified_at } else { file_modified_at(&source_path) },
         });
     }
@@ -1632,6 +1725,7 @@ fn fetch_atcoder_problem(
         tests,
         source: "atcoder".into(),
         source_url: parsed.to_string(),
+        contest: None,
     })
 }
 
@@ -1755,7 +1849,7 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
         if !seen_direct_urls.insert(direct_url.clone()) { continue; }
         if let Ok(html) = client.get(&direct_url).timeout(Duration::from_secs(8)).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
             if let Some((title, tests)) = parse_codeforces_html(&html) {
-                return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+                return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
             }
         }
     }
@@ -1772,7 +1866,7 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
             Ok(body) => {
                 if let Some(title) = body.lines().find_map(|line| line.strip_prefix("Title: ")) { fallback_title = title.trim().to_string(); }
                 if let Some((title, tests)) = parse_codeforces_markdown(&body) {
-                    return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+                    return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
                 }
                 last_error = "Codeforces returned a statement without readable sample test cases.".into();
             }
@@ -1784,7 +1878,7 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
         let expected = fetch_codeforces_targeted_block(client, reader_url, ".sample-test .output", "Output");
         if let (Some(input), Some(expected)) = (input, expected) {
             let tests = vec![SavedTestCase { name: "test 1".into(), input, expected }];
-            return Ok(ImportedAtCoderProblem { title: fallback_title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string() });
+            return Ok(ImportedAtCoderProblem { title: fallback_title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
         }
     }
     Err(last_error)
@@ -1806,7 +1900,61 @@ fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<Im
     }
     if tests.is_empty() { return Err("No sample test cases found on DOJ.".into()); }
     let title = document.select(&title_selector).next().map(|element| element.text().collect::<String>().replace(" | DOJ", "")).unwrap_or_else(|| format!("DOJ #{problem_id}"));
-    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{problem_id}.cpp"), tests, source: "doj".into(), source_url: url.to_string() })
+    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{problem_id}.cpp"), tests, source: "doj".into(), source_url: url.to_string(), contest: None })
+}
+
+/// The problems a DOJ contest page links to, in the order the contest lists them. Each link
+/// is `/<locale>/problems/<id>?contest=<key>`; the key only matters to a logged-in participant
+/// while the contest runs, so the plain problem page is what gets imported.
+fn doj_contest_problem_urls(html: &str, base: &reqwest::Url) -> Vec<String> {
+    let document = scraper::Html::parse_document(html);
+    let link_selector = scraper::Selector::parse("a[href]").unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut urls = Vec::new();
+    for link in document.select(&link_selector) {
+        let Some(href) = link.value().attr("href") else { continue };
+        if !href.contains("/problems/") || !href.contains("contest=") { continue; }
+        let Ok(mut url) = base.join(href) else { continue };
+        let is_problem = url.path_segments().and_then(|mut parts| parts.next_back()).is_some_and(|id| !id.is_empty() && id.chars().all(|character| character.is_ascii_digit()));
+        if !is_problem { continue; }
+        url.set_query(None);
+        url.set_fragment(None);
+        if seen.insert(url.to_string()) { urls.push(url.to_string()); }
+    }
+    urls
+}
+
+/// `A`, `B`, … `Z`, then `A1`, `B1`, …: the index a contest gives its problems.
+fn contest_letter(index: usize) -> String {
+    let letter = (b'A' + (index % 26) as u8) as char;
+    if index < 26 { letter.to_string() } else { format!("{letter}{}", index / 26) }
+}
+
+fn fetch_doj_contest(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid DOJ contest URL.".to_string())?;
+    let html = client.get(parsed.clone()).send().map_err(|error| format!("Could not fetch DOJ: {error}"))?
+        .error_for_status().map_err(|error| format!("DOJ response error: {error}"))?.text().map_err(|error| error.to_string())?;
+    let problem_urls = doj_contest_problem_urls(&html, &parsed);
+    if problem_urls.is_empty() {
+        // DOJ shows a running contest's problems only to a participant who is logged in.
+        return Err("This DOJ contest does not list its problems publicly. While a contest is running, open each problem in the problem browser and import it from there.".into());
+    }
+    let title_selector = scraper::Selector::parse("title").unwrap();
+    let contest = scraper::Html::parse_document(&html).select(&title_selector).next()
+        .map(|element| element.text().collect::<String>().replace(" | DOJ", "").trim().to_string())
+        .filter(|title| !title.is_empty());
+    let mut problems = Vec::new();
+    for (index, problem_url) in problem_urls.into_iter().take(30).enumerate() {
+        let mut problem = fetch_doj_problem(client, &problem_url)?;
+        problem.suggested_filename = format!("{}.cpp", contest_letter(index));
+        // "#286 49" names the problem by its number in the archive; in a contest the letter does that.
+        if let Some((number, name)) = problem.title.split_once(' ') {
+            if number.starts_with('#') && !name.trim().is_empty() { problem.title = name.trim().to_string(); }
+        }
+        problem.contest = contest.clone();
+        problems.push(problem);
+    }
+    Ok(problems)
 }
 
 fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
@@ -1918,6 +2066,9 @@ async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, Stri
             return fetch_codeforces_contest(&client, &url);
         }
         if matches!(parsed.host_str(), Some("doj.kr") | Some("www.doj.kr")) {
+            if parsed.path_segments().is_some_and(|mut parts| parts.any(|part| part == "contests")) {
+                return fetch_doj_contest(&client, &url);
+            }
             return fetch_doj_problem(&client, &url).map(|problem| vec![problem]);
         }
         if parsed.host_str() != Some("atcoder.jp") {
@@ -2491,6 +2642,7 @@ pub fn run() {
             browser::browser_extension_install,
             browser::browser_extension_remove,
             browser::browser_import_page,
+            browser::browser_fill_submission,
             browser::browser_install_userscript,
             browser::problem_window_open,
             browser::problem_window_hide,
@@ -2574,7 +2726,69 @@ mod tests {
         assert_eq!(serde_json::to_string(&Verdict::Ok).unwrap(), "\"ok\"");
         assert_eq!(serde_json::to_string(&Verdict::Ce).unwrap(), "\"ce\"");
         assert_eq!(serde_json::to_string(&Verdict::Tle).unwrap(), "\"tle\"");
+        assert_eq!(serde_json::to_string(&Verdict::Mle).unwrap(), "\"mle\"");
         assert_eq!(serde_json::to_string(&Verdict::Stopped).unwrap(), "\"stopped\"");
+    }
+
+    /// Skipped, not failed, on a machine without Python: the runner is what is under test.
+    fn python() -> Option<std::path::PathBuf> {
+        ["python3", "python"].iter().find_map(|name| find_tool(name))
+    }
+
+    #[test]
+    fn a_run_past_its_memory_limit_is_an_mle() {
+        let Some(python) = python() else { return };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        // Filled, not just reserved: untouched pages never become resident on Linux or macOS.
+        let hog = "import time\nblock = b'x' * (300 * 1024 * 1024)\ntime.sleep(5)\n";
+        let args = ["-c".to_string(), hog.to_string()];
+
+        let limited = execute_with_cancel(&python, &args, directory.path(), "", Duration::from_secs(10), None, Some(64 * 1024));
+        assert_eq!(limited.verdict, Verdict::Mle);
+        assert!(limited.stderr.contains("Error: MLE (64 MB)"));
+        assert!(limited.memory_kb.is_some_and(|used| used > 64 * 1024));
+
+        let quick = execute_with_cancel(&python, &["-c".into(), "print(1)".into()], directory.path(), "", Duration::from_secs(10), None, Some(1024 * 1024));
+        assert_eq!(quick.verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn a_sub_second_time_limit_is_reported_in_milliseconds() {
+        let Some(python) = python() else { return };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let result = execute(&python, &["-c".into(), "import time\ntime.sleep(5)".into()], directory.path(), "", Duration::from_millis(500));
+        assert_eq!(result.verdict, Verdict::Tle);
+        assert!(result.stderr.contains("Error: TLE (500 ms)"), "{}", result.stderr);
+    }
+
+    #[test]
+    fn build_options_default_to_the_release_flag() {
+        let default: BuildOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.flags(), vec!["-O2".to_string()]);
+        assert!(!default.precompile_headers);
+        let debug: BuildOptions = serde_json::from_str(r#"{"compileFlags":["-O0"," -g ",""],"precompileHeaders":true}"#).unwrap();
+        assert_eq!(debug.flags(), vec!["-O0".to_string(), "-g".to_string()]);
+        assert!(debug.precompile_headers);
+    }
+
+    #[test]
+    fn a_profile_compiles_with_its_flags_and_the_precompiled_header() {
+        // `g++` on macOS is Clang, which has no bits/stdc++.h to compile at all.
+        let Some(compiler) = find_tool("g++") else { return };
+        if !pch::is_gcc(&compiler) { return; }
+        let code = "#include <bits/stdc++.h>\nint main() {\n#ifdef LOCAL\n  std::cout << \"local\";\n#else\n  std::cout << \"judge\";\n#endif\n}\n";
+        for (flags, expected) in [(vec!["-O2".to_string()], "judge"), (vec!["-O0".to_string(), "-DLOCAL".to_string()], "local")] {
+            let build = BuildOptions { compile_flags: Some(flags), precompile_headers: true };
+            // Twice: the first build writes the header, the second one compiles against it.
+            for _ in 0..2 {
+                let directory = tempfile::tempdir().expect("temporary directory");
+                let PreparedProgram::Ready { command, args, .. } = prepare_program("cpp", code, None, directory.path(), false, &build).expect("toolchain") else {
+                    panic!("the program should compile");
+                };
+                let result = execute(&command, &args, directory.path(), "", Duration::from_secs(10));
+                assert_eq!(result.stdout, expected);
+            }
+        }
     }
 
     #[test]
@@ -2626,6 +2840,48 @@ mod tests {
     }
 
     #[test]
+    fn doj_contest_page_yields_its_problems_in_order() {
+        let base = reqwest::Url::parse("https://doj.kr/ko/contests/bcd7").unwrap();
+        let html = r#"<a href="/ko/problems">all</a>
+            <a href="/ko/problems/286?contest=key">A</a><a href="/ko/problems/362?contest=key">B</a>
+            <a href="/ko/problems/286?contest=key">A again</a><a href="/ko/problems/286/editorial?contest=key">editorial</a>
+            <a href="/ko/contests/bcd7/standings">standings</a>"#;
+        assert_eq!(doj_contest_problem_urls(html, &base), vec!["https://doj.kr/ko/problems/286", "https://doj.kr/ko/problems/362"]);
+        assert!(doj_contest_problem_urls("<a href=\"/ko/login\">login</a>", &base).is_empty());
+        assert_eq!([contest_letter(0), contest_letter(8), contest_letter(25), contest_letter(26)], ["A", "I", "Z", "A1"]);
+    }
+
+    #[test]
+    fn problem_limits_survive_a_save_an_edit_and_a_load() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        let imported = ProblemLimits { time_limit_ms: Some(1000), memory_limit_mb: Some(256) };
+        let saved = save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: Some(imported), modified_at: None,
+            }],
+        }).expect("save source");
+        assert_eq!(saved.problems[0].limits, Some(imported));
+
+        let edit = |limits: Option<ProblemLimits>| save_workspace_tests(SaveWorkspaceTestsRequest {
+            folder_path: folder_path.clone(), filename: "A.cpp".into(), tests: Vec::new(), source: None, source_url: None, limits,
+        }).expect("save tests");
+        let loaded = || load_workspace(folder_path.clone()).expect("load workspace").problems[0].limits;
+
+        // Saving test cases alone leaves the limits as they were.
+        edit(None);
+        assert_eq!(loaded(), Some(imported));
+        let edited = ProblemLimits { time_limit_ms: Some(3000), memory_limit_mb: None };
+        edit(Some(edited));
+        assert_eq!(loaded(), Some(edited));
+        // Both fields emptied: back to the defaults, and nothing left in the file.
+        edit(Some(ProblemLimits::default()));
+        assert_eq!(loaded(), None);
+    }
+
+    #[test]
     fn rename_duplicate_and_delete_keep_files_and_metadata_in_sync() {
         let directory = tempfile::tempdir().expect("temporary workspace");
         let folder_path = directory.path().to_string_lossy().into_owned();
@@ -2633,7 +2889,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
             }],
         }).expect("save source");
 
@@ -2700,7 +2956,7 @@ mod tests {
         create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
         save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
-            filename: "round/A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+            filename: "round/A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         }] }).unwrap();
 
         let removed = delete_workspace_folder(DeleteWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "round".into() }).unwrap();
@@ -2718,7 +2974,7 @@ mod tests {
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "div2".into(), parent_directory: "round".into() }).unwrap();
         let problem = |filename: &str, language: &str| WorkspaceProblemInput {
-            filename: filename.into(), title: filename.into(), language: language.into(), code: "x".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+            filename: filename.into(), title: filename.into(), language: language.into(), code: "x".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         };
         save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![problem("round/A.cpp", "cpp"), problem("round/div2/B.py", "python"), problem("C.cpp", "cpp")] }).unwrap();
         let metadata_filenames = || {
@@ -2767,7 +3023,7 @@ mod tests {
         let folder_path = directory.path().to_string_lossy().into_owned();
         create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
         let saved = save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
-            filename: "notes.txt".into(), title: "notes".into(), language: "cpp".into(), code: "ignored".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, modified_at: None,
+            filename: "notes.txt".into(), title: "notes".into(), language: "cpp".into(), code: "ignored".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         }] }).unwrap();
         assert!(saved.problems.is_empty());
         assert!(!directory.path().join("notes.txt").exists());

@@ -3,7 +3,10 @@ const platformHint = (): string => {
   return data?.platform || navigator.platform || navigator.userAgent;
 };
 
-export const isMac = /mac/i.test(platformHint());
+/** Development only: `?platform=mac` previews the macOS layout in the browser preview on another system. */
+const previewPlatform = import.meta.env.DEV ? new URLSearchParams(window.location.search).get("platform") : null;
+
+export const isMac = /mac/i.test(previewPlatform || platformHint());
 
 /** Prefix used when spelling a modifier shortcut out for the reader. */
 export const modLabel = isMac ? "⌘" : "Ctrl+";

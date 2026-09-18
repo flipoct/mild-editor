@@ -69,6 +69,22 @@ The listener is on by default and is confined to the loopback interface. Toggle 
 
 Each test reports a competitive-programming verdict: `AC`, `WA`, `TLE`, `RE`, or `CE`. A wrong answer shows a line-by-line comparison of expected versus actual output instead of a plain text box, with mismatched lines highlighted and whitespace-only differences called out separately. Press `raw output` to switch back to the unformatted stream.
 
+## Limits, profiles and judging
+
+The time and memory limits that Competitive Companion reports are saved with the file and used by the runner; the two fields above the test cases edit them, and an empty field means the default (2 s, no memory limit). Every test shows its running time and peak memory, and a run past the memory limit is an `MLE`. Peak memory is exact on Windows and sampled every 15 ms on Linux and macOS, so a run shorter than that shows none there.
+
+The status bar switches between two compile profiles. **Release** is `-O2`, the condition the judge runs under. **Debug** adds checked containers, warnings and `-DLOCAL` — and AddressSanitizer and UBSan outside Windows, where MinGW ships no sanitizer runtimes — and runs with three times the time limit. **Settings → build & judging** edits the flags of both. With *precompile bits/stdc++.h* on, the header is built once per compiler and profile (under the system temp directory) and reused.
+
+When the expected output holds a decimal, an answer within an absolute or relative error of 1e-6 is accepted. Integers, words and spacing are always compared exactly. The same settings page changes the tolerance or turns it off.
+
+## Submitting
+
+**Submit** in the title bar saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder and Codeforces forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
+
+## Contest mode
+
+The timer in the status bar starts a countdown of the length you give it and opens a board of the problems in the current folder. The status bar keeps the remaining time in view, turning amber in the last ten minutes. On the board a problem shows the judge's verdict when there is one and the local test results otherwise, and is marked solved with its time when the judge reports AC. The contest is remembered per workspace until you end it.
+
 ## Snippets
 
 Open **Settings → Snippets**, create a snippet name, select C++ or Python, write the snippet body in Monaco, and press **Save snippet**. Snippets are stored locally on the current device.

@@ -147,6 +147,11 @@ pub fn browser_import_page(_window: Window, _state: tauri::State<'_, BrowserStat
 }
 
 #[tauri::command]
+pub fn browser_fill_submission(_window: Window, _state: tauri::State<'_, BrowserState>, _script: String) -> Result<(), String> {
+    Err(REASON.into())
+}
+
+#[tauri::command]
 pub fn browser_extension_remove(_state: tauri::State<'_, BrowserState>, _id: String) -> Result<(), String> {
     Err(REASON.into())
 }

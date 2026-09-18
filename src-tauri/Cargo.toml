@@ -1,6 +1,6 @@
 [package]
 name = "mild-editor"
-version = "1.9.1"
+version = "1.10.0"
 description = "A lightweight competitive programming editor"
 authors = ["mild editor"]
 edition = "2021"
@@ -39,7 +39,12 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Chromium derives an unpacked extension's id from the SHA-256 of its path.
 sha2 = "0.10"
 
+# Peak memory of the program under test (src/memory.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_ProcessStatus"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
