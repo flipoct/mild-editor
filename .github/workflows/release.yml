@@ -112,12 +112,16 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.9.1
+            ## What's changed in v1.10.0
 
-            - **The problem window stays where it is.** In window mode, switching to another file changes the page without bringing the window forward, lifting it above other windows or taking the keyboard from the editor. A page that finishes loading no longer takes focus in either mode.
-            - **Browser shortcuts with the problem page focused**: `Ctrl`/`Alt` + `←` `→` go back and forward, `F5` and `Ctrl+R` reload, `Ctrl+F5`, `Shift+F5` or `Ctrl+Shift+R` reload past the cache (`⌘` for `Ctrl` on macOS).
+            - **A redesigned interface.** One set of design tokens behind all seven themes, readable type sizes, one icon set, a breadcrumb title bar with **Run** and **Submit**, test cases as cards, and Settings with a sidebar.
+            - **Judging closer to the judge.** Per-problem time and memory limits (taken from Competitive Companion, editable above the tests), peak memory on every test, an `MLE` verdict, and a floating-point tolerance of 1e-6 for answers that are decimals.
+            - **Compile profiles.** Release and Debug are one click apart in the status bar; Debug adds checked containers, warnings and `-DLOCAL`. `bits/stdc++.h` is precompiled once and reused, so a typical compile takes a fraction of a second. Compiler warnings and run-time error lines are marked in the editor.
+            - **Submit** opens the judge's own submit form in the problem browser with the problem, language and source filled in (AtCoder, Codeforces, DOJ). You press the judge's button.
+            - **Contest mode**: a countdown in the status bar and a board of the folder's problems with solve times.
+            - **DOJ contests** import from their URL like AtCoder and Codeforces ones.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.9.1/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.10.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

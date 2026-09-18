@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.0
+
+- A redesigned interface. One set of design tokens drives every surface, so the seven themes reach all of it; text is no smaller than 11px and monospace is kept for code and test data; glyph buttons are replaced by one icon set. The title bar shows the workspace and file as a breadcrumb and gains **Run** and **Submit**; tabs size to their names and carry a language badge; test cases are cards with the status on the left and the verdict on the right; the Explorer's new-file and new-folder buttons moved into its header; Settings has a sidebar instead of a row of tabs.
+- Per-problem limits. The time and memory limits Competitive Companion reports are stored with the file and used by the runner, and both can be edited above the test cases. Each test shows its peak memory beside its time, and a run past the memory limit is an `MLE`.
+- Floating-point tolerance. When the expected output holds a decimal, an answer within an absolute or relative error of 1e-6 is accepted; integers, words and spacing are compared exactly as before. **Settings → build & judging** changes the tolerance or turns it off.
+- Compile profiles. **Release** (`-O2`) and **Debug** (checked containers, warnings, `-DLOCAL`, and the sanitizers where the toolchain has them) are one click apart in the status bar, and their flags are editable in **Settings → build & judging**. A Debug run gets three times the time limit.
+- `bits/stdc++.h` is precompiled once per compiler and profile and reused, which takes a typical compile from seconds to a fraction of one. GCC only.
+- Compiler warnings from a successful build are marked in the editor, and a sanitizer report or a Python exception marks the line it names without hiding the test's output.
+- **Submit** opens the judge's own submit page in the problem browser with the problem, language and source filled in (AtCoder and Codeforces); you review it and press the judge's button. For other judges the solution is copied to the clipboard and the problem page opens.
+- A DOJ contest URL (`doj.kr/ko/contests/<slug>`) imports the whole contest, lettered `A`, `B`, … in the contest's own order and filed under the contest's name, like AtCoder and Codeforces. DOJ shows a running contest's problems only to a logged-in participant, so this covers contests whose problems are public.
+- **Submit** also fills DOJ's form, which sits on the problem page itself, and works with the problem browser in its own window.
+- Contest mode. The timer in the status bar starts a countdown and opens a board of the problems in the current folder; a problem is marked solved, with its time, when the judge reports AC.
+
 ## 1.9.1
 
 - In window mode, switching to another file changes the page in the problem window without bringing the window forward or taking the keyboard from the editor. A page that finishes loading no longer takes focus either, in the panel or the window.
