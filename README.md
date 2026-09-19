@@ -79,7 +79,9 @@ When the expected output holds a decimal, an answer within an absolute or relati
 
 ## Submitting
 
-**Submit** in the title bar saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder and Codeforces forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
+**Submit** in the title bar, or `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS), saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder, Codeforces and DOJ forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
+
+**Really submit** in **Settings → online judges** (off by default) goes one step further: once the form is filled, the editor checks that it holds this problem, a language of the file's family and the file's exact source, and then presses the judge's submit button for you. If any check fails, nothing is pressed — the page is left as it is and the status bar says which check failed.
 
 ## Contest mode
 
@@ -117,7 +119,8 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch to tab |
 | `⌘↵` / `⌘.` | Run the panel on screen (tests, or interactive when that panel is showing) / Stop |
-| `⌘⇧↵` | Start an interactive run |
+| `⌘⇧↵` | Submit the file to its judge |
+| `⌘⌥↵` | Start an interactive run |
 | `⌘⌥1` / `⌘⌥2` | Show the test cases / interactive panel |
 | `⌘=` / `⌘-` / `⌘0` | Zoom the interface in / out / back to 100% |
 | `⌘B` / `⌘⇧B` | Toggle file explorer / test panel |
