@@ -14,11 +14,17 @@ on:
       - package-lock.json
       - .github/actions/setup-build/**
       - .github/workflows/warm-cache.yml
+  # A change to the build setup itself is proven on the pull request; the cache it would
+  # save is not kept, since nothing but that branch could reach it.
+  pull_request:
+    paths:
+      - .github/actions/setup-build/**
+      - .github/workflows/warm-cache.yml
   workflow_dispatch:
 
 # A newer push to main makes the run in progress moot.
 concurrency:
-  group: warm-cache
+  group: warm-cache-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -52,7 +58,7 @@ jobs:
         with:
           platform: ${{ matrix.platform }}
           target: ${{ matrix.target }}
-          save-cache: "true"
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       # The same profile and target the release uses, so every artifact in the cache is one
       # the release can reuse. --workspace takes the CEF helper along.
