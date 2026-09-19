@@ -1706,7 +1706,10 @@ fn create_tab_host(app: &AppHandle, shared: &Shared) {
 
 /// Competitive Companion's Web Store id.
 const COMPANION_ID: &str = "cjnmckjndlpiamhfimnnjmnckgghkjbl";
-const BRIDGE_BACKGROUND: &str = "mild-bridge-background.js";
+/// The worker's file name carries the bridge revision: Chromium keeps serving a registered
+/// service worker from its own cache even after the file and the extension version change,
+/// but a manifest that points at a new script URL registers a new worker.
+const BRIDGE_BACKGROUND_PREFIX: &str = "mild-bridge-background";
 const BRIDGE_PATCH: &str = "mild-bridge-patch.js";
 const BRIDGE_CONTENT: &str = "mild-bridge-content.js";
 const BRIDGE_META: &str = "mild-bridge.json";
@@ -1734,11 +1737,35 @@ const BRIDGE_PATCH_JS: &str = r#"// Added by Mild Editor. Its problem panel has 
     }
     return result;
   };
+  // The extension posts every problem to a fixed list of ports. The editor names its own
+  // port in the request: it is added to the list, and posts to any other localhost port
+  // are dropped, so another copy of the editor listening beside this one gets nothing.
+  let port = 0;
+  const fetch0 = self.fetch;
+  self.fetch = function (input, init) {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+    const match = /^https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)\/?(?:[?#].*)?$/.exec(url);
+    if (match && port && Number(match[1]) !== port) return Promise.reject(new TypeError("Mild Editor listens on another port"));
+    return fetch0.call(this, input, init);
+  };
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (!message || message.type !== "mild-editor-parse" || !sender.tab) return;
-    for (const handler of handlers) handler(sender.tab);
+    const requested = Number(message.port);
+    const ready = Number.isInteger(requested) && requested > 0 && requested < 65536
+      ? (port = requested, chrome.storage.local.set({ customPorts: [requested] }))
+      : Promise.resolve();
+    ready.then(() => { for (const handler of handlers) handler(sender.tab); });
   });
 })();
+"#;
+
+const BRIDGE_CONTENT_JS: &str = r#"// Added by Mild Editor: relays the editor's import request to the extension's
+// background script. The token keeps page scripts from triggering it themselves.
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (event.source !== window || !data || data.type !== "mild-editor-parse" || data.nonce !== __NONCE__) return;
+  chrome.runtime.sendMessage({ type: "mild-editor-parse", port: data.port });
+});
 "#;
 
 /// The problem panel has no browser toolbar, so Competitive Companion's button does not
@@ -1779,7 +1806,7 @@ fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
     let meta: Option<serde_json::Value> = std::fs::read_to_string(dir.join(BRIDGE_META)).ok().and_then(|text| serde_json::from_str(&text).ok());
     let background = root.entry("background").or_insert_with(|| serde_json::json!({}));
     let current = background.get("service_worker").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let original = if current.is_empty() || current == BRIDGE_BACKGROUND {
+    let original = if current.is_empty() || current.starts_with(BRIDGE_BACKGROUND_PREFIX) {
         meta.as_ref()
             .and_then(|meta| meta.get("background")?.as_str().map(str::to_owned))
             .ok_or("the extension has no background service worker")?
@@ -1790,24 +1817,41 @@ fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
         .as_ref()
         .and_then(|meta| meta.get("nonce")?.as_str().map(str::to_owned))
         .unwrap_or_else(random_token);
-    background["service_worker"] = serde_json::json!(BRIDGE_BACKGROUND);
+    let background_name = format!("{BRIDGE_BACKGROUND_PREFIX}-{}.js", bridge_revision());
+    background["service_worker"] = serde_json::json!(background_name);
     background["type"] = serde_json::json!("module");
+    // The version gets a fourth component from the same revision, so an update shows as one.
+    let base_version = meta
+        .as_ref()
+        .and_then(|meta| meta.get("version")?.as_str().map(str::to_owned))
+        .or_else(|| root.get("version").and_then(|value| value.as_str()).map(str::to_owned))
+        .ok_or("manifest.json has no version")?;
+    let base_version = base_version.split('.').take(3).collect::<Vec<_>>().join(".");
+    root["version"] = serde_json::json!(format!("{base_version}.{}", bridge_revision()));
 
     let write = |name: &str, contents: String| std::fs::write(dir.join(name), contents).map_err(|error| format!("{name}: {error}"));
     write(BRIDGE_PATCH, BRIDGE_PATCH_JS.to_string())?;
-    write(BRIDGE_BACKGROUND, format!("// Added by Mild Editor; see {BRIDGE_PATCH}.\nimport \"./{BRIDGE_PATCH}\";\nimport \"./{original}\";\n"))?;
-    write(BRIDGE_CONTENT, format!(
-        "// Added by Mild Editor: relays the editor's import request to the extension's\n\
-         // background script. The token keeps page scripts from triggering it themselves.\n\
-         window.addEventListener(\"message\", (event) => {{\n\
-         \x20 const data = event.data;\n\
-         \x20 if (event.source !== window || !data || data.type !== \"mild-editor-parse\" || data.nonce !== {nonce_json}) return;\n\
-         \x20 chrome.runtime.sendMessage({{ type: \"mild-editor-parse\" }});\n\
-         }});\n",
-        nonce_json = serde_json::to_string(&nonce).expect("string json")
-    ))?;
-    write(BRIDGE_META, serde_json::to_string_pretty(&serde_json::json!({ "background": original, "nonce": nonce })).expect("meta json"))?;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(BRIDGE_BACKGROUND_PREFIX) && name != background_name {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    write(&background_name, format!("// Added by Mild Editor; see {BRIDGE_PATCH}.\nimport \"./{BRIDGE_PATCH}\";\nimport \"./{original}\";\n"))?;
+    write(BRIDGE_CONTENT, BRIDGE_CONTENT_JS.replace("__NONCE__", &serde_json::to_string(&nonce).expect("string json")))?;
+    write(BRIDGE_META, serde_json::to_string_pretty(&serde_json::json!({ "background": original, "nonce": nonce, "version": base_version })).expect("meta json"))?;
     std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).expect("manifest json")).map_err(|error| format!("manifest.json: {error}"))
+}
+
+/// A number that changes with the bridge scripts, small enough for a manifest version component.
+fn bridge_revision() -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in BRIDGE_PATCH_JS.bytes().chain(BRIDGE_CONTENT_JS.bytes()) {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+    }
+    hash % 65535
 }
 
 /// 128 random bits from the standard library's hash seeding; enough to keep a page from
@@ -1856,7 +1900,7 @@ pub fn browser_install_userscript(window: Window, state: tauri::State<'_, Browse
 /// stands in for the extension's own. Ok(false) when the extension is not installed, so
 /// the caller can fall back to the built-in importer.
 #[tauri::command]
-pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>) -> Result<bool, String> {
+pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>, port: u16) -> Result<bool, String> {
     let dir = state.0.extensions_dir.lock().expect("extensions dir").clone().ok_or("The problem browser is not initialised.")?;
     let Some(bridge) = [BUNDLED_COMPANION_DIR, COMPANION_ID].iter().find(|name| dir.join(name).join(BRIDGE_META).is_file()) else { return Ok(false) };
     let text = std::fs::read_to_string(dir.join(bridge).join(BRIDGE_META)).map_err(|error| error.to_string())?;
@@ -1870,7 +1914,8 @@ pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>
     if state.0.browser.lock().expect("browser").is_none() {
         return Err("Open a problem page first.".into());
     }
-    let code = format!("window.postMessage({{ type: \"mild-editor-parse\", nonce: {} }}, \"*\");", serde_json::to_string(&nonce).expect("string json"));
+    // The port is the editor's own companion listener: the extension posts there and nowhere else.
+    let code = format!("window.postMessage({{ type: \"mild-editor-parse\", nonce: {}, port: {port} }}, \"*\");", serde_json::to_string(&nonce).expect("string json"));
     let shared = state.0.clone();
     on_main(&window, move || {
         if let Some(frame) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.main_frame()) {
