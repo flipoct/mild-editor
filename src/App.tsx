@@ -2394,7 +2394,7 @@ function App() {
     const url = browserStatus.url;
     if (!url || importInFlightRef.current) return;
     try {
-      if (await invoke<boolean>("browser_import_page")) {
+      if (await invoke<boolean>("browser_import_page", { port: companionPort })) {
         setFileStatus(t("problemImportWaiting"));
         window.clearTimeout(companionWaitRef.current);
         companionWaitRef.current = window.setTimeout(() => setFileStatus(t("problemImportNothing")), 8000);

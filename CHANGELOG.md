@@ -3,6 +3,8 @@
 ## 1.11.1
 
 - DOJ's submit dialog is filled again: the site moved to a CodeMirror build that hangs the editor off the content element as `cmTile` instead of `cmView`, so the source was not placed and a real submit stopped at the *source* check.
+- The panel's import button tells Competitive Companion which port this copy of the editor listens on, and the extension posts there and nowhere else. Before, the extension only posted to its built-in ports, so a port set in **Settings → online judges** was ignored, and with two copies of the editor open the other one could receive the problem.
+- A rewritten Competitive Companion bridge takes effect on the next start. Chromium kept serving the previously registered worker, so an updated bridge kept running the old code until the profile was cleared.
 
 ## 1.11.0
 
