@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.1
+
+- DOJ's submit dialog is filled again: the site moved to a CodeMirror build that hangs the editor off the content element as `cmTile` instead of `cmView`, so the source was not placed and a real submit stopped at the *source* check.
+
 ## 1.11.0
 
 - `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS) submits the file to its judge, the same as **Submit** in the title bar; *Run → Submit* on the macOS menu. Starting an interactive run moved to `Ctrl+Alt+Enter` (`⌘⌥↵`).

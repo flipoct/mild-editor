@@ -113,7 +113,10 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
     }
     for (const content of document.querySelectorAll(".doj-submit-modal .cm-content")) {
       try {
-        const view = (content as unknown as { cmView?: { view?: { state: { doc: { length: number } }; dispatch: (spec: unknown) => void } } }).cmView?.view;
+        // CodeMirror 6 hangs its view off the content element: `cmView` up to view 6.38, `cmTile` from the tile rewrite on.
+        type View = { state: { doc: { length: number } }; dispatch: (spec: unknown) => void };
+        const marks = content as unknown as { cmView?: { view?: View }; cmTile?: { root?: { view?: View } | null } };
+        const view = marks.cmView?.view ?? marks.cmTile?.root?.view;
         view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: payload.code } });
       } catch { /* not CodeMirror */ }
     }
