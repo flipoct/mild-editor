@@ -1,0 +1,102 @@
+name: Set up a desktop build
+description: >
+  Toolchains, caches and the embedded Chromium for one release target. Shared by the
+  release workflow and the cache-warming workflow so the two build the same way and
+  the release finds the caches the other one saved.
+
+inputs:
+  platform:
+    description: The runner label (macos-latest, ubuntu-22.04, windows-latest)
+    required: true
+  target:
+    description: The Rust target triple being built
+    required: true
+  save-cache:
+    description: Whether this run may save the Rust cache (only runs on main can be reused)
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ startsWith(inputs.platform, 'macos') && inputs.target || '' }}
+
+    # A cache is only reachable from the branch that saved it or from main. A release runs
+    # on a tag, so its own saves are never found again; the warm-cache workflow saves from
+    # main after every merge and the release restores that. Keyed by target rather than by
+    # job so both workflows agree on the name.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src-tauri
+        shared-key: release-${{ inputs.target }}
+        save-if: ${{ inputs.save-cache }}
+
+    - name: Install Linux dependencies
+      if: inputs.platform == 'ubuntu-22.04'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+    # The pinned CEF binaries are the same for every release: downloaded and unpacked once
+    # by export-cef-dir, then kept as a cache keyed on the version and the target.
+    - uses: actions/cache@v4
+      if: inputs.platform != 'ubuntu-22.04'
+      id: cef
+      with:
+        path: ${{ runner.temp }}/cef
+        key: cef-151.8.1-${{ inputs.target }}
+
+    - name: Install CEF (macOS)
+      if: startsWith(inputs.platform, 'macos')
+      # cef-dll-sys builds its wrapper with Ninja. --target matters: the runners are arm64,
+      # so without it the x86_64 job would bundle an arm64 framework.
+      shell: bash
+      run: |
+        brew install ninja
+        if [ "${{ steps.cef.outputs.cache-hit }}" != "true" ]; then
+          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
+          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force --target ${{ inputs.target }} "$RUNNER_TEMP/cef")
+        fi
+        echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+
+    - name: Install CEF (Windows)
+      if: inputs.platform == 'windows-latest'
+      # The cef crate builds libcef_dll_wrapper with CMake's Ninja generator, which needs
+      # cl.exe on PATH: msvc-dev-cmd below provides it.
+      shell: pwsh
+      run: |
+        choco install ninja --no-progress -y
+        if ("${{ steps.cef.outputs.cache-hit }}" -ne "true") {
+          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$env:RUNNER_TEMP/cef-rs"
+          Push-Location "$env:RUNNER_TEMP/cef-rs"
+          cargo run -p export-cef-dir -- --force --target ${{ inputs.target }} "$env:RUNNER_TEMP/cef"
+          Pop-Location
+        }
+        "CEF_PATH=$env:RUNNER_TEMP/cef" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      if: inputs.platform == 'windows-latest'
+
+    - shell: bash
+      run: npm ci
+
+    # `tauri build` is run by the caller, so the framework and helper bundles are staged
+    # here rather than through the npm scripts. The target is passed so the helper binary
+    # is built for the architecture being bundled rather than for the runner.
+    - name: Stage CEF for the bundle (macOS)
+      if: startsWith(inputs.platform, 'macos')
+      shell: bash
+      run: scripts/prepare-cef.sh release ${{ inputs.target }}
+
+    - name: Stage CEF for the bundle (Windows)
+      if: inputs.platform == 'windows-latest'
+      shell: pwsh
+      run: scripts/prepare-cef.ps1
