@@ -123,16 +123,13 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.10.0
+            ## What's changed in v1.11.0
 
-            - **A redesigned interface.** One set of design tokens behind all seven themes, readable type sizes, one icon set, a breadcrumb title bar with **Run** and **Submit**, test cases as cards, and Settings with a sidebar.
-            - **Judging closer to the judge.** Per-problem time and memory limits (taken from Competitive Companion, editable above the tests), peak memory on every test, an `MLE` verdict, and a floating-point tolerance of 1e-6 for answers that are decimals.
-            - **Compile profiles.** Release and Debug are one click apart in the status bar; Debug adds checked containers, warnings and `-DLOCAL`. `bits/stdc++.h` is precompiled once and reused, so a typical compile takes a fraction of a second. Compiler warnings and run-time error lines are marked in the editor.
-            - **Submit** opens the judge's own submit form in the problem browser with the problem, language and source filled in (AtCoder, Codeforces, DOJ). You press the judge's button.
-            - **Contest mode**: a countdown in the status bar and a board of the folder's problems with solve times.
-            - **DOJ contests** import from their URL like AtCoder and Codeforces ones.
+            - **Submit shortcut.** `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS) submits the file to its judge, the same as the **Submit** button; *Run → Submit* on the macOS menu. Starting an interactive run moved to `Ctrl+Alt+Enter` (`⌘⌥↵`).
+            - **Really submit.** A toggle in **Settings → online judges**, off by default. On, a submission does not stop at the filled form: the editor checks that the form holds this problem, a language of the file's family and the file's exact source, then presses the judge's own submit button and reports the result in the status bar. A check that fails presses nothing and says which one. AtCoder, Codeforces and DOJ.
+            - **DOJ** submissions open the site's submit dialog and fill the editor and language there.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.10.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.11.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
