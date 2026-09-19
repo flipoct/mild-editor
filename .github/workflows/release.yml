@@ -37,80 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # Toolchains, the Rust cache saved from main by the warm-cache workflow, and the
+      # embedded Chromium. Nothing is tested here: the Check workflow has already compiled
+      # and tested every platform on the way to main, and a release that fails to build
+      # fails here regardless.
+      - uses: ./.github/actions/setup-build
         with:
-          node-version: 22
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ startsWith(matrix.platform, 'macos') && matrix.target || '' }}
-
-      # The Windows job is the longest of the four and most of it is compiling the
-      # dependency graph and the embedded Chromium wrapper, both of which are the same
-      # from one release to the next. Only this platform is cached: a repository holds
-      # 10 GB of caches, and a release target for every platform would not fit beside the
-      # pull request checks, which are the ones worth keeping warm. The other three jobs
-      # finish before this one regardless.
-      - uses: Swatinem/rust-cache@v2
-        if: matrix.platform == 'windows-latest'
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install CEF (macOS)
-        if: startsWith(matrix.platform, 'macos')
-        # The problem panel embeds Chromium. cef-dll-sys builds its wrapper with Ninja, and
-        # export-cef-dir downloads the pinned CEF binaries. --target matters: the runners are
-        # arm64, so without it the x86_64 job would bundle an arm64 framework.
-        run: |
-          brew install ninja
-          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
-          (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force --target ${{ matrix.target }} "$RUNNER_TEMP/cef")
-          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
-
-      - name: Install CEF (Windows)
-        if: matrix.platform == 'windows-latest'
-        # Same pinned binaries as macOS. The cef crate builds libcef_dll_wrapper with CMake's
-        # Ninja generator, which needs cl.exe on PATH: msvc-dev-cmd below provides it.
-        shell: pwsh
-        run: |
-          choco install ninja --no-progress -y
-          git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$env:RUNNER_TEMP/cef-rs"
-          Push-Location "$env:RUNNER_TEMP/cef-rs"
-          cargo run -p export-cef-dir -- --force --target ${{ matrix.target }} "$env:RUNNER_TEMP/cef"
-          Pop-Location
-          "CEF_PATH=$env:RUNNER_TEMP/cef" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: matrix.platform == 'windows-latest'
-
-      - run: npm ci
-
-      # tauri-action runs `tauri build` itself, so the framework and helper bundles are
-      # staged here rather than through the npm scripts.
-      - name: Stage CEF for the bundle (macOS)
-        if: startsWith(matrix.platform, 'macos')
-        # The target is passed so the helper binary is built for the architecture being
-        # bundled rather than for the runner.
-        run: scripts/prepare-cef.sh release ${{ matrix.target }}
-
-      - name: Stage CEF for the bundle (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: scripts/prepare-cef.ps1
-
-      # tauri-action compiles the crate itself straight after this, so checking it here
-      # would be the same work twice; the Check workflow has already compiled every
-      # platform on the way to main. Only the tests, and only where they are quick.
-      - name: Test
-        if: matrix.platform == 'ubuntu-22.04'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+          platform: ${{ matrix.platform }}
+          target: ${{ matrix.target }}
 
       - uses: tauri-apps/tauri-action@v1
         env:

@@ -3,6 +3,11 @@
   "bundle": {
     "resources": {
       "cef/win/": ""
+    },
+    "windows": {
+      "nsis": {
+        "compression": "zlib"
+      }
     }
   }
 }

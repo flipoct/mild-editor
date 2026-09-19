@@ -1,0 +1,66 @@
+# The release builds every platform from a clean runner, and most of that is compiling the
+# dependency graph and the embedded Chromium wrapper, which do not change from one release
+# to the next. A cache saved by a tag run is never found again (caches are reachable only
+# from the branch that saved them, or from main), so this workflow does the same compile on
+# main after every merge and saves it; a release then restores it and compiles the editor's
+# own crates only.
+name: Warm release caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src-tauri/**
+      - package-lock.json
+      - .github/actions/setup-build/**
+      - .github/workflows/warm-cache.yml
+  # A change to the build setup itself is proven on the pull request; the cache it would
+  # save is not kept, since nothing but that branch could reach it.
+  pull_request:
+    paths:
+      - .github/actions/setup-build/**
+      - .github/workflows/warm-cache.yml
+  workflow_dispatch:
+
+# A newer push to main makes the run in progress moot.
+concurrency:
+  group: warm-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          platform: ${{ matrix.platform }}
+          target: ${{ matrix.target }}
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      # The same profile and target the release uses, so every artifact in the cache is one
+      # the release can reuse. --workspace takes the CEF helper along.
+      - name: Build
+        run: cargo build --release --workspace --manifest-path src-tauri/Cargo.toml ${{ matrix.args }}
