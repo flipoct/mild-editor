@@ -1890,8 +1890,9 @@ fn is_submit_host(url: &str) -> bool {
     SUBMIT_HOSTS.iter().any(|site| host == *site || host.ends_with(&format!(".{site}")))
 }
 
-/// Runs the script that fills a judge's submit form with the solution. The page is left for
-/// the user to review and send; nothing is submitted from here.
+/// Runs the script that fills a judge's submit form with the solution. By default the page is
+/// left for the user to review and send; with "really submit" on, the frontend's script also
+/// checks the filled form and presses the judge's button. Nothing is sent from here.
 #[tauri::command]
 pub fn browser_fill_submission(window: Window, state: tauri::State<'_, BrowserState>, script: String) -> Result<(), String> {
     let url = state.0.status.lock().expect("panel status").url.clone();

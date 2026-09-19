@@ -155,10 +155,14 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .build(app)?;
     let run_tests = MenuItemBuilder::with_id("run:tests", "Run Tests").build(app)?;
     let run_interactive = MenuItemBuilder::with_id("run:interactive", "Start Interactive Run")
-        .accelerator("CmdOrCtrl+Shift+Enter")
+        .accelerator("CmdOrCtrl+Alt+Enter")
         .build(app)?;
     let stop = MenuItemBuilder::with_id("run:stop", "Stop")
         .accelerator("CmdOrCtrl+Period")
+        .build(app)?;
+    // Cmd+Shift+Return submits the file to its judge through the problem browser.
+    let submit = MenuItemBuilder::with_id("run:submit", "Submit")
+        .accelerator("CmdOrCtrl+Shift+Enter")
         .build(app)?;
 
     let run = SubmenuBuilder::new(app, "Run")
@@ -167,6 +171,8 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .item(&run_interactive)
         .separator()
         .item(&stop)
+        .separator()
+        .item(&submit)
         .build()?;
 
     let window = SubmenuBuilder::new(app, "Window")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.11.0
+
+- `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS) submits the file to its judge, the same as **Submit** in the title bar; *Run → Submit* on the macOS menu. Starting an interactive run moved to `Ctrl+Alt+Enter` (`⌘⌥↵`).
+- **Really submit** in **Settings → online judges**, off by default. On, a submission does not stop at the filled form: the editor checks that the form holds this problem, a language of the file's family and the file's exact source, then presses the judge's own submit button and reports the result in the status bar. A check that fails presses nothing and says which one. AtCoder, Codeforces and DOJ.
+- Submitting to DOJ opens its submit dialog and fills the editor and language there, instead of expecting the dialog to be open already.
+
 ## 1.10.0
 
 - A redesigned interface. One set of design tokens drives every surface, so the seven themes reach all of it; text is no smaller than 11px and monospace is kept for code and test data; glyph buttons are replaced by one icon set. The title bar shows the workspace and file as a breadcrumb and gains **Run** and **Submit**; tabs size to their names and carry a language badge; test cases are cards with the status on the left and the verdict on the right; the Explorer's new-file and new-folder buttons moved into its header; Settings has a sidebar instead of a row of tabs.

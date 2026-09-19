@@ -15,7 +15,7 @@ import { isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
 import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
 import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
-import { fillSubmitFormScript, submitTarget } from "./submit";
+import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
 import packageInfo from "../package.json";
 
@@ -451,7 +451,7 @@ type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; rece
 
 const messages = {
   en: {
-    submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.",
+    submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.", submitPressing: "Submitting…", submitPressed: "Submitted — the judge is judging", submitUnverified: "Not submitted — the filled form did not check out", submitPressUnconfirmed: "The submit button was pressed, but the judge did not move on — check the problem browser", submitCheckForm: "the submit form is not on the page", submitCheckProblem: "a different problem is selected", submitCheckLanguage: "no language of the file's family is selected", submitCheckCode: "the source in the form is not the file's", submitCheckButton: "the submit button is missing or disabled", submitCheckTimeout: "the page did not answer",
     contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root",
     timeLimit: "Time limit", memoryLimit: "Memory limit", debugTimeNote: "The Debug profile runs with three times the time limit, because an unoptimised build is that much slower.", compileProfile: "Compile profile",
     buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
@@ -462,7 +462,7 @@ const messages = {
     preferences: "Preferences", interfaceLanguage: "Interface language", english: "English", korean: "Korean", interfaceScale: "Interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
     local: "Local / other", saveTemplate: "Save template", applyEditor: "Apply to editor", reset: "Reset",
-    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "Default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.", organizeImports: "File imports into folders", organizeImportsHelp: "Off by default: every import lands in the workspace root. On, an imported problem goes into its judge's folder, and a contest gets a folder of its own inside it — Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. Files already saved are left where they are.",
+    judgeHelp: "Enter your public judge handles. Imported problems refresh their latest submission result automatically every 20 seconds.", defaultLanguage: "Default language", defaultLanguageHelp: "Used for imported problems, including Competitive Companion, and for new files created without an extension. The language menu in the status bar changes this while no file is open.", organizeImports: "File imports into folders", organizeImportsHelp: "Off by default: every import lands in the workspace root. On, an imported problem goes into its judge's folder, and a contest gets a folder of its own inside it — Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. Files already saved are left where they are.", submitPress: "Really submit", submitPressHelp: "Off by default: Submit stops at the filled form for you to review and send. On, the editor checks that the form holds this problem, a language of the file's family and the file's exact source, and then presses the judge's own submit button; if any check fails it leaves the page as it is and says why. AtCoder, Codeforces and DOJ.",
     refreshNow: "Refresh now", refreshing: "Refreshing…", aclPath: "AtCoder Library include folder", chooseFolder: "Choose folder", aclHelp: "Select the folder that contains the atcoder directory. It is passed to both g++ and clangd.",
     newWorkspace: "New workspace", openWorkspace: "Open workspace", import: "Import", open: "Open", save: "Save", new: "New",
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
@@ -485,7 +485,7 @@ const messages = {
     interactiveEofSent: "Input closed (EOF)", interactiveIdle: "Not running",
   },
   ko: {
-    submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.",
+    submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.", submitPressing: "제출하는 중…", submitPressed: "제출했습니다 — 채점 중", submitUnverified: "제출하지 않음 — 채워진 양식이 확인을 통과하지 못했습니다", submitPressUnconfirmed: "제출 버튼을 눌렀지만 저지가 넘어가지 않았습니다 — 문제 브라우저를 확인하세요", submitCheckForm: "페이지에 제출 양식이 없음", submitCheckProblem: "다른 문제가 선택되어 있음", submitCheckLanguage: "파일 언어 계열이 선택되지 않음", submitCheckCode: "양식의 소스가 파일과 다름", submitCheckButton: "제출 버튼이 없거나 비활성", submitCheckTimeout: "페이지가 응답하지 않음",
     contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트",
     timeLimit: "시간 제한", memoryLimit: "메모리 제한", debugTimeNote: "Debug 프로필은 최적화 없는 빌드가 그만큼 느리기 때문에 시간 제한의 3배로 실행합니다.", compileProfile: "컴파일 프로필",
     buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
@@ -496,7 +496,7 @@ const messages = {
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 시간 값은 이 컴퓨터의 시간대를 따릅니다. 기존 ${...} 문법도 계속 지원됩니다.",
     local: "로컬 / 기타", saveTemplate: "템플릿 저장", applyEditor: "에디터에 적용", reset: "초기화",
-    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.", organizeImports: "가져온 파일을 폴더로 정리", organizeImportsHelp: "기본값은 꺼짐이며, 가져온 파일은 모두 작업 폴더 바로 아래에 저장됩니다. 켜면 문제는 해당 사이트 폴더 안에 들어가고, 대회 전체를 가져오면 그 안에 대회 이름 폴더가 하나 더 생깁니다. 예: Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. 이미 저장된 파일은 그대로 둡니다.",
+    judgeHelp: "각 사이트의 공개 사용자 이름을 입력하세요. 가져온 문제의 최신 제출 결과를 20초마다 자동으로 갱신합니다.", defaultLanguage: "기본 언어", defaultLanguageHelp: "가져온 문제(Competitive Companion 포함)와 확장자 없이 만든 새 파일에 적용됩니다. 열린 파일이 없을 때 하단 언어 메뉴를 바꾸면 이 값이 바뀝니다.", organizeImports: "가져온 파일을 폴더로 정리", organizeImportsHelp: "기본값은 꺼짐이며, 가져온 파일은 모두 작업 폴더 바로 아래에 저장됩니다. 켜면 문제는 해당 사이트 폴더 안에 들어가고, 대회 전체를 가져오면 그 안에 대회 이름 폴더가 하나 더 생깁니다. 예: Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py. 이미 저장된 파일은 그대로 둡니다.", submitPress: "자동 제출 시 진짜 제출", submitPressHelp: "기본값은 꺼짐: 제출 양식을 채운 뒤 멈추고, 저지의 제출 버튼은 직접 누릅니다. 켜면 양식에 이 문제가 선택되어 있는지, 파일 언어 계열이 선택되어 있는지, 파일의 소스가 그대로 들어갔는지 확인한 뒤 저지의 제출 버튼까지 누릅니다. 하나라도 어긋나면 누르지 않고 페이지를 그대로 둔 채 이유를 알립니다. AtCoder, Codeforces, DOJ.",
     refreshNow: "지금 갱신", refreshing: "갱신 중…", aclPath: "AtCoder Library include 폴더", chooseFolder: "폴더 선택", aclHelp: "atcoder 폴더가 들어 있는 상위 폴더를 선택하세요. g++와 clangd에 함께 적용됩니다.",
     newWorkspace: "새 워크스페이스", openWorkspace: "워크스페이스 열기", import: "가져오기", open: "열기", save: "저장", new: "새로 만들기",
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
@@ -633,6 +633,7 @@ function App() {
   const pendingTemplateCursorRef = useRef<{ tabId: string; language: Language; offset: number } | null>(null);
   const runRef = useRef<() => void>(() => {});
   const interactiveRef = useRef<() => void>(() => {});
+  const submitRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const diagnosticDecorationsRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -658,6 +659,8 @@ function App() {
   // both the menu bar and the view, and the second arrival must not close a file too.
   const browserClosedAtRef = useRef(0);
   const [organizeImports, setOrganizeImports] = useState(() => localStorage.getItem("mild-organize-imports") === "1");
+  // Off by default: a submission is only sent when the user has asked for the button to be pressed.
+  const [submitPress, setSubmitPress] = useState(() => localStorage.getItem("mild-submit-press") === "1");
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
   const [companionPort, setCompanionPort] = useState(() => storedBoundedNumber("mild-companion-port", 10043, 1024, 65535));
   const [companionStatus, setCompanionStatus] = useState<CompanionStatus>({ listening: false, port: null });
@@ -743,7 +746,7 @@ function App() {
     return root.children;
   }, [explorerFiles, workspaceDirectories]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening")].includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
+  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed")].includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
@@ -839,6 +842,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-test-panel-visible", testPanelVisible ? "1" : "0");
   }, [testPanelVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-submit-press", submitPress ? "1" : "0");
+  }, [submitPress]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1765,7 +1772,8 @@ function App() {
     // Monaco has called preventDefault on the keystroke, WebKit no longer offers it
     // to the native menu bar, so the accelerator there never fires in this case.
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => interactiveRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => submitRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => interactiveRef.current());
     if (language === "cpp") void connectClangd(editor, monaco);
   };
 
@@ -2787,8 +2795,11 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   // While a submission is opening its page, "follow the active file" must not put the problem page back.
   const submitHoldRef = useRef(false);
+  // `<nonce>:<result>` from the last press script, taken off the page title as it arrives.
+  const submitMarkerRef = useRef<string | null>(null);
   const submitSolution = async () => {
-    if (!activeTab?.sourceUrl || submitting) return;
+    if (submitting) return;
+    if (!activeTab?.sourceUrl) { setFileStatus(t("submitNoSource")); return; }
     if (!(await saveProblem())) return;
     const code = codes[language];
     // The clipboard is the fallback for every judge, known or not.
@@ -2834,11 +2845,37 @@ function App() {
         setFileStatus(/login|enter/i.test(reached) ? t("submitLogin") : `${t("submitCopied")} (${reached || "no page"})`);
         return;
       }
-      const script = fillSubmitFormScript({ code, language, problemIndex: target.problemIndex, problemCode: target.problemCode, generic: target.generic });
+      const payload = { judge: target.judge, code, language, taskScreenName: target.taskScreenName, problemIndex: target.problemIndex, problemCode: target.problemCode, problemSlug: target.problemSlug };
+      const script = fillSubmitFormScript(payload);
       await invoke("browser_fill_submission", { script });
-      // Again for an editor widget, or a client-rendered form, that arrives after the page does.
-      for (const delay of [1200, 3000]) window.setTimeout(() => void invoke("browser_fill_submission", { script }).catch(() => undefined), delay);
-      setFileStatus(t("submitFilled"));
+      if (!submitPress) {
+        // Again for an editor widget, or a client-rendered form, that arrives after the page does.
+        for (const delay of [1200, 3000]) window.setTimeout(() => void invoke("browser_fill_submission", { script }).catch(() => undefined), delay);
+        setFileStatus(t("submitFilled"));
+        return;
+      }
+      setFileStatus(t("submitPressing"));
+      // The page fills the form again, checks every field against the file and presses the button only
+      // when all of them agree. A check that fails gets one more try, for an editor widget that arrives late.
+      let result: PressResult | "timeout" = "timeout";
+      for (const delay of [1200, 3000]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        const nonce = Math.random().toString(36).slice(2);
+        submitMarkerRef.current = null;
+        await invoke("browser_fill_submission", { script: pressSubmitFormScript({ ...payload, nonce }) });
+        const answered = await waitFor(() => submitMarkerRef.current?.startsWith(`${nonce}:`) ?? false, 8000);
+        result = answered ? (submitMarkerRef.current ?? "").slice(nonce.length + 1) as PressResult : "timeout";
+        if (result === "pressed") break;
+      }
+      if (result !== "pressed") {
+        const reason: Record<Exclude<typeof result, "pressed">, string> = { form: t("submitCheckForm"), problem: t("submitCheckProblem"), language: t("submitCheckLanguage"), code: t("submitCheckCode"), button: t("submitCheckButton"), timeout: t("submitCheckTimeout") };
+        setFileStatus(`${t("submitUnverified")}: ${reason[result]}`);
+        return;
+      }
+      // The judge answers a submission by moving to its status page; staying put means it refused.
+      const moved = await waitFor(() => !browserStatusRef.current.loading && pathOf(browserStatusRef.current.url) !== pathOf(target.url), 15000);
+      setFileStatus(moved ? t("submitPressed") : t("submitPressUnconfirmed"));
+      if (moved) window.setTimeout(() => void refreshSubmissionStatuses(true), 8000);
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -3075,7 +3112,11 @@ function App() {
     void invoke<BrowserStatus>("browser_status").then(setBrowserStatus).catch(() => undefined);
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    void listen<BrowserStatus>("browser-status", (event) => setBrowserStatus(event.payload))
+    void listen<BrowserStatus>("browser-status", (event) => {
+      // A press script answers through the page title; caught here so a title that changes again is not missed.
+      if (event.payload.title.startsWith(SUBMIT_MARK)) submitMarkerRef.current = event.payload.title.slice(SUBMIT_MARK.length);
+      setBrowserStatus(event.payload);
+    })
       .then((stop) => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); };
   }, []);
@@ -3236,7 +3277,7 @@ function App() {
   };
 
   // Refreshed every render so Monaco's bindings see the current panel state.
-  useEffect(() => { runRef.current = runActivePanel; interactiveRef.current = beginInteractiveRun; });
+  useEffect(() => { runRef.current = runActivePanel; interactiveRef.current = beginInteractiveRun; submitRef.current = () => void submitSolution(); });
 
   // Subscriptions resolve asynchronously, so a cleanup that runs first (StrictMode
   // does this in development) has nothing to call yet; without the flag the first
@@ -3276,6 +3317,7 @@ function App() {
         case "run:active": runActivePanel(); break;
         case "run:tests": void run(); break;
         case "run:interactive": beginInteractiveRun(); break;
+        case "run:submit": void submitSolution(); break;
         case "run:stop": stopRun(); stopInteractive(); break;
       }
     };
@@ -3300,7 +3342,8 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
-        if (event.shiftKey) beginInteractiveRun();
+        if (event.shiftKey) void submitSolution();
+        else if (event.altKey) beginInteractiveRun();
         else runActivePanel();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -3578,7 +3621,7 @@ function App() {
           <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : run} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
             <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
           </button>
-          <button className="submit-top" onClick={() => void submitSolution()} disabled={!activeTab?.sourceUrl || submitting} title={activeTab?.sourceUrl ? t("submitHint") : t("submitNoSource")}>
+          <button className="submit-top" onClick={() => void submitSolution()} disabled={!activeTab?.sourceUrl || submitting} title={activeTab?.sourceUrl ? `${t("submitHint")} (${isMac ? "⌘⇧↵" : "Ctrl+Shift+Enter"})` : t("submitNoSource")}>
             {submitting ? <span className="spinner" /> : <Icon name="send" size={14} />}<span>{t("submit")}</span>
           </button>
         </div>
@@ -4036,6 +4079,8 @@ function App() {
               <p className="settings-help">{t("defaultLanguageHelp")}</p>
               <label className="companion-toggle"><input type="checkbox" checked={organizeImports} onChange={(event) => setOrganizeImports(event.target.checked)} />{t("organizeImports")}</label>
               <p className="settings-help">{t("organizeImportsHelp")}</p>
+              <label className="companion-toggle"><input type="checkbox" checked={submitPress} onChange={(event) => setSubmitPress(event.target.checked)} />{t("submitPress")}</label>
+              <p className="settings-help">{t("submitPressHelp")}</p>
               <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
               <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
