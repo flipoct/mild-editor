@@ -213,6 +213,6 @@ Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Act
 
 ## Credits
 
-The C++ and Python marks beside a filename come from [Tabler Icons](https://tabler.io/icons), MIT licensed, Copyright (c) 2020-2026 Paweł Kuna. They are line art on the same 24px grid and `currentColor` as the rest of the interface, so the theme's `--cpp` and `--python` decide the colour and an open shape sits at the weight of everything else on the row. The marks themselves remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
+The C++ and Python marks beside a filename come from [Devicon](https://devicon.dev), MIT licensed, Copyright (c) 2015 konpa, in the colours the two languages are known by rather than the theme's. Each is cropped to its own artwork so the pair line up with a filename and come out the same size — Devicon's Python is drawn with a drop shadow, which is dropped here, and the snakes would otherwise hang above centre. The marks remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
 
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.
