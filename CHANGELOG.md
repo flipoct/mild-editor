@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.12.0
 
 - Move files and folders. Drag a row of the explorer onto a folder (or onto the empty space, for the workspace root), or use **Move to…** in its context menu. Open tabs, saved tests, folded folders and a running contest's solve times follow the move.
 - A contest no longer needs a workspace of its own. **Start a contest** now asks which folder the problems come from and shows them; click one to leave it out. Problems imported into the folder later still join.
