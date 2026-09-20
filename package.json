@@ -8,6 +8,7 @@
     "quick": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
+    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",

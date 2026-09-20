@@ -77,6 +77,14 @@ The status bar switches between two compile profiles. **Release** is `-O2`, the 
 
 When the expected output holds a decimal, an answer within an absolute or relative error of 1e-6 is accepted. Integers, words and spacing are always compared exactly. The same settings page changes the tolerance or turns it off.
 
+## Finding a counterexample
+
+**Find a counterexample**, beside *Add test* under the test cases, runs the open file against a reference solution on random inputs until their answers differ. Nothing is taken from the judge: the *generator* prints one small random input, and the *reference* is a slow solution that is obviously correct — an exhaustive search, say.
+
+Both are ordinary files of the workspace, named after the problem they belong to, and the button creates them if they are not there yet: `B_Exit_Order.cpp` gets `B_Exit_Order_generator.cpp` and `B_Exit_Order_bruteforce.cpp` beside it, from the same template a new file would use. Ones already written under those names are used instead, whichever of the two languages they are in, and either dropdown can point at any other file in the workspace. The button next to a dropdown opens that file to write it.
+
+Outputs are compared by the same rule the test cases use, float tolerance included. The search stops at the first input the two disagree on, or at the first one that makes a program crash or time out, and shows the input beside both answers; **Add as a test case** keeps it. The file under test runs from the editor's current text, unsaved edits included.
+
 ## Submitting
 
 **Submit** in the title bar, or `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS), saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder, Codeforces and DOJ forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
@@ -115,6 +123,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | Shortcut | Action |
 | --- | --- |
 | `⌘N` / `⌘O` / `⌘S` | New file / Open / Save |
+| `⌘P` | Go to file |
 | `⌘T` | Import problem |
 | `⌘⇧T` | Reopen the tab closed last |
 | `⌘W` | Close tab |
