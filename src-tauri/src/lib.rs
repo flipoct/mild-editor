@@ -409,11 +409,44 @@ fn rename_workspace_folder(request: RenameWorkspaceFolderRequest) -> Result<Rena
         return Err("Enter a valid folder name.".into());
     }
     let destination_relative = directory.parent().filter(|parent| !parent.as_os_str().is_empty()).map(|parent| parent.join(new_name)).unwrap_or_else(|| std::path::PathBuf::from(new_name));
+    relocate_workspace_folder(&folder, &directory, &destination_relative)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveWorkspaceFolderRequest {
+    folder_path: String,
+    directory: String,
+    /// Folder that receives `directory`; empty for the workspace root.
+    target_directory: String,
+}
+
+#[tauri::command]
+fn move_workspace_folder(request: MoveWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?;
+    if directory.as_os_str().is_empty() { return Err("The workspace root cannot be moved.".into()); }
+    if !folder.join(&directory).is_dir() { return Err("Workspace folder does not exist.".into()); }
+    let target = workspace_directory_path(&request.target_directory)?;
+    if !folder.join(&target).is_dir() { return Err("The destination folder does not exist.".into()); }
+    let directory_key = filename_key(&directory.to_string_lossy());
+    let target_key = filename_key(&target.to_string_lossy());
+    if target_key == directory_key || target_key.starts_with(&format!("{directory_key}/")) {
+        return Err("A folder cannot be moved into itself.".into());
+    }
+    let name = directory.file_name().ok_or("Invalid workspace folder path.")?;
+    relocate_workspace_folder(&folder, &directory, &target.join(name))
+}
+
+/// Renames or moves a folder inside the workspace and repoints the metadata of every
+/// source file it carries along.
+fn relocate_workspace_folder(folder: &Path, directory: &Path, destination_relative: &Path) -> Result<RenamedWorkspaceFolder, String> {
+    let source = folder.join(directory);
     let old_directory = directory.to_string_lossy().replace('\\', "/");
     let new_directory = destination_relative.to_string_lossy().replace('\\', "/");
     if old_directory == new_directory { return Ok(RenamedWorkspaceFolder { directory: new_directory, renamed: Vec::new() }); }
-    let destination = folder.join(&destination_relative);
-    let metadata_path = workspace_metadata_path(&folder);
+    let destination = folder.join(destination_relative);
+    let metadata_path = workspace_metadata_path(folder);
     let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("Could not read workspace metadata: {error}"))
         .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
@@ -1502,6 +1535,11 @@ fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<Workspac
     let problem = metadata.problems.iter_mut().find(|problem| problem.filename == filename).ok_or("Workspace file metadata was not found.")?;
     let source_path = folder.join(&filename);
     let destination_path = folder.join(&new_filename);
+    // A rename that carries the file into another folder is how the explorer moves it, and
+    // the target may be a folder the workspace knows only from metadata.
+    if let Some(parent) = destination_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("Could not create the destination folder: {error}"))?;
+    }
     if filename != new_filename && filename.eq_ignore_ascii_case(&new_filename) {
         let temporary_path = folder.join(format!(".mild-rename-{}", std::process::id()));
         fs::rename(&source_path, &temporary_path).map_err(|error| format!("Could not rename source file: {error}"))?;
@@ -2523,6 +2561,37 @@ fn stop_clangd(state: tauri::State<'_, ClangdState>) {
     }
 }
 
+/// An undecorated window gets its resize borders from a child window Tauri lays over the
+/// edges (`TAURI_DRAG_RESIZE_BORDERS`). Tauri empties it when the window is maximised, but
+/// only on a size change, and a window that starts maximised has none: the strip along the
+/// top of the screen stays a resize border, so the close button cannot be hit by throwing
+/// the pointer into the corner. Emptying it once after start-up is what Tauri itself does
+/// on every later maximise.
+#[cfg(windows)]
+fn clear_maximized_resize_border(app: &tauri::AppHandle) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, IsZoomed, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER};
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // The border window appears with the webview, a moment after the window itself.
+        for delay in [300, 1200, 3000] {
+            std::thread::sleep(Duration::from_millis(delay));
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let Some(window) = handle.get_webview_window("main") else { return };
+                let Ok(hwnd) = window.hwnd() else { return };
+                let class: Vec<u16> = "TAURI_DRAG_RESIZE_BORDERS\0".encode_utf16().collect();
+                unsafe {
+                    if IsZoomed(hwnd.0 as _) == 0 { return; }
+                    let border = FindWindowExW(hwnd.0 as _, std::ptr::null_mut(), class.as_ptr(), std::ptr::null());
+                    if !border.is_null() {
+                        SetWindowPos(border, std::ptr::null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+                    }
+                }
+            });
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Development only. Prints what a probe script (see `start_debug_probe`) evaluated to.
 #[tauri::command]
@@ -2588,6 +2657,8 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     let builder = builder.setup(|app| {
         browser::prepare(app.handle());
+        #[cfg(windows)]
+        clear_maximized_resize_border(app.handle());
         Ok(())
     });
 
@@ -2615,6 +2686,7 @@ pub fn run() {
             list_workspace_directories,
             create_workspace_folder,
             rename_workspace_folder,
+            move_workspace_folder,
             delete_workspace_folder,
             delete_workspace_file,
             open_workspace_file_location,
@@ -2879,6 +2951,36 @@ mod tests {
         // Both fields emptied: back to the defaults, and nothing left in the file.
         edit(Some(ProblemLimits::default()));
         assert_eq!(loaded(), None);
+    }
+
+    #[test]
+    fn moving_files_and_folders_keeps_metadata_in_sync() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            }],
+        }).expect("save source");
+
+        // A file moves by a rename into a folder, which is created when it is not there yet.
+        let moved = rename_workspace_file(RenameWorkspaceFileRequest { folder_path: folder_path.clone(), filename: "A.cpp".into(), new_filename: "abc400/A.cpp".into() }).expect("move file");
+        assert_eq!(moved.filename, "abc400/A.cpp");
+        assert!(directory.path().join("abc400").join("A.cpp").exists());
+
+        fs::create_dir(directory.path().join("AtCoder")).expect("target folder");
+        let relocated = move_workspace_folder(MoveWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "abc400".into(), target_directory: "AtCoder".into() }).expect("move folder");
+        assert_eq!(relocated.directory, "AtCoder/abc400");
+        assert_eq!(relocated.renamed, vec![["abc400/A.cpp".to_string(), "AtCoder/abc400/A.cpp".to_string()]]);
+        assert!(directory.path().join("AtCoder").join("abc400").join("A.cpp").exists());
+        let loaded = load_workspace(folder_path.clone()).expect("load workspace");
+        assert_eq!(loaded.problems.iter().map(|problem| problem.filename.as_str()).collect::<Vec<_>>(), vec!["AtCoder/abc400/A.cpp"]);
+
+        assert!(move_workspace_folder(MoveWorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "AtCoder".into(), target_directory: "AtCoder/abc400".into() }).is_err());
+        let back = move_workspace_folder(MoveWorkspaceFolderRequest { folder_path, directory: "AtCoder/abc400".into(), target_directory: "".into() }).expect("move to the root");
+        assert_eq!(back.directory, "abc400");
     }
 
     #[test]

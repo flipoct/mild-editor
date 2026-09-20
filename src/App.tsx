@@ -280,7 +280,16 @@ const finalVerdicts: Status[] = ["ac", "wa", "tle", "mle", "re", "ce", "stopped"
 const formatMemory = (kb: number) => kb >= 1024 * 1024 ? `${(kb / 1024 / 1024).toFixed(2)} GB` : kb >= 10 * 1024 ? `${Math.round(kb / 1024)} MB` : `${(kb / 1024).toFixed(1)} MB`;
 
 /** A timed practice or a live round: a countdown, and when each problem of the folder was solved. */
-type ContestState = { startedAt: number; durationMin: number; folder: string; solved: Record<string, number> };
+type ContestState = {
+  startedAt: number;
+  durationMin: number;
+  folder: string;
+  solved: Record<string, number>;
+  /** Files of the folder left out of this contest (file keys); anything else in it, or imported into it later, takes part. */
+  excluded?: string[];
+  /** Problems already accepted when the clock started, with the submission that was (file key → its URL, "" when unknown): only a newer one counts as solved in the contest. */
+  acceptedBefore?: Record<string, string>;
+};
 const contestStorageKey = (workspace: string | null) => `mild-contest:${workspace ?? ""}`;
 const loadContest = (workspace: string | null): ContestState | null => {
   try {
@@ -294,6 +303,10 @@ const formatClock = (ms: number) => {
   return `${Math.floor(total / 3600)}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
 };
 const isAccepted = (status: string | undefined) => status === "AC" || status === "OK";
+/** The judge is still working on it: `WJ`, `TESTING`, or AtCoder's running count `12/34`. */
+const isPendingVerdict = (status: string) => /^(WJ|WR|JUDGING|TESTING|IN QUEUE)$/i.test(status.trim()) || /^\d+\s*\/\s*\d+/.test(status.trim());
+type VerdictNotice = { id: number; filename: string; status: string; submissionUrl?: string };
+const VERDICT_NOTICE_MS = 15_000;
 
 const DEFAULT_TIME_LIMIT_MS = 2000;
 /** An unoptimised, instrumented build is several times slower, so a Debug run gets this much more time. */
@@ -332,6 +345,13 @@ const defaultFilename = (index: number, language: Language = "cpp") => `${index 
 const normalizedExplorerPath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 const explorerBasename = (path: string) => normalizedExplorerPath(path).split("/").at(-1) || path;
 const explorerParent = (path: string) => normalizedExplorerPath(path).split("/").slice(0, -1).join("/");
+/** Whether `entry` can go into `target` ("" is the root): not where it already is, and no folder into itself. */
+const canMoveInto = (entry: NonNullable<ExplorerSelection>, target: string) => {
+  const targetKey = fileKey(normalizedExplorerPath(target));
+  if (entry.kind === "file") return fileKey(explorerParent(entry.filename)) !== targetKey;
+  const key = fileKey(entry.path);
+  return fileKey(explorerParent(entry.path)) !== targetKey && targetKey !== key && !targetKey.startsWith(`${key}/`);
+};
 const nextDefaultFilename = (filenames: Iterable<string>, language: Language = "cpp") => {
   const occupied = new Set(Array.from(filenames, fileKey));
   for (let index = 0; ; index += 1) {
@@ -452,7 +472,8 @@ type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; rece
 const messages = {
   en: {
     submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.", submitPressing: "Submitting…", submitPressed: "Submitted — the judge is judging", submitUnverified: "Not submitted — the filled form did not check out", submitPressUnconfirmed: "The submit button was pressed, but the judge did not move on — check the problem browser", submitCheckForm: "the submit form is not on the page", submitCheckProblem: "a different problem is selected", submitCheckLanguage: "no language of the file's family is selected", submitCheckCode: "the source in the form is not the file's", submitCheckButton: "the submit button is missing or disabled", submitCheckTimeout: "the page did not answer",
-    contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root",
+    contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root", contestFolder: "Problems from", contestPick: "click a problem to leave it out", contestNoCandidates: "No problems in this folder yet — ones imported into it later join the contest.",
+    moveTo: "Move to…", moveTitle: "Move", moveHelp: "Choose the folder it goes into. Dragging it onto a folder in the explorer does the same.", moveNoTargets: "There is no other folder to move it to. Create one first.", verdictNotice: "Submission result", verdictOpen: "Open this problem", verdictDismiss: "Dismiss",
     timeLimit: "Time limit", memoryLimit: "Memory limit", debugTimeNote: "The Debug profile runs with three times the time limit, because an unoptimised build is that much slower.", compileProfile: "Compile profile",
     buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
     judging: "Judging", floatTolerance: "Floating-point tolerance", floatToleranceOff: "Off (exact match)", floatToleranceHelp: "When the expected output holds a decimal, an answer within this absolute or relative error is accepted. Integers and words are always compared exactly.",
@@ -486,7 +507,8 @@ const messages = {
   },
   ko: {
     submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.", submitPressing: "제출하는 중…", submitPressed: "제출했습니다 — 채점 중", submitUnverified: "제출하지 않음 — 채워진 양식이 확인을 통과하지 못했습니다", submitPressUnconfirmed: "제출 버튼을 눌렀지만 저지가 넘어가지 않았습니다 — 문제 브라우저를 확인하세요", submitCheckForm: "페이지에 제출 양식이 없음", submitCheckProblem: "다른 문제가 선택되어 있음", submitCheckLanguage: "파일 언어 계열이 선택되지 않음", submitCheckCode: "양식의 소스가 파일과 다름", submitCheckButton: "제출 버튼이 없거나 비활성", submitCheckTimeout: "페이지가 응답하지 않음",
-    contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트",
+    contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트", contestFolder: "문제 폴더", contestPick: "클릭해서 제외", contestNoCandidates: "이 폴더에 아직 문제가 없습니다. 나중에 이 폴더로 가져온 문제는 컨테스트에 포함됩니다.",
+    moveTo: "이동…", moveTitle: "이동", moveHelp: "옮길 폴더를 선택하세요. 탐색기에서 폴더 위로 끌어다 놓아도 됩니다.", moveNoTargets: "옮길 수 있는 다른 폴더가 없습니다. 먼저 폴더를 만드세요.", verdictNotice: "제출 결과", verdictOpen: "이 문제 열기", verdictDismiss: "닫기",
     timeLimit: "시간 제한", memoryLimit: "메모리 제한", debugTimeNote: "Debug 프로필은 최적화 없는 빌드가 그만큼 느리기 때문에 시간 제한의 3배로 실행합니다.", compileProfile: "컴파일 프로필",
     buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
     judging: "채점", floatTolerance: "실수 오차 허용", floatToleranceOff: "끔 (완전 일치)", floatToleranceHelp: "예상 출력에 소수가 있을 때, 절대 또는 상대 오차가 이 값 이내인 답을 정답으로 처리합니다. 정수와 문자열은 항상 그대로 비교합니다.",
@@ -554,6 +576,14 @@ function App() {
   const [appCloseConfirm, setAppCloseConfirm] = useState(false);
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<ProblemTab | null>(null);
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
+  const [moveEntry, setMoveEntry] = useState<NonNullable<ExplorerSelection> | null>(null);
+  const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; over: string | null } | null>(null);
+  const explorerDragRef = useRef<{ entry: NonNullable<ExplorerSelection>; label: string; startX: number; startY: number; active: boolean; over: string | null } | null>(null);
+  /** Set for the click that ends a drag, so dropping a row does not also open or fold it. */
+  const explorerDragClickRef = useRef(false);
+  const [verdictNotices, setVerdictNotices] = useState<VerdictNotice[]>([]);
+  /** Latest submission the poll has seen per problem URL; a change from it is what gets announced. */
+  const seenSubmissionsRef = useRef(new Map<string, { status?: string; submissionUrl?: string }>());
   const explorerMenuRef = useRef<HTMLDivElement | null>(null);
   const [explorerSort, setExplorerSort] = useState<ExplorerSort>(() => (localStorage.getItem("mild-explorer-sort") as ExplorerSort) || "problem");
   const [explorerSource, setExplorerSource] = useState<ProblemSource | "all">(() => (localStorage.getItem("mild-explorer-source") as ProblemSource | "all") || "all");
@@ -1258,6 +1288,14 @@ function App() {
       setSavedFiles((items) => items.map((tab) => fileKey(tab.filename) === fileKey(original.filename) ? { ...update(tab), dirty: false } : tab));
       if (activeTab?.id === original.id) setLanguage(result.language);
       setExplorerSelection((selected) => selected?.kind === "file" && fileKey(selected.filename) === fileKey(original.filename) ? { kind: "file", filename: result.filename } : selected);
+      // The contest board knows a problem by its path; a rename or a move keeps its solve time.
+      const rekey = (key: string) => key === fileKey(original.filename) ? fileKey(result.filename) : key;
+      setContest((current) => current && {
+        ...current,
+        solved: Object.fromEntries(Object.entries(current.solved).map(([key, time]) => [rekey(key), time])),
+        excluded: current.excluded?.map(rekey),
+        acceptedBefore: current.acceptedBefore && Object.fromEntries(Object.entries(current.acceptedBefore).map(([key, url]) => [rekey(key), url])),
+      });
       setFileStatus("saved");
     } catch (error) {
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename: original.filename, language: original.language } : tab));
@@ -1374,10 +1412,11 @@ function App() {
     setExplorerRename(null);
   };
 
-  const renameWorkspaceFolder = async (directory: string, newName: string) => {
+  /** Rename and move share this: `request` tells the backend which of the two it is. */
+  const relocateWorkspaceFolder = async (directory: string, command: "rename_workspace_folder" | "move_workspace_folder", request: Record<string, string>) => {
     if (!workspacePath) return;
     try {
-      const result = await invoke<{ directory: string; renamed: Array<[string, string]> }>("rename_workspace_folder", { request: { folderPath: workspacePath, directory, newName } });
+      const result = await invoke<{ directory: string; renamed: Array<[string, string]> }>(command, { request: { folderPath: workspacePath, directory, ...request } });
       const renamedFiles = new Map(result.renamed.map(([from, to]) => [fileKey(from), to]));
       const repoint = (tab: ProblemTab): ProblemTab => { const next = renamedFiles.get(fileKey(tab.filename)); return next ? { ...tab, filename: next } : tab; };
       setTabs((items) => items.map(repoint));
@@ -1385,6 +1424,13 @@ function App() {
       const oldKey = fileKey(directory);
       const movePath = (path: string) => fileKey(path) === oldKey ? result.directory : fileKey(path).startsWith(`${oldKey}/`) ? `${result.directory}${path.slice(directory.length)}` : path;
       updateCollapsedDirectories((items) => new Set([...items].map((key) => fileKey(movePath(key)))));
+      setContest((current) => current && {
+        ...current,
+        folder: movePath(current.folder),
+        solved: Object.fromEntries(Object.entries(current.solved).map(([key, time]) => [fileKey(renamedFiles.get(key) || key), time])),
+        excluded: current.excluded?.map((key) => fileKey(renamedFiles.get(key) || key)),
+        acceptedBefore: current.acceptedBefore && Object.fromEntries(Object.entries(current.acceptedBefore).map(([key, url]) => [fileKey(renamedFiles.get(key) || key), url])),
+      });
       setExplorerSelection((selected) => selected?.kind === "directory" ? { kind: "directory", path: movePath(selected.path) } : selected?.kind === "file" ? { kind: "file", filename: renamedFiles.get(fileKey(selected.filename)) || selected.filename } : selected);
       await refreshWorkspaceDirectories(workspacePath);
       setFileStatus("saved");
@@ -1392,6 +1438,74 @@ function App() {
       setFileStatus(error instanceof Error ? error.message : String(error));
     }
   };
+
+  const renameWorkspaceFolder = (directory: string, newName: string) => relocateWorkspaceFolder(directory, "rename_workspace_folder", { newName });
+
+  /** Moves a file or a folder into `targetDirectory` ("" is the workspace root). */
+  const moveExplorerEntry = async (entry: NonNullable<ExplorerSelection>, targetDirectory: string) => {
+    if (!workspacePath) return;
+    const target = normalizedExplorerPath(targetDirectory);
+    if (!canMoveInto(entry, target)) return;
+    if (entry.kind === "directory") {
+      await relocateWorkspaceFolder(entry.path, "move_workspace_folder", { targetDirectory: target });
+      return;
+    }
+    const original = explorerFiles.find((file) => fileKey(file.filename) === fileKey(entry.filename));
+    if (!original) return;
+    const basename = explorerBasename(original.filename);
+    await commitWorkspaceRename(original, target ? `${target}/${basename}` : basename);
+    await refreshWorkspaceDirectories(workspacePath);
+  };
+
+  // Dragging a row onto a folder moves it there. Pointer events, as for the panels and the
+  // tabs: every row names the folder a drop on it goes to in `data-drop-directory`.
+  const moveExplorerEntryRef = useRef(moveExplorerEntry);
+  moveExplorerEntryRef.current = moveExplorerEntry;
+  const beginExplorerDrag = (entry: NonNullable<ExplorerSelection>, label: string, event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || !workspacePath) return;
+    explorerDragRef.current = { entry, label, startX: event.clientX, startY: event.clientY, active: false, over: null };
+  };
+  useEffect(() => {
+    const track = (event: PointerEvent) => {
+      const drag = explorerDragRef.current;
+      if (!drag) return;
+      if (!drag.active) {
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
+        drag.active = true;
+      }
+      const host = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-directory]");
+      const target = host ? host.dataset.dropDirectory ?? "" : null;
+      drag.over = target !== null && canMoveInto(drag.entry, target) ? target : null;
+      setExplorerDrag({ entry: drag.entry, label: drag.label, x: event.clientX, y: event.clientY, over: drag.over });
+    };
+    const finish = (event: PointerEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      const drag = explorerDragRef.current;
+      explorerDragRef.current = null;
+      if (!drag?.active) return;
+      setExplorerDrag(null);
+      explorerDragClickRef.current = true;
+      window.setTimeout(() => { explorerDragClickRef.current = false; }, 0);
+      if (event.type === "pointerup" && drag.over !== null) void moveExplorerEntryRef.current(drag.entry, drag.over);
+    };
+    window.addEventListener("pointermove", track);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    window.addEventListener("keydown", finish, true);
+    return () => {
+      window.removeEventListener("pointermove", track);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      window.removeEventListener("keydown", finish, true);
+    };
+  }, []);
+  // A folded folder opens when a drag rests on it, so the drop can go deeper.
+  useEffect(() => {
+    const over = explorerDrag?.over;
+    if (!over || !collapsedDirectories.has(fileKey(over))) return;
+    const timer = window.setTimeout(() => updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(over)); return next; }), 650);
+    return () => window.clearTimeout(timer);
+  }, [explorerDrag?.over]);
 
   const commitExplorerRename = async () => {
     const target = explorerRename;
@@ -2452,6 +2566,24 @@ function App() {
       };
       setTabs((items) => items.map(update));
       setSavedFiles((items) => items.map(update));
+      // A verdict on a submission newer than the last one seen is news. The first sight of a
+      // problem only records where it stands, so old results are not announced at start-up.
+      const seen = seenSubmissionsRef.current;
+      const fresh: VerdictNotice[] = [];
+      for (const result of results) {
+        const before = seen.get(result.sourceUrl);
+        const status = result.status || undefined;
+        const submissionUrl = result.submissionUrl || undefined;
+        if (before && status && !isPendingVerdict(status) && (before.status !== status || before.submissionUrl !== submissionUrl)) {
+          const file = files.find((item) => item.sourceUrl === result.sourceUrl);
+          if (file) fresh.push({ id: Date.now() + fresh.length, filename: file.filename, status, submissionUrl });
+        }
+        seen.set(result.sourceUrl, { status, submissionUrl });
+      }
+      if (fresh.length) {
+        setVerdictNotices((items) => [...items.filter((item) => !fresh.some((notice) => fileKey(notice.filename) === fileKey(item.filename))), ...fresh].slice(-4));
+        fresh.forEach((notice) => window.setTimeout(() => setVerdictNotices((items) => items.filter((item) => item.id !== notice.id)), VERDICT_NOTICE_MS));
+      }
       if (!silent) setFileStatus(results.some((result) => result.status) ? "submission results updated" : "no matching submissions found");
     } catch (error) {
       if (!silent) setFileStatus(error instanceof Error ? error.message : String(error));
@@ -2916,17 +3048,33 @@ function App() {
     if (contestWasRunningRef.current && !contestRunning && contest) setContestOpen(true);
     contestWasRunningRef.current = contestRunning;
   }, [contestRunning]);
+  const problemsOfFolder = (folder: string) => (savedFiles.length ? savedFiles : tabs)
+    .filter((file) => fileKey(explorerParent(file.filename)) === fileKey(folder))
+    .sort((left, right) => explorerBasename(left.filename).localeCompare(explorerBasename(right.filename), undefined, { numeric: true }));
   const contestProblems = useMemo(() => {
     if (!contest) return [];
-    const files = savedFiles.length ? savedFiles : tabs;
-    return files
-      .filter((file) => explorerParent(file.filename) === contest.folder)
-      .sort((left, right) => explorerBasename(left.filename).localeCompare(explorerBasename(right.filename), undefined, { numeric: true }));
-  }, [contest?.folder, savedFiles, tabs]);
+    const excluded = new Set(contest.excluded);
+    return problemsOfFolder(contest.folder).filter((file) => !excluded.has(fileKey(file.filename)));
+  }, [contest?.folder, contest?.excluded, savedFiles, tabs]);
+  // What the next contest covers: a folder (the active file's until another is picked) minus
+  // the problems clicked away, so a contest needs no workspace of its own.
+  const [contestFolderChoice, setContestFolderChoice] = useState<string | null>(null);
+  const [contestExcluded, setContestExcluded] = useState<Set<string>>(() => new Set());
+  const contestFolderOptions = ["", ...workspaceDirectories];
+  const contestNextFolder = contestFolderChoice !== null && contestFolderOptions.some((directory) => fileKey(directory) === fileKey(contestFolderChoice))
+    ? contestFolderChoice
+    : activeTab ? explorerParent(activeTab.filename) : "";
+  const contestCandidates = contest ? [] : problemsOfFolder(contestNextFolder);
+  /** Accepted, and not by a submission from before the contest. */
+  const acceptedInContest = (file: ProblemTab) => {
+    if (!isAccepted(file.judgeStatus)) return false;
+    const before = contest?.acceptedBefore?.[fileKey(file.filename)];
+    return before === undefined || (before !== "" && Boolean(file.submissionUrl) && file.submissionUrl !== before);
+  };
   // A verdict of AC from the judge, first seen while the clock runs, is the solve time.
   useEffect(() => {
     if (!contest || !contestRunning) return;
-    const fresh = contestProblems.filter((file) => isAccepted(file.judgeStatus) && contest.solved[fileKey(file.filename)] === undefined);
+    const fresh = contestProblems.filter((file) => acceptedInContest(file) && contest.solved[fileKey(file.filename)] === undefined);
     if (!fresh.length) return;
     const elapsed = Date.now() - contest.startedAt;
     setContest((current) => current && { ...current, solved: { ...current.solved, ...Object.fromEntries(fresh.map((file) => [fileKey(file.filename), elapsed])) } });
@@ -2936,13 +3084,18 @@ function App() {
     localStorage.setItem("mild-contest-minutes", String(minutes));
     setContestMinutes(String(minutes));
     setClock(Date.now());
-    setContest({ startedAt: Date.now(), durationMin: minutes, folder: activeTab ? explorerParent(activeTab.filename) : "", solved: {} });
+    const excluded = contestCandidates.map((file) => fileKey(file.filename)).filter((key) => contestExcluded.has(key));
+    const acceptedBefore = Object.fromEntries(contestCandidates.filter((file) => isAccepted(file.judgeStatus)).map((file) => [fileKey(file.filename), file.submissionUrl || ""]));
+    setContest({ startedAt: Date.now(), durationMin: minutes, folder: contestNextFolder, solved: {}, ...(excluded.length ? { excluded } : {}), ...(Object.keys(acceptedBefore).length ? { acceptedBefore } : {}) });
+    setContestFolderChoice(null);
+    setContestExcluded(new Set());
   };
   /** What the board shows for one problem: the judge's word first, the local tests otherwise. */
   const contestProblemState = (file: ProblemTab): { tone: "solved" | "failed" | "ready" | "partial" | "idle"; label: string } => {
     const solvedAt = contest?.solved[fileKey(file.filename)];
-    if (solvedAt !== undefined || isAccepted(file.judgeStatus)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC" };
-    if (file.judgeStatus) return { tone: "failed", label: file.judgeStatus };
+    if (solvedAt !== undefined || acceptedInContest(file)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC" };
+    // An AC from before the contest says nothing about this attempt.
+    if (file.judgeStatus && !isAccepted(file.judgeStatus)) return { tone: "failed", label: file.judgeStatus };
     const open = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
     const results = (open?.id === activeTabId ? tests : open?.tests ?? []).filter((test) => finalVerdicts.includes(test.status));
     if (!results.length) return { tone: "idle", label: "" };
@@ -3401,7 +3554,8 @@ function App() {
         event.preventDefault();
         beginRenameSelection();
       }
-      if (isMac && event.metaKey && !event.altKey && event.key === "Backspace") {
+      // Finder deletes with Cmd+Backspace; Windows and Linux use Delete. Both ask first.
+      if ((isMac && event.metaKey && !event.altKey && event.key === "Backspace") || (!isMac && !event.ctrlKey && !event.altKey && event.key === "Delete" && !explorerRename)) {
         event.preventDefault();
         deleteExplorerSelection();
       }
@@ -3422,6 +3576,7 @@ function App() {
       else if (closeConfirmTabId) setCloseConfirmTabId(null);
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
       else if (deleteConfirmDirectory) setDeleteConfirmDirectory(null);
+      else if (moveEntry) setMoveEntry(null);
       else if (sourceFile) setSourceFile(null);
       else if (explorerRename) cancelExplorerRename();
       else if (folderNameOpen) setFolderNameOpen(false);
@@ -3436,7 +3591,7 @@ function App() {
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, moveEntry, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3550,7 +3705,7 @@ function App() {
         </div>];
       }
       return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
-        <button className="explorer-directory" style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
+        <button className={`explorer-directory ${explorerDrag?.over != null && fileKey(explorerDrag.over) === fileKey(node.path) ? "drop-target" : ""}`} data-drop-directory={node.path} onPointerDown={(event) => beginExplorerDrag({ kind: "directory", path: node.path }, node.name, event)} style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
           const next = new Set(items);
           const key = fileKey(node.path);
           if (next.has(key)) next.delete(key); else next.add(key);
@@ -3569,13 +3724,12 @@ function App() {
       </div>];
     }
     return [<div className="explorer-file-row" key={tab.id}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} onPointerDown={(event) => beginExplorerDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
         <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
         {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
       </button>
-      {workspacePath && <button className="explorer-delete" onClick={() => setDeleteConfirmFile(tab)} aria-label={`Delete ${tab.filename}`} title="delete file"><Icon name="close" size={12} /></button>}
     </div>];
   });
 
@@ -3788,6 +3942,21 @@ function App() {
           </aside>}
           {id === "editor" && <section className="editor-area" style={panelStyle(id)}>
           {panelGrip(id)}
+          {/* Inside the editor on purpose: the problem browser is a native view that would cover a notice floating over it. */}
+          {verdictNotices.length > 0 && <div className="verdict-notices" role="status" aria-live="polite">
+            {verdictNotices.map((notice) => {
+              const file = [...tabs, ...savedFiles].find((item) => fileKey(item.filename) === fileKey(notice.filename));
+              const dismiss = () => setVerdictNotices((items) => items.filter((item) => item.id !== notice.id));
+              return <div key={notice.id} className={`verdict-notice ${isAccepted(notice.status) ? "accepted" : "rejected"}`}>
+                <button className="verdict-notice-body" title={t("verdictOpen")} onClick={() => { if (file) openSavedFile(file); dismiss(); }}>
+                  <small>{t("verdictNotice")}</small>
+                  <strong>{notice.status}</strong>
+                  <span>{explorerBasename(notice.filename)}</span>
+                </button>
+                <button className="verdict-notice-close" aria-label={t("verdictDismiss")} title={t("verdictDismiss")} onClick={dismiss}><Icon name="close" size={12} /></button>
+              </div>;
+            })}
+          </div>}
           {tabs.length ? <>
           <Editor
             beforeMount={beforeMount}
@@ -3864,8 +4033,8 @@ function App() {
             <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
             <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
           </div>
-          <div className="explorer-files" onContextMenu={(event) => {
-            if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-delete, .explorer-metadata"))) return;
+          <div className={`explorer-files ${explorerDrag?.over === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
+            if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-metadata"))) return;
             event.preventDefault();
             setExplorerMenu({ x: event.clientX, y: event.clientY });
           }}>
@@ -3902,6 +4071,7 @@ function App() {
           <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>Duplicate</button>
           <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>Set problem source</button>
           <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>Rename</button>
+          <button role="menuitem" onClick={() => { setMoveEntry({ kind: "file", filename: explorerMenu.file!.filename }); setExplorerMenu(null); }}>{t("moveTo")}</button>
           <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>Delete</button>
         </> : explorerMenu.directory ? <>
           <button role="menuitem" onClick={() => beginBlankFile(explorerMenu.directory!)}>{t("newFile")}</button>
@@ -3909,6 +4079,7 @@ function App() {
           <div className="explorer-menu-separator" />
           <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>Open folder location</button>
           <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>Rename</button>
+          <button role="menuitem" onClick={() => { setMoveEntry({ kind: "directory", path: explorerMenu.directory! }); setExplorerMenu(null); }}>{t("moveTo")}</button>
           <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>Delete</button>
         </> : <>
           <button role="menuitem" onClick={() => beginBlankFile()}>{t("newFile")}</button>
@@ -4161,6 +4332,22 @@ function App() {
         </section>
       </div>}
 
+      {explorerDrag && <div className={`explorer-drag-ghost ${explorerDrag.over === null ? "" : "ok"}`} style={{ left: explorerDrag.x + 12, top: explorerDrag.y + 10 }}>{explorerDrag.label}{explorerDrag.over !== null && <small>→ {explorerDrag.over || t("contestWorkspaceRoot")}</small>}</div>}
+
+      {moveEntry && (() => {
+        const targets = ["", ...workspaceDirectories].filter((directory) => canMoveInto(moveEntry, directory)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
+        return <div className="modal-backdrop close-confirm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoveEntry(null); }}>
+          <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="move-entry-title">
+            <h2 id="move-entry-title">{t("moveTitle")} {explorerBasename(moveEntry.kind === "file" ? moveEntry.filename : moveEntry.path)}</h2>
+            <p>{targets.length ? t("moveHelp") : t("moveNoTargets")}</p>
+            <div className="move-folder-list">{targets.map((directory) => <button key={directory} onClick={() => { const entry = moveEntry; setMoveEntry(null); void moveExplorerEntry(entry, directory); }} title={directory || t("contestWorkspaceRoot")}>
+              <Icon name="folder" size={14} /><span>{directory || t("contestWorkspaceRoot")}</span>
+            </button>)}</div>
+            <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setMoveEntry(null)}>{t("cancel")}</button></footer>
+          </section>
+        </div>;
+      })()}
+
       {deleteConfirmDirectory && <div className="modal-backdrop close-confirm" role="presentation">
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-folder-confirm-title">
           <span className="eyebrow">delete folder</span>
@@ -4235,8 +4422,24 @@ function App() {
               <span><input type="number" min={1} max={1440} value={contestMinutes} onChange={(event) => setContestMinutes(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") startContest(); }} autoFocus /><small>{t("contestMinutes")}</small></span>
             </label>
             <div className="contest-presets">{[100, 120, 150, 300].map((minutes) => <button key={minutes} className={contestMinutes === String(minutes) ? "active" : ""} onClick={() => setContestMinutes(String(minutes))}>{minutes}</button>)}</div>
+            <label className="contest-folder">{t("contestFolder")}
+              <select value={contestNextFolder} onChange={(event) => { setContestFolderChoice(event.target.value); setContestExcluded(new Set()); }}>
+                {contestFolderOptions.map((directory) => <option key={directory} value={directory}>{directory || t("contestWorkspaceRoot")}</option>)}
+              </select>
+            </label>
+            <div className="contest-board contest-pick">
+              {contestCandidates.length ? contestCandidates.map((file) => {
+                const key = fileKey(file.filename);
+                const out = contestExcluded.has(key);
+                const words = explorerBasename(file.filename).replace(/\.[^.]+$/, "").split(/[_\s]/);
+                return <button key={file.id} className={`contest-problem ${out ? "excluded" : ""}`} aria-pressed={!out} onClick={() => setContestExcluded((items) => { const next = new Set(items); if (out) next.delete(key); else next.add(key); return next; })} title={file.title || file.filename}>
+                  <strong>{words[0]}</strong>
+                  <span>{words.slice(1).join(" ") || "—"}</span>
+                </button>;
+              }) : <p className="settings-help">{t("contestNoCandidates")}</p>}
+            </div>
             <footer>
-              <small>{activeTab ? explorerParent(activeTab.filename) || t("contestWorkspaceRoot") : t("contestWorkspaceRoot")}</small>
+              <small>{contestCandidates.length ? `${contestCandidates.filter((file) => !contestExcluded.has(fileKey(file.filename))).length}/${contestCandidates.length} · ${t("contestPick")}` : ""}</small>
               <button className="primary-button" onClick={startContest}><Icon name="timer" size={14} />{t("contestStart")}</button>
             </footer>
           </>}
