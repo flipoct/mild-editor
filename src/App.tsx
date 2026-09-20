@@ -555,7 +555,7 @@ const messages = {
     buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
     judging: "Judging", floatTolerance: "Floating-point tolerance", floatToleranceOff: "Off (exact match)", floatToleranceHelp: "When the expected output holds a decimal, an answer within this absolute or relative error is accepted. Integers and words are always compared exactly.",
     noWorkspace: "No workspace", unsavedWorkspace: "Unsaved workspace", snippetPlaceholder: "Snippet…", insert: "Insert", run: "Run", runTests: "Run tests", stop: "Stop", addTest: "Add test", errorTitle: "Something went wrong", theme: "Theme",
-    updates: "Updates", settingsBackup: "Backup", settingsBackupHelp: "Snippets, templates, themes, judge handles and compile flags live in this app's storage, which no backup reaches and which a reinstall can empty. Export writes them to one file; import puts them back and reloads. The open workspace, tabs and a running contest are left out.", settingsExport: "Export settings", settingsImport: "Import settings", settingsExported: "settings exported", settingsImportedCount: "settings restored — reloading", settingsImportWrongFile: "That file is not a Mild Editor settings backup.", releaseNotesTitle: "What's new", releaseNotesUpdated: "Updated to v", releaseNotesNone: "This release ships without notes. The changelog on GitHub has the details.", releaseNotesClose: "Got it", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
+    updates: "Updates", settingsBackup: "Backup", settingsBackupHelp: "Snippets, templates, themes, judge handles and compile flags live in this app's storage, which no backup reaches and which a reinstall can empty. Export writes them to one file; import puts them back and reloads. The open workspace, tabs and a running contest are left out.", settingsExport: "Export settings", settingsImport: "Import settings", settingsExported: "settings exported", settingsImported: "settings restored — reloading", settingsImportWrongFile: "That file is not a Mild Editor settings backup.", releaseNotesTitle: "What's new", releaseNotesUpdated: "Updated to v", releaseNotesNone: "This release ships without notes. The changelog on GitHub has the details.", releaseNotesClose: "Got it", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
     appearance: "Appearance", template: "Template", snippets: "Snippets", judge: "Online judges", languageServer: "Language server",
     preferences: "Preferences", interfaceLanguage: "Interface language", english: "English", korean: "Korean", interfaceScale: "Interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
@@ -566,7 +566,7 @@ const messages = {
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
     chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
-    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressCreateNew: "Create", stressCreate: "Create the files", stressMade: "Files created — write them, then press start.", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
+    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressCreateNew: "Create", stressCreate: "Create the files", stressMade: "Ready to be written", stressMadeNext: "Open each one, write it, then start the search.", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
     welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
     backgroundImage: "Background image", chooseBackground: "Choose image", clearBackground: "Remove image", acrylicOpacity: "Panel opacity", acrylicBlur: "Background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "No image selected",
@@ -590,7 +590,7 @@ const messages = {
     buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
     judging: "채점", floatTolerance: "실수 오차 허용", floatToleranceOff: "끔 (완전 일치)", floatToleranceHelp: "예상 출력에 소수가 있을 때, 절대 또는 상대 오차가 이 값 이내인 답을 정답으로 처리합니다. 정수와 문자열은 항상 그대로 비교합니다.",
     noWorkspace: "워크스페이스 없음", unsavedWorkspace: "저장되지 않은 워크스페이스", snippetPlaceholder: "스니펫…", insert: "삽입", run: "실행", runTests: "테스트 실행", stop: "중지", addTest: "테스트 추가", errorTitle: "문제가 발생했습니다", theme: "테마",
-    updates: "업데이트", settingsBackup: "백업", settingsBackupHelp: "스니펫, 템플릿, 테마, 저지 핸들, 컴파일 플래그는 이 앱의 저장소에만 있어서 어떤 백업에도 잡히지 않고, 재설치하면 사라질 수 있습니다. 내보내기는 이것들을 파일 하나로 저장하고, 불러오기는 되돌린 뒤 새로 고칩니다. 열린 워크스페이스와 탭, 진행 중인 컨테스트는 제외됩니다.", settingsExport: "설정 내보내기", settingsImport: "설정 불러오기", settingsExported: "설정을 내보냈습니다", settingsImportedCount: "설정을 되돌렸습니다 — 새로 고칩니다", settingsImportWrongFile: "Mild Editor 설정 백업 파일이 아닙니다.", releaseNotesTitle: "새로운 기능", releaseNotesUpdated: "업데이트 완료 — v", releaseNotesNone: "이번 릴리스에는 별도 설명이 없습니다. 자세한 내용은 GitHub 변경 내역을 참고하세요.", releaseNotesClose: "확인", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
+    updates: "업데이트", settingsBackup: "백업", settingsBackupHelp: "스니펫, 템플릿, 테마, 저지 핸들, 컴파일 플래그는 이 앱의 저장소에만 있어서 어떤 백업에도 잡히지 않고, 재설치하면 사라질 수 있습니다. 내보내기는 이것들을 파일 하나로 저장하고, 불러오기는 되돌린 뒤 새로 고칩니다. 열린 워크스페이스와 탭, 진행 중인 컨테스트는 제외됩니다.", settingsExport: "설정 내보내기", settingsImport: "설정 불러오기", settingsExported: "설정을 내보냈습니다", settingsImported: "설정을 되돌렸습니다 — 새로 고칩니다", settingsImportWrongFile: "Mild Editor 설정 백업 파일이 아닙니다.", releaseNotesTitle: "새로운 기능", releaseNotesUpdated: "업데이트 완료 — v", releaseNotesNone: "이번 릴리스에는 별도 설명이 없습니다. 자세한 내용은 GitHub 변경 내역을 참고하세요.", releaseNotesClose: "확인", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 시간 값은 이 컴퓨터의 시간대를 따릅니다. 기존 ${...} 문법도 계속 지원됩니다.",
@@ -601,7 +601,7 @@ const messages = {
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
-    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressCreateNew: "새로 만들기", stressCreate: "파일 만들기", stressMade: "파일을 만들었습니다 — 작성한 뒤 시작을 누르세요.", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressCreateNew: "새로 만들기", stressCreate: "파일 만들기", stressMade: "이제 작성하면 됩니다", stressMadeNext: "각 파일을 열어 작성한 뒤 탐색을 시작하세요.", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
@@ -661,6 +661,8 @@ function App() {
   const [stressRound, setStressRound] = useState(0);
   const [stressBusy, setStressBusy] = useState(false);
   const [stressOutcome, setStressOutcome] = useState<StressOutcome | null>(null);
+  /** Files the last press created, shown in the dialog so the next step is obvious. */
+  const [stressCreated, setStressCreated] = useState<string[]>([]);
   const [quickOpen, setQuickOpen] = useState<string | null>(null);
   const [quickOpenIndex, setQuickOpenIndex] = useState(0);
   const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; target: ExplorerDropTarget | null } | null>(null);
@@ -894,7 +896,10 @@ function App() {
       .slice(0, 40);
   }, [quickOpen, explorerFileSet]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed")].includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
+  const reportedStatuses = ["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated",
+    t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed"),
+    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported")];
+  const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
@@ -3060,7 +3065,7 @@ function App() {
       }
       const contents = JSON.stringify({ kind: SETTINGS_BACKUP_KIND, version: appVersion, savedAt: new Date().toISOString(), settings }, null, 2);
       await invoke("export_settings_file", { request: { path, contents } });
-      setFileStatus(`${t("settingsExported")} (${Object.keys(settings).length})`);
+      setFileStatus(t("settingsExported"));
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
     }
@@ -3084,7 +3089,7 @@ function App() {
         if (key && isPortableSetting(key)) localStorage.removeItem(key);
       }
       for (const [key, value] of entries) localStorage.setItem(key, value);
-      setFileStatus(`${entries.length} ${t("settingsImportedCount")}`);
+      setFileStatus(t("settingsImported"));
       // Almost every setting is read once at start-up, so the only honest way to apply a
       // restored set is to start again.
       window.setTimeout(() => window.location.reload(), 600);
@@ -3808,6 +3813,7 @@ function App() {
     if (!activeTab) return;
     setStressOpen(true);
     setStressOutcome(null);
+    setStressCreated([]);
     if (!workspacePath) return;
     const remembered = storedStressChoices()[fileKey(activeTab.filename)];
     const resolve = (role: StressRole) => {
@@ -3830,6 +3836,7 @@ function App() {
     // bare template, so there would be nothing to compare until it has been written.
     if (stressChoice.generator === STRESS_CREATE || stressChoice.reference === STRESS_CREATE) {
       const settled = { ...stressChoice };
+      const created: string[] = [];
       for (const role of ["generator", "reference"] as StressRole[]) {
         if (settled[role] !== STRESS_CREATE) continue;
         const filename = stressCompanionName(activeTab.filename, role, activeTab.language);
@@ -3838,6 +3845,7 @@ function App() {
         const already = savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
         try {
           settled[role] = already ? already.filename : await createStressCompanion(filename, activeTab.language);
+          if (!already) created.push(settled[role]);
         } catch (error) {
           setFileStatus(error instanceof Error ? error.message : String(error));
           return;
@@ -3845,7 +3853,7 @@ function App() {
       }
       await rescanWorkspaceFiles(false, true);
       setStressChoice(settled);
-      setFileStatus(t("stressMade"));
+      setStressCreated(created);
       return;
     }
     const pick = (filename: string) => savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
@@ -3863,6 +3871,7 @@ function App() {
     const runId = crypto.randomUUID();
     setStressBusy(true);
     setStressOutcome(null);
+    setStressCreated([]);
     setStressRound(0);
     const unlisten = await listen<{ runId: string; round: number }>("stress-progress", (event) => {
       if (event.payload.runId === runId) setStressRound(event.payload.round);
@@ -4863,6 +4872,18 @@ function App() {
                   <input type="number" min={1} max={100000} value={stressRounds} disabled={stressBusy} onChange={(event) => setStressRounds(event.target.value)} />
                 </label>
               </div>
+              {stressCreated.length > 0 && <div className="stress-result made">
+                <strong>{t("stressMade")}</strong>
+                <span>{t("stressMadeNext")}</span>
+                {stressCreated.map((filename) => {
+                  const file = savedFiles.find((item) => fileKey(item.filename) === fileKey(filename));
+                  return <button key={filename} className="stress-made-file" disabled={!file} onClick={() => { if (file) { openSavedFile(file); setStressOpen(false); } }}>
+                    <LanguageIcon language={file?.language || "cpp"} />
+                    <span>{explorerBasename(filename)}</span>
+                    <small>{t("stressEdit")}</small>
+                  </button>;
+                })}
+              </div>}
               {stressBusy && <p className="stress-progress">{t("stressRunning")} {stressRound}</p>}
               {stressOutcome?.kind === "passed" && <p className="stress-result ok">{t("stressPassed")} {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
               {stressOutcome?.kind === "stopped" && <p className="stress-result">{t("stop")} · {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
