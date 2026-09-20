@@ -492,6 +492,12 @@ const SETTINGS_BACKUP_KIND = "mild-editor-settings";
  * comes back to the generator and reference that were picked for it.
  */
 type StressChoice = Record<StressRole, string>;
+/**
+ * Stands in a dropdown for the file that does not exist yet. Nothing is written while the
+ * dialog is only being looked at: the file is created when the search is started, and only
+ * for a role still left on this.
+ */
+const STRESS_CREATE = "\u0000create";
 /** Per problem, not per workspace: each one has a generator and a reference of its own. */
 const stressChoiceKey = (workspace: string | null) => `mild-stress:${workspace ?? ""}`;
 type StressOutcome =
@@ -560,7 +566,7 @@ const messages = {
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
     chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
-    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressMade: "Created the generator and reference for this problem — write them, then start.", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
+    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressCreateNew: "Create", stressCreate: "Create the files", stressMade: "Files created — write them, then press start.", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
     welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
     backgroundImage: "Background image", chooseBackground: "Choose image", clearBackground: "Remove image", acrylicOpacity: "Panel opacity", acrylicBlur: "Background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "No image selected",
@@ -595,7 +601,7 @@ const messages = {
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
-    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressMade: "이 문제의 생성기와 기준 풀이를 만들었습니다 — 작성한 뒤 시작하세요.", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressCreateNew: "새로 만들기", stressCreate: "파일 만들기", stressMade: "파일을 만들었습니다 — 작성한 뒤 시작을 누르세요.", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
@@ -3792,31 +3798,24 @@ function App() {
    * it is; anything missing is created from the new-file template, so the dialog always
    * opens on two real files and the only thing left to do is write them.
    */
-  const openStressDialog = async () => {
+  /**
+   * Settles which file each role starts on: the one picked last time if it is still there,
+   * otherwise the problem's own helper if it has been written, otherwise `STRESS_CREATE`,
+   * which offers to make it. Nothing is written here — opening the dialog to look at it
+   * must not leave files behind.
+   */
+  const openStressDialog = () => {
     if (!activeTab) return;
     setStressOpen(true);
     setStressOutcome(null);
     if (!workspacePath) return;
-    const known = savedFiles;
     const remembered = storedStressChoices()[fileKey(activeTab.filename)];
-    const choice: StressChoice = { generator: "", reference: "" };
-    let made = false;
-    for (const role of ["generator", "reference"] as StressRole[]) {
-      // A file the user picked by hand last time wins, as long as it is still there.
+    const resolve = (role: StressRole) => {
       const chosen = remembered?.[role];
-      if (chosen && known.some((file) => fileKey(file.filename) === fileKey(chosen))) { choice[role] = chosen; continue; }
-      const existing = findStressCompanion(known, activeTab.filename, role);
-      if (existing) { choice[role] = existing.filename; continue; }
-      try {
-        choice[role] = await createStressCompanion(stressCompanionName(activeTab.filename, role, activeTab.language), activeTab.language);
-        made = true;
-      } catch (error) {
-        setFileStatus(error instanceof Error ? error.message : String(error));
-      }
-    }
-    await rescanWorkspaceFiles(false, true);
-    setStressChoice(choice);
-    if (made) setFileStatus(t("stressMade"));
+      if (chosen && savedFiles.some((file) => fileKey(file.filename) === fileKey(chosen))) return chosen;
+      return findStressCompanion(savedFiles, activeTab.filename, role)?.filename ?? STRESS_CREATE;
+    };
+    setStressChoice({ generator: resolve("generator"), reference: resolve("reference") });
   };
 
   /**
@@ -3827,6 +3826,28 @@ function App() {
    */
   const startStressTest = async () => {
     if (!activeTab || stressBusy || running) return;
+    // A role left on "create" gets its file now. The search does not follow: the file is a
+    // bare template, so there would be nothing to compare until it has been written.
+    if (stressChoice.generator === STRESS_CREATE || stressChoice.reference === STRESS_CREATE) {
+      const settled = { ...stressChoice };
+      for (const role of ["generator", "reference"] as StressRole[]) {
+        if (settled[role] !== STRESS_CREATE) continue;
+        const filename = stressCompanionName(activeTab.filename, role, activeTab.language);
+        // Something may have written that file since the dialog opened; taking it is right,
+        // overwriting it with a template is not.
+        const already = savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
+        try {
+          settled[role] = already ? already.filename : await createStressCompanion(filename, activeTab.language);
+        } catch (error) {
+          setFileStatus(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      await rescanWorkspaceFiles(false, true);
+      setStressChoice(settled);
+      setFileStatus(t("stressMade"));
+      return;
+    }
     const pick = (filename: string) => savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
     const generator = pick(stressChoice.generator);
     const reference = pick(stressChoice.reference);
@@ -3881,9 +3902,10 @@ function App() {
     setStressOpen(false);
   };
 
+  // The counterexample search shares the runner's cancel flag, so one stop serves both.
   const stopRun = () => {
-    if (!running) return;
-    runCancelledRef.current = true;
+    if (!running && !stressBusy) return;
+    if (running) runCancelledRef.current = true;
     void invoke("stop_run");
   };
 
@@ -4378,7 +4400,7 @@ function App() {
             </div>
             <div className="test-actions">
               <button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case"><Icon name="plus" size={14} /><span>{t("addTest")}</span></button>
-              <button className="add-test" onClick={() => void openStressDialog()} disabled={!activeTab || !workspacePath} title={t("stressHint")}><Icon name="flask" size={14} /><span>{t("stress")}</span></button>
+              <button className="add-test" onClick={openStressDialog} disabled={!activeTab || !workspacePath} title={t("stressHint")}><Icon name="flask" size={14} /><span>{t("stress")}</span></button>
             </div>
             </> : <div className="interactive-panel">
               <div className="interactive-log" ref={interactiveLogRef}>
@@ -4815,12 +4837,14 @@ function App() {
 
       {stressOpen && (() => {
         const candidates = savedFiles.filter((file) => fileKey(file.filename) !== fileKey(activeTab?.filename || ""));
+        const creating = stressChoice.generator === STRESS_CREATE || stressChoice.reference === STRESS_CREATE;
         const chooser = (which: StressRole) => {
-          const picked = savedFiles.find((file) => fileKey(file.filename) === fileKey(stressChoice[which]));
+          const picked = stressChoice[which] === STRESS_CREATE ? undefined : savedFiles.find((file) => fileKey(file.filename) === fileKey(stressChoice[which]));
+          const wouldCreate = activeTab ? stressCompanionName(activeTab.filename, which, activeTab.language) : "";
           return <label className="stress-field">{which === "generator" ? t("stressGenerator") : t("stressReference")}
             <span className="stress-picker">
               <select value={stressChoice[which]} disabled={stressBusy} onChange={(event) => setStressChoice((choice) => ({ ...choice, [which]: event.target.value }))}>
-                <option value="">—</option>
+                <option value={STRESS_CREATE}>{t("stressCreateNew")} · {explorerBasename(wouldCreate)}</option>
                 {candidates.map((file) => <option key={file.id} value={file.filename}>{file.filename}</option>)}
               </select>
               <button className="subtle-button" disabled={!picked} title={t("stressEdit")} aria-label={t("stressEdit")} onClick={() => { if (picked) { openSavedFile(picked); setStressOpen(false); } }}><Icon name="file" size={14} /></button>
@@ -4831,7 +4855,7 @@ function App() {
           <section className="confirm-dialog stress-dialog" role="dialog" aria-modal="true" aria-labelledby="stress-title">
             <h2 id="stress-title">{t("stress")}</h2>
             <p>{t("stressHelp")}</p>
-            {candidates.length ? <>
+            <>
               <div className="stress-fields">
                 {chooser("generator")}
                 {chooser("reference")}
@@ -4856,14 +4880,14 @@ function App() {
                   <div><small>{t("stressActual")}</small><pre className="stress-case">{stressOutcome.actual}</pre></div>
                 </div>
               </div>}
-            </> : <p className="settings-help">{t("stressNeedFiles")}</p>}
+            </>
             <footer className="settings-footer">
               <span className="footer-spacer" />
               {(stressOutcome?.kind === "mismatch" || (stressOutcome?.kind === "crashed" && stressOutcome.input)) && <button className="subtle-button" onClick={addStressCase}>{t("stressAddTest")}</button>}
               <button className="subtle-button" onClick={() => setStressOpen(false)} disabled={stressBusy}>{t("cancel")}</button>
               {stressBusy
                 ? <button className="danger-button" onClick={stopRun}>{t("stop")}</button>
-                : <button className="primary-button" onClick={() => void startStressTest()} disabled={!candidates.length || !stressChoice.generator || !stressChoice.reference}>{t("stressStart")}</button>}
+                : <button className="primary-button" onClick={() => void startStressTest()} disabled={!stressChoice.generator || !stressChoice.reference}>{creating ? t("stressCreate") : t("stressStart")}</button>}
             </footer>
           </section>
         </div>;

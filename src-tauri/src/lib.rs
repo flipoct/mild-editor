@@ -1127,16 +1127,19 @@ fn stress_search(request: &StressRequest, cancelled: &AtomicBool, progress: &dyn
         if round % 10 == 1 || round == rounds { progress(round); }
 
         let made = execute_with_cancel(&generator.0, &generator.1, &generator.2, "", time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
         if !made.ok {
             return Ok(StressOutcome::Crashed { rounds: done, program: "generator".into(), input: String::new(), message: crash_message(&made) });
         }
         let input = made.stdout;
 
         let expected = execute_with_cancel(&reference.0, &reference.1, &reference.2, &input, time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
         if !expected.ok {
             return Ok(StressOutcome::Crashed { rounds: done, program: "reference".into(), input, message: crash_message(&expected) });
         }
         let actual = execute_with_cancel(&solution.0, &solution.1, &solution.2, &input, time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
         if !actual.ok {
             // The solution falling over on this input is exactly what the search is for.
             return Ok(StressOutcome::Crashed { rounds: done, program: "solution".into(), input, message: crash_message(&actual) });
@@ -3326,6 +3329,24 @@ mod tests {
 
         // Cancelling stops it where it is.
         assert!(matches!(stress_search(&agreeing, &AtomicBool::new(true), &|_| {}), Ok(StressOutcome::Stopped { .. })));
+
+        // And the stop button works mid-search, which is the case that matters: the flag is
+        // set from another thread while the rounds are already running.
+        let long = StressRequest { rounds: 400, ..agreeing };
+        let flag = Arc::new(AtomicBool::new(false));
+        let raised = flag.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            raised.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let outcome = stress_search(&long, &flag, &|_| {}).expect("the search runs");
+        stopper.join().expect("stopper");
+        match outcome {
+            StressOutcome::Stopped { rounds } => assert!(rounds < 400, "stopped after {rounds} of 400"),
+            other => panic!("expected a stop, got {}", serde_json::to_string(&other).expect("outcome")),
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "the stop was not acted on promptly");
     }
 
     #[test]
