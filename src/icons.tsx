@@ -55,28 +55,32 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
   );
 }
 
-/** C++ logo, Simple Icons, CC0 1.0. */
-const CPP_LOGO = "M22.394 6c-.167-.29-.398-.543-.652-.69L12.926.22c-.509-.294-1.34-.294-1.848 0L2.26 5.31c-.508.293-.923 1.013-.923 1.6v10.18c0 .294.104.62.271.91.167.29.398.543.652.69l8.816 5.09c.508.293 1.34.293 1.848 0l8.816-5.09c.254-.147.485-.4.652-.69.167-.29.27-.616.27-.91V6.91c.003-.294-.1-.62-.268-.91zM12 19.11c-3.92 0-7.109-3.19-7.109-7.11 0-3.92 3.19-7.11 7.11-7.11a7.133 7.133 0 016.156 3.553l-3.076 1.78a3.567 3.567 0 00-3.08-1.78A3.56 3.56 0 008.444 12 3.56 3.56 0 0012 15.555a3.57 3.57 0 003.08-1.778l3.078 1.78A7.135 7.135 0 0112 19.11zm7.11-6.715h-.79v.79h-.79v-.79h-.79v-.79h.79v-.79h.79v.79h.79zm2.962 0h-.79v.79h-.79v-.79h-.79v-.79h.79v-.79h.79v.79h.79z";
-/** Python logo, Simple Icons, CC0 1.0. */
-const PYTHON_LOGO = "M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26.02.2-.01.13V8.5l-.05.63-.13.55-.21.46-.26.38-.3.31-.33.25-.35.19-.35.14-.33.1-.3.07-.26.04-.21.02H8.77l-.69.05-.59.14-.5.22-.41.27-.33.32-.27.35-.2.36-.15.37-.1.35-.07.32-.04.27-.02.21v3.06H3.17l-.21-.03-.28-.07-.32-.12-.35-.18-.36-.26-.36-.36-.35-.46-.32-.59-.28-.73-.21-.88-.14-1.05-.05-1.23.06-1.22.16-1.04.24-.87.32-.71.36-.57.4-.44.42-.33.42-.24.4-.16.36-.1.32-.05.24-.01h.16l.06.01h8.16v-.83H6.18l-.01-2.75-.02-.37.05-.34.11-.31.17-.28.25-.26.31-.23.38-.2.44-.18.51-.15.58-.12.64-.1.71-.06.77-.04.84-.02 1.27.05zm-6.3 1.98l-.23.33-.08.41.08.41.23.34.33.22.41.09.41-.09.33-.22.23-.34.08-.41-.08-.41-.23-.33-.33-.22-.41-.09-.41.09zm13.09 3.95l.28.06.32.12.35.18.36.27.36.35.35.47.32.59.28.73.21.88.14 1.04.05 1.23-.06 1.23-.16 1.04-.24.86-.32.71-.36.57-.4.45-.42.33-.42.24-.4.16-.36.09-.32.05-.24.02-.16-.01h-8.22v.82h5.84l.01 2.76.02.36-.05.34-.11.31-.17.29-.25.25-.31.24-.38.2-.44.17-.51.15-.58.13-.64.09-.71.07-.77.04-.84.01-1.27-.04-1.07-.14-.9-.2-.73-.25-.59-.3-.45-.33-.34-.34-.25-.34-.16-.33-.1-.3-.04-.25-.02-.2.01-.13v-5.34l.05-.64.13-.54.21-.46.26-.38.3-.32.33-.24.35-.2.35-.14.33-.1.3-.06.26-.04.21-.02.13-.01h5.84l.69-.05.59-.14.5-.21.41-.28.33-.32.27-.35.2-.36.15-.36.1-.35.07-.32.04-.28.02-.21V6.07h2.09l.14.01zm-6.47 14.25l-.23.33-.08.41.08.41.23.33.33.23.41.08.41-.08.33-.23.23-.33.08-.41-.08-.41-.23-.33-.33-.23-.41-.08-.41.08z";
-
 /**
- * The language marks beside a filename: the official C++ and Python logos, taken from
- * Simple Icons (https://simpleicons.org), whose icon files are released under CC0 1.0 —
- * public domain. The marks themselves remain trademarks of their owners and are used here
- * only to say which language a file is in.
+ * The language marks beside a filename, from Tabler Icons (https://tabler.io/icons),
+ * MIT licensed — Copyright (c) 2020-2026 Paweł Kuna. The marks themselves remain
+ * trademarks of their owners and are used here only to say which language a file is in.
  *
- * Each is one filled path on a 24px grid in `currentColor`, so a theme's `--cpp` and
- * `--python` decide the colour, and the counters inside the shape — the "C++" in the
- * hexagon, the snakes' eyes — are holes rather than a second colour, which keeps them
- * legible on every surface they appear on.
- *
- * They are drawn a little smaller than the icon set and slightly held back in `.language-icon`,
- * because a logo at full weight beside a filename is the heaviest thing on the row. Tracing
- * them as outlines instead was tried and abandoned: stroking a shape meant to be filled
- * doubles every contour, and the C++ hexagon stops reading as itself.
+ * Line art rather than solid: a filled logo is a block of colour beside a filename, and
+ * the open shape sits at the weight of everything else on the row. They are built exactly
+ * like the icon set above — 24px grid, `currentColor`, round caps — so a theme's `--cpp`
+ * and `--python` decide the colour and the stroke matches the rest of the interface.
  */
-export function LanguageIcon({ language, size = 14, className }: { language: string; size?: number; className?: string }) {
+const CPP_LOGO = [
+  "M18 12h4",
+  "M20 10v4",
+  "M11 12h4",
+  "M13 10v4",
+  "M9 9a3 3 0 0 0 -3 -3h-.5a3.5 3.5 0 0 0 -3.5 3.5v5a3.5 3.5 0 0 0 3.5 3.5h.5a3 3 0 0 0 3 -3",
+];
+const PYTHON_LOGO = [
+  "M12 9h-7a2 2 0 0 0 -2 2v4a2 2 0 0 0 2 2h3",
+  "M12 15h7a2 2 0 0 0 2 -2v-4a2 2 0 0 0 -2 -2h-3",
+  "M8 9v-4a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v5a2 2 0 0 1 -2 2h-4a2 2 0 0 0 -2 2v5a2 2 0 0 0 2 2h4a2 2 0 0 0 2 -2v-4",
+  "M11 6l0 .01",
+  "M13 18l0 .01",
+];
+
+export function LanguageIcon({ language, size = 16, className }: { language: string; size?: number; className?: string }) {
   const name = language === "python" ? "python" : "cpp";
   return (
     <svg
@@ -84,10 +88,15 @@ export function LanguageIcon({ language, size = 14, className }: { language: str
       width={size}
       height={size}
       viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       role="img"
       aria-label={name === "python" ? "Python" : "C++"}
     >
-      <path fill="currentColor" d={name === "cpp" ? CPP_LOGO : PYTHON_LOGO} />
+      {(name === "cpp" ? CPP_LOGO : PYTHON_LOGO).map((d) => <path key={d} d={d} />)}
     </svg>
   );
 }
