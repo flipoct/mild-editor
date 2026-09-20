@@ -1,5 +1,10 @@
 export type SourceLanguage = "cpp" | "python";
 
+/** A workspace path, always forward slashes and with no leading or trailing one. */
+export const normalizedExplorerPath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+export const explorerBasename = (path: string) => normalizedExplorerPath(path).split("/").at(-1) || path;
+export const explorerParent = (path: string) => normalizedExplorerPath(path).split("/").slice(0, -1).join("/");
+
 export const fileKey = (filename: string) => filename.trim().normalize("NFC").toLocaleLowerCase();
 
 const splitFilename = (filename: string) => {
@@ -148,4 +153,60 @@ export const importFolder = (
   const platform = platformFolder(problem.source);
   const contest = contestImport ? contestFolder(problem.source, problem.sourceUrl, problem.contest) : "";
   return contest ? `${platform}/${contest}/` : `${platform}/`;
+};
+
+/** Which of the two helpers a counterexample search needs. */
+export type StressRole = "generator" | "reference";
+
+/**
+ * The two helpers are named after the problem they belong to, so they sit beside it in the
+ * explorer and are obvious a month later: `B_Exit_Order_generator.cpp` next to
+ * `B_Exit_Order.cpp`. Opening the dialog on a helper resolves back to the problem's pair
+ * rather than naming a helper after a helper.
+ */
+export const STRESS_SUFFIX: Record<StressRole, string> = { generator: "_generator", reference: "_bruteforce" };
+export const stressStem = (filename: string) => explorerBasename(filename).replace(/\.[^.]+$/, "").replace(/_(generator|bruteforce)$/i, "");
+export const stressCompanionName = (solution: string, role: StressRole, language: SourceLanguage) => {
+  const parent = explorerParent(solution);
+  const leaf = `${stressStem(solution)}${STRESS_SUFFIX[role]}${language === "python" ? ".py" : ".cpp"}`;
+  return parent ? `${parent}/${leaf}` : leaf;
+};
+
+/** An existing helper for this problem, whatever extension it was written in. */
+export const findStressCompanion = <T extends { filename: string }>(files: T[], solution: string, role: StressRole) => {
+  const parent = fileKey(explorerParent(solution));
+  const wanted = fileKey(`${stressStem(solution)}${STRESS_SUFFIX[role]}`);
+  return files.find((file) => fileKey(explorerParent(file.filename)) === parent
+    && fileKey(explorerBasename(file.filename).replace(/\.[^.]+$/, "")) === wanted);
+};
+
+/**
+ * Scores `query` against a path the way a quick-open field is expected to: every typed
+ * character has to appear in order, and a run of them landing together, or on the start of
+ * the basename, scores better than the same characters scattered. Returns the matched
+ * positions so the row can show what the typing caught, or null when it does not match.
+ */
+export const fuzzyMatch = (path: string, query: string): { score: number; positions: number[] } | null => {
+  if (!query) return { score: 0, positions: [] };
+  const haystack = path.toLowerCase();
+  const needle = query.toLowerCase().replace(/\s+/g, "");
+  const positions: number[] = [];
+  let at = 0;
+  let score = 0;
+  let run = 0;
+  // Everything after the last separator is the filename, which is what people type.
+  const basenameStart = haystack.lastIndexOf("/") + 1;
+  for (const character of needle) {
+    const found = haystack.indexOf(character, at);
+    if (found < 0) return null;
+    run = found === at && positions.length ? run + 1 : 0;
+    score += 1 + run * 4;
+    if (found === basenameStart) score += 12;
+    else if (found >= basenameStart) score += 3;
+    if (found > 0 && /[^a-z0-9]/.test(haystack[found - 1])) score += 6;
+    positions.push(found);
+    at = found + 1;
+  }
+  // A short path that matched is likelier to be the one meant than a long one.
+  return { score: score - haystack.length * 0.05, positions };
 };

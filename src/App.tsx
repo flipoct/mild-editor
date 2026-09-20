@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Icon } from "./icons";
+import { Icon, LanguageIcon } from "./icons";
 import { DEFAULT_FLOAT_TOLERANCE, diffLines, outputsMatch, splitFlags } from "./judge";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
@@ -8,12 +8,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
-import { fileKey, importFolder, importedFilename, mexFilename, problemIdentity } from "./fileNaming";
+import { STRESS_SUFFIX, explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
 import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
@@ -30,7 +30,7 @@ type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" |
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 type UiLocale = "en" | "ko";
 type WallpaperLayout = "cover" | "contain" | "stretch" | "original" | "tile" | "custom";
-type ExplorerSort = "modified" | "problem" | "name";
+type ExplorerSort = "modified" | "problem" | "name" | "custom";
 type EditorFont = string;
 type EditorFontOption = { id: string; label: string; family: string; path?: string };
 
@@ -127,6 +127,10 @@ type ProblemTab = {
   submissionUrl?: string;
   limits?: ProblemLimits;
   modifiedAt?: number;
+  /** Where the file sits in its folder when the explorer is sorted by hand. */
+  order?: number;
+  /** Every verdict the judge has reported for this problem, oldest first. */
+  submissions?: SubmissionRecord[];
 };
 
 type LoadedProblem = {
@@ -151,6 +155,8 @@ type LoadedWorkspace = {
     judgeStatus?: string;
     limits?: ProblemLimits;
     modifiedAt: number;
+    order?: number;
+    submissions?: SubmissionRecord[];
   }>;
 };
 
@@ -177,12 +183,24 @@ type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[
 type ExplorerMenu = { file?: ProblemTab; directory?: string; x: number; y: number };
 /** Explorer row the menu bar acts on. Files and folders share one slot. */
 type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory"; path: string } | null;
+/**
+ * Where a dragged row would land. `into` puts it in a folder and leaves the order to the
+ * chosen sort; `between` is a slot among the files a folder shows, which also arranges
+ * them by hand. `line` is the rectangle the insertion mark is drawn on, in client pixels.
+ */
+type ExplorerDropTarget =
+  | { kind: "into"; directory: string }
+  | { kind: "between"; directory: string; index: number; line: { x: number; width: number; y: number } };
 /** Explorer row whose name is being edited in place. */
 type ExplorerRename = { kind: "file"; filename: string } | { kind: "directory"; path: string };
 type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
-type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number };
+type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number; order?: number; submissions?: SubmissionRecord[] };
 
-type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
+/** One submission as a judge reported it; `at` is its time in seconds, 0 when unknown. */
+type SubmissionRecord = { status: string; url?: string; at: number };
+type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[] };
+/** ICPC scoring: twenty minutes on the clock for each rejected try before the one that solved it. */
+const CONTEST_PENALTY_MINUTES = 20;
 type BackgroundImageFile = { bytes: number[]; mime: string };
 
 type CompanionProblem = {
@@ -342,9 +360,6 @@ const isContestImportUrl = (rawUrl: string) => {
   } catch { return false; }
 };
 const defaultFilename = (index: number, language: Language = "cpp") => `${index < 26 ? String.fromCharCode(65 + index) : `problem${index + 1}`}.${language === "cpp" ? "cpp" : "py"}`;
-const normalizedExplorerPath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-const explorerBasename = (path: string) => normalizedExplorerPath(path).split("/").at(-1) || path;
-const explorerParent = (path: string) => normalizedExplorerPath(path).split("/").slice(0, -1).join("/");
 /** Whether `entry` can go into `target` ("" is the root): not where it already is, and no folder into itself. */
 const canMoveInto = (entry: NonNullable<ExplorerSelection>, target: string) => {
   const targetKey = fileKey(normalizedExplorerPath(target));
@@ -461,6 +476,68 @@ const IS_DEV_BUILD = import.meta.env.DEV;
 // under its own app data directory, so testing an import cannot disturb the folder the
 // installed app is working in.
 const WORKSPACE_KEY = IS_DEV_BUILD ? "mild-dev-last-workspace" : "mild-last-workspace";
+/**
+ * Settings that belong to this machine's session rather than to the user's setup: which
+ * workspace was open, which tabs, which folders were folded, a contest in progress. A
+ * backup restored on another machine should not drag these along, and `:` marks the ones
+ * that are keyed by workspace path.
+ */
+const SESSION_SETTING_KEYS = ["mild-last-workspace", "mild-dev-last-workspace", "mild-last-open-tabs", "mild-dev-last-open-tabs", "mild-release-notes"];
+const isPortableSetting = (key: string) => key.startsWith("mild-") && !key.includes(":") && !SESSION_SETTING_KEYS.includes(key);
+/** Marks a file as ours, so importing the wrong JSON says so instead of wiping the setup. */
+const SETTINGS_BACKUP_KIND = "mild-editor-settings";
+
+/**
+ * The pair of files a counterexample search uses, remembered per problem so the dialog
+ * comes back to the generator and reference that were picked for it.
+ */
+type StressChoice = Record<StressRole, string>;
+/**
+ * Stands in a dropdown for the file that does not exist yet. Nothing is written while the
+ * dialog is only being looked at: the file is created when the search is started, and only
+ * for a role still left on this.
+ */
+const STRESS_CREATE = "\u0000create";
+/** Per problem, not per workspace: each one has a generator and a reference of its own. */
+const stressChoiceKey = (workspace: string | null) => `mild-stress:${workspace ?? ""}`;
+type StressOutcome =
+  | { kind: "mismatch"; rounds: number; input: string; expected: string; actual: string }
+  | { kind: "passed"; rounds: number }
+  | { kind: "compileError"; program: string; message: string }
+  | { kind: "crashed"; rounds: number; program: string; input: string; message: string }
+  | { kind: "stopped"; rounds: number };
+
+/** Release notes parked by an update for the build that comes up after it. */
+const RELEASE_NOTES_KEY = "mild-release-notes";
+
+/**
+ * The little of GitHub's release markdown that the notes actually use: a heading, bullets,
+ * and paragraphs, with `**bold**` reduced to strong text. Anything else is shown as
+ * written rather than guessed at — these notes come from a release this build did not
+ * compose, so the safe reading of an unknown line is that it is a line of prose.
+ */
+const renderReleaseNotes = (notes: string): ReactNode[] => {
+  const blocks: ReactNode[] = [];
+  let bullets: string[] = [];
+  const emphasise = (text: string) => text.split(/\*\*([^*]+)\*\*/g).map((part, index) => index % 2 ? <strong key={index}>{part}</strong> : part);
+  const flush = () => {
+    if (!bullets.length) return;
+    blocks.push(<ul key={`list-${blocks.length}`}>{bullets.map((item, index) => <li key={index}>{emphasise(item)}</li>)}</ul>);
+    bullets = [];
+  };
+  for (const line of notes.replace(/\r\n/g, "\n").split("\n")) {
+    const text = line.trim();
+    if (!text) { flush(); continue; }
+    const bullet = text.match(/^[-*]\s+(.*)$/);
+    if (bullet) { bullets.push(bullet[1]); continue; }
+    flush();
+    const heading = text.match(/^#+\s+(.*)$/);
+    if (heading) blocks.push(<h3 key={`heading-${blocks.length}`}>{heading[1]}</h3>);
+    else blocks.push(<p key={`text-${blocks.length}`}>{emphasise(text)}</p>);
+  }
+  flush();
+  return blocks;
+};
 const OPEN_TABS_KEY = IS_DEV_BUILD ? "mild-dev-last-open-tabs" : "mild-last-open-tabs";
 const UPDATES_SUPPORTED = "__TAURI_INTERNALS__" in window && !IS_DEV_BUILD;
 
@@ -472,13 +549,13 @@ type UpdateStatus = { phase: UpdatePhase; version?: string; notes?: string; rece
 const messages = {
   en: {
     submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.", submitPressing: "Submitting…", submitPressed: "Submitted — the judge is judging", submitUnverified: "Not submitted — the filled form did not check out", submitPressUnconfirmed: "The submit button was pressed, but the judge did not move on — check the problem browser", submitCheckForm: "the submit form is not on the page", submitCheckProblem: "a different problem is selected", submitCheckLanguage: "no language of the file's family is selected", submitCheckCode: "the source in the form is not the file's", submitCheckButton: "the submit button is missing or disabled", submitCheckTimeout: "the page did not answer",
-    contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root", contestFolder: "Problems from", contestPick: "click a problem to leave it out", contestNoCandidates: "No problems in this folder yet — ones imported into it later join the contest.",
+    contest: "Contest", contestNew: "Start a contest", contestHelp: "A countdown in the status bar and a board of the problems in the current folder. A problem is marked solved, with its time, when the judge reports AC.", contestDuration: "Duration", contestMinutes: "minutes", contestStart: "Start", contestEnd: "End contest", contestRemaining: "Remaining", contestElapsed: "Elapsed", contestOver: "Time's up", contestSolved: "solved", contestReady: "Ready", contestNoProblems: "No problems in this folder yet. Import the contest and they appear here.", contestWorkspaceRoot: "Workspace root", contestTries: "rejected tries", contestPenalty: "penalty", contestFolder: "Problems from", contestPick: "click a problem to leave it out", contestNoCandidates: "No problems in this folder yet — ones imported into it later join the contest.",
     moveTo: "Move to…", moveTitle: "Move", moveHelp: "Choose the folder it goes into. Dragging it onto a folder in the explorer does the same.", moveNoTargets: "There is no other folder to move it to. Create one first.", verdictNotice: "Submission result", verdictOpen: "Open this problem", verdictDismiss: "Dismiss",
     timeLimit: "Time limit", memoryLimit: "Memory limit", debugTimeNote: "The Debug profile runs with three times the time limit, because an unoptimised build is that much slower.", compileProfile: "Compile profile",
     buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
     judging: "Judging", floatTolerance: "Floating-point tolerance", floatToleranceOff: "Off (exact match)", floatToleranceHelp: "When the expected output holds a decimal, an answer within this absolute or relative error is accepted. Integers and words are always compared exactly.",
     noWorkspace: "No workspace", unsavedWorkspace: "Unsaved workspace", snippetPlaceholder: "Snippet…", insert: "Insert", run: "Run", runTests: "Run tests", stop: "Stop", addTest: "Add test", errorTitle: "Something went wrong", theme: "Theme",
-    updates: "Updates", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
+    updates: "Updates", settingsBackup: "Backup", settingsBackupHelp: "Snippets, templates, themes, judge handles and compile flags live in this app's storage, which no backup reaches and which a reinstall can empty. Export writes them to one file; import puts them back and reloads. The open workspace, tabs and a running contest are left out.", settingsExport: "Export settings", settingsImport: "Import settings", settingsExported: "settings exported", settingsImported: "settings restored — reloading", settingsImportWrongFile: "That file is not a Mild Editor settings backup.", releaseNotesTitle: "What's new", releaseNotesUpdated: "Updated to v", releaseNotesNone: "This release ships without notes. The changelog on GitHub has the details.", releaseNotesClose: "Got it", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
     appearance: "Appearance", template: "Template", snippets: "Snippets", judge: "Online judges", languageServer: "Language server",
     preferences: "Preferences", interfaceLanguage: "Interface language", english: "English", korean: "Korean", interfaceScale: "Interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
@@ -489,7 +566,7 @@ const messages = {
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
     chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
-    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
+    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressCreateNew: "Create", stressCreate: "Create the files", stressMade: "Ready to be written", stressMadeNext: "Write them, then come back and start the search.", stressOpenMade: "Open them for editing", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
     welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
     backgroundImage: "Background image", chooseBackground: "Choose image", clearBackground: "Remove image", acrylicOpacity: "Panel opacity", acrylicBlur: "Background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "No image selected",
@@ -507,13 +584,13 @@ const messages = {
   },
   ko: {
     submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.", submitPressing: "제출하는 중…", submitPressed: "제출했습니다 — 채점 중", submitUnverified: "제출하지 않음 — 채워진 양식이 확인을 통과하지 못했습니다", submitPressUnconfirmed: "제출 버튼을 눌렀지만 저지가 넘어가지 않았습니다 — 문제 브라우저를 확인하세요", submitCheckForm: "페이지에 제출 양식이 없음", submitCheckProblem: "다른 문제가 선택되어 있음", submitCheckLanguage: "파일 언어 계열이 선택되지 않음", submitCheckCode: "양식의 소스가 파일과 다름", submitCheckButton: "제출 버튼이 없거나 비활성", submitCheckTimeout: "페이지가 응답하지 않음",
-    contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트", contestFolder: "문제 폴더", contestPick: "클릭해서 제외", contestNoCandidates: "이 폴더에 아직 문제가 없습니다. 나중에 이 폴더로 가져온 문제는 컨테스트에 포함됩니다.",
+    contest: "컨테스트", contestNew: "컨테스트 시작", contestHelp: "상태바에 남은 시간이 표시되고, 현재 폴더의 문제들이 보드로 정리됩니다. 저지가 AC를 알려주면 그 문제는 걸린 시간과 함께 해결로 표시됩니다.", contestDuration: "진행 시간", contestMinutes: "분", contestStart: "시작", contestEnd: "컨테스트 종료", contestRemaining: "남은 시간", contestElapsed: "경과", contestOver: "종료", contestSolved: "해결", contestReady: "준비됨", contestNoProblems: "이 폴더에 아직 문제가 없습니다. 대회를 가져오면 여기에 표시됩니다.", contestWorkspaceRoot: "워크스페이스 루트", contestTries: "번 틀림", contestPenalty: "페널티", contestFolder: "문제 폴더", contestPick: "클릭해서 제외", contestNoCandidates: "이 폴더에 아직 문제가 없습니다. 나중에 이 폴더로 가져온 문제는 컨테스트에 포함됩니다.",
     moveTo: "이동…", moveTitle: "이동", moveHelp: "옮길 폴더를 선택하세요. 탐색기에서 폴더 위로 끌어다 놓아도 됩니다.", moveNoTargets: "옮길 수 있는 다른 폴더가 없습니다. 먼저 폴더를 만드세요.", verdictNotice: "제출 결과", verdictOpen: "이 문제 열기", verdictDismiss: "닫기",
     timeLimit: "시간 제한", memoryLimit: "메모리 제한", debugTimeNote: "Debug 프로필은 최적화 없는 빌드가 그만큼 느리기 때문에 시간 제한의 3배로 실행합니다.", compileProfile: "컴파일 프로필",
     buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
     judging: "채점", floatTolerance: "실수 오차 허용", floatToleranceOff: "끔 (완전 일치)", floatToleranceHelp: "예상 출력에 소수가 있을 때, 절대 또는 상대 오차가 이 값 이내인 답을 정답으로 처리합니다. 정수와 문자열은 항상 그대로 비교합니다.",
     noWorkspace: "워크스페이스 없음", unsavedWorkspace: "저장되지 않은 워크스페이스", snippetPlaceholder: "스니펫…", insert: "삽입", run: "실행", runTests: "테스트 실행", stop: "중지", addTest: "테스트 추가", errorTitle: "문제가 발생했습니다", theme: "테마",
-    updates: "업데이트", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
+    updates: "업데이트", settingsBackup: "백업", settingsBackupHelp: "스니펫, 템플릿, 테마, 저지 핸들, 컴파일 플래그는 이 앱의 저장소에만 있어서 어떤 백업에도 잡히지 않고, 재설치하면 사라질 수 있습니다. 내보내기는 이것들을 파일 하나로 저장하고, 불러오기는 되돌린 뒤 새로 고칩니다. 열린 워크스페이스와 탭, 진행 중인 컨테스트는 제외됩니다.", settingsExport: "설정 내보내기", settingsImport: "설정 불러오기", settingsExported: "설정을 내보냈습니다", settingsImported: "설정을 되돌렸습니다 — 새로 고칩니다", settingsImportWrongFile: "Mild Editor 설정 백업 파일이 아닙니다.", releaseNotesTitle: "새로운 기능", releaseNotesUpdated: "업데이트 완료 — v", releaseNotesNone: "이번 릴리스에는 별도 설명이 없습니다. 자세한 내용은 GitHub 변경 내역을 참고하세요.", releaseNotesClose: "확인", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 시간 값은 이 컴퓨터의 시간대를 따릅니다. 기존 ${...} 문법도 계속 지원됩니다.",
@@ -524,7 +601,7 @@ const messages = {
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
-    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressCreateNew: "새로 만들기", stressCreate: "파일 만들기", stressMade: "이제 작성하면 됩니다", stressMadeNext: "작성한 뒤 다시 들어와 탐색을 시작하세요.", stressOpenMade: "열어서 편집하기", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
@@ -577,8 +654,22 @@ function App() {
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<ProblemTab | null>(null);
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
   const [moveEntry, setMoveEntry] = useState<NonNullable<ExplorerSelection> | null>(null);
-  const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; over: string | null } | null>(null);
-  const explorerDragRef = useRef<{ entry: NonNullable<ExplorerSelection>; label: string; startX: number; startY: number; active: boolean; over: string | null } | null>(null);
+  /** Quick open (Ctrl+P): the typed query, and which row the arrow keys are on. */
+  const [stressOpen, setStressOpen] = useState(false);
+  const [stressChoice, setStressChoice] = useState<StressChoice>({ generator: "", reference: "" });
+  const [stressRounds, setStressRounds] = useState(() => localStorage.getItem("mild-stress-rounds") || "300");
+  const [stressRound, setStressRound] = useState(0);
+  const [stressBusy, setStressBusy] = useState(false);
+  const [stressOutcome, setStressOutcome] = useState<StressOutcome | null>(null);
+  /** Files the last press created, shown in the dialog so the next step is obvious. */
+  const [stressCreated, setStressCreated] = useState<string[]>([]);
+  const [quickOpen, setQuickOpen] = useState<string | null>(null);
+  const [quickOpenIndex, setQuickOpenIndex] = useState(0);
+  const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; target: ExplorerDropTarget | null } | null>(null);
+  const explorerDragRef = useRef<{ entry: NonNullable<ExplorerSelection>; label: string; startX: number; startY: number; active: boolean; target: ExplorerDropTarget | null } | null>(null);
+  /** Filenames of closed tabs, newest first, for Ctrl+Shift+T. Only the name is kept: the
+   * file is read from the workspace again, so reopening never resurrects stale code. */
+  const closedTabsRef = useRef<string[]>([]);
   /** Set for the click that ends a drag, so dropping a row does not also open or fold it. */
   const explorerDragClickRef = useRef(false);
   const [verdictNotices, setVerdictNotices] = useState<VerdictNotice[]>([]);
@@ -622,6 +713,12 @@ function App() {
   // against; package.json is only the fallback for the browser preview.
   const [appVersion, setAppVersion] = useState(APP_VERSION);
   const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
+  /**
+   * The release notes of the version now running, shown once after an update replaced the
+   * app under it. They are kept from the moment the download finished, because by the time
+   * the new build starts there is nothing left to ask: the updater has already handed over.
+   */
+  const [releaseNotes, setReleaseNotes] = useState<{ version: string; notes?: string } | null>(null);
   const pendingUpdateRef = useRef<AvailableUpdate | null>(null);
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
@@ -727,18 +824,29 @@ function App() {
           : `${wallpaperScale}% auto`;
   const wallpaperRepeat = wallpaperLayout === "tile" ? "repeat" : "no-repeat";
   const wallpaperPosition = `${wallpaperPositionX}% ${wallpaperPositionY}%`;
-  const explorerFiles = useMemo(() => {
-    const files = workspacePath
+  const explorerFileSet = useMemo(() => workspacePath
       ? [...savedFiles.map((saved) => tabs.find((tab) => fileKey(tab.filename) === fileKey(saved.filename)) || saved), ...tabs.filter((tab) => !savedFiles.some((saved) => fileKey(saved.filename) === fileKey(tab.filename)))]
-      : tabs;
-    const filtered = explorerSource === "all" ? files : files.filter((file) => (file.source || "other") === explorerSource);
+      : tabs, [savedFiles, tabs, workspacePath]);
+  const sortExplorerFiles = (files: ProblemTab[]) => {
     const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-    return [...filtered].sort((left, right) => {
+    return [...files].sort((left, right) => {
       if (explorerSort === "modified") return (right.modifiedAt || 0) - (left.modifiedAt || 0) || natural.compare(left.filename, right.filename);
       if (explorerSort === "name") return natural.compare(left.title || left.filename, right.title || right.filename);
+      // Hand-arranged files come first, in the order they were dragged into; the rest keep
+      // the problem-number order behind them, so a folder never has to be arranged in full.
+      if (explorerSort === "custom" && (left.order !== undefined || right.order !== undefined)) {
+        if (left.order === undefined) return 1;
+        if (right.order === undefined) return -1;
+        if (left.order !== right.order) return left.order - right.order;
+      }
       return natural.compare(left.filename.replace(/\.[^.]+$/, ""), right.filename.replace(/\.[^.]+$/, "")) || natural.compare(left.filename, right.filename);
     });
-  }, [explorerSort, explorerSource, savedFiles, tabs, workspacePath]);
+  };
+  const sortExplorerFilesRef = useRef(sortExplorerFiles);
+  sortExplorerFilesRef.current = sortExplorerFiles;
+  const explorerFiles = useMemo(
+    () => sortExplorerFilesRef.current(explorerSource === "all" ? explorerFileSet : explorerFileSet.filter((file) => (file.source || "other") === explorerSource)),
+    [explorerSort, explorerSource, explorerFileSet]);
   const explorerTree = useMemo(() => {
     type DirectoryNode = Extract<ExplorerTreeNode, { kind: "directory" }>;
     const root: DirectoryNode = { kind: "directory", name: "", path: "", children: [] };
@@ -775,8 +883,23 @@ function App() {
     sortChildren(root);
     return root.children;
   }, [explorerFiles, workspaceDirectories]);
+  /** The files a quick-open query matches, best first and capped so the list stays short. */
+  const quickOpenMatches = useMemo(() => {
+    if (quickOpen === null) return [];
+    const query = quickOpen.trim();
+    return explorerFileSet
+      .map((file) => ({ file, match: fuzzyMatch(file.filename, query) }))
+      .filter((row): row is { file: ProblemTab; match: NonNullable<ReturnType<typeof fuzzyMatch>> } => row.match !== null)
+      .sort((left, right) => right.match.score - left.match.score
+        // With nothing typed the list is simply the most recently touched files.
+        || (right.file.modifiedAt || 0) - (left.file.modifiedAt || 0))
+      .slice(0, 40);
+  }, [quickOpen, explorerFileSet]);
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
-  const hasFileStatusError = !["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated", t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed")].includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
+  const reportedStatuses = ["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated",
+    t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed"),
+    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported")];
+  const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ");
 
   useEffect(() => {
@@ -856,9 +979,12 @@ function App() {
     else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
   }, [uiZoom]);
 
+  // True once the running build has told us its version. Anything that compares against
+  // it has to wait: until then `appVersion` is only what package.json said at build time.
+  const [appVersionResolved, setAppVersionResolved] = useState(!("__TAURI_INTERNALS__" in window));
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    void getAppVersion().then(setAppVersion).catch(() => undefined);
+    void getAppVersion().then(setAppVersion).catch(() => undefined).finally(() => setAppVersionResolved(true));
   }, []);
 
   // One check per launch, a few seconds in so it never competes with opening the workspace.
@@ -1169,11 +1295,22 @@ function App() {
     activateTab(file);
   };
 
+  /** Opens every one of `files` as a tab and leaves the first of them in front. */
+  const openSavedFiles = (files: ProblemTab[]) => {
+    if (!files.length) return;
+    const fresh = files.filter((file) => !tabs.some((tab) => fileKey(tab.filename) === fileKey(file.filename)));
+    if (fresh.length) setTabs((items) => [...items, ...fresh]);
+    const first = files[0];
+    const focus = tabs.find((tab) => fileKey(tab.filename) === fileKey(first.filename)) || first;
+    setExplorerSelection({ kind: "file", filename: focus.filename });
+    activateTab(focus);
+  };
+
   const makeTab = (file: WorkspaceFileResult): ProblemTab => ({
     id: crypto.randomUUID(), title: file.title, filename: file.filename, language: file.language,
     codes: { cpp: storedTemplate("cpp", file.source || "other"), python: storedTemplate("python", file.source || "other"), [file.language]: file.code },
     tests: hydrateTests(file.tests),
-    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt,
+    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt, order: file.order, submissions: file.submissions,
   });
 
   const changeActiveLanguage = async (next: Language) => {
@@ -1256,17 +1393,18 @@ function App() {
     } catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
 
-  const commitWorkspaceRename = async (original: ProblemTab, requestedFilename: string) => {
-    if (!workspacePath) return;
+  /** Returns the name the file now has, or null when nothing was renamed. */
+  const commitWorkspaceRename = async (original: ProblemTab, requestedFilename: string): Promise<string | null> => {
+    if (!workspacePath) return null;
     const typed = requestedFilename.trim();
-    if (!typed) return;
+    if (!typed) return null;
     if (!languageFromFilename(typed) && /\.[^./\\]+$/.test(explorerBasename(typed))) {
       setFileStatus("Use a .cpp, .cc, .cxx or .py extension, or leave it off.");
-      return;
+      return null;
     }
     // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
     const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
-    if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return;
+    if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return original.filename;
     const occupied = [...savedFiles, ...tabs]
       .filter((file) => file.id !== original.id && fileKey(file.filename) !== fileKey(original.filename))
       .map((file) => file.filename);
@@ -1277,7 +1415,7 @@ function App() {
       if (activeTab?.id === original.id && nextLanguage) setLanguage(nextLanguage);
       setFileStatus("saved");
       setAutoSaveRevision((revision) => revision + 1);
-      return;
+      return filename;
     }
     try {
       const result = await invoke<WorkspaceFileResult>("rename_workspace_file", { request: { folderPath: workspacePath, filename: original.filename, newFilename: filename } });
@@ -1297,10 +1435,12 @@ function App() {
         acceptedBefore: current.acceptedBefore && Object.fromEntries(Object.entries(current.acceptedBefore).map(([key, url]) => [rekey(key), url])),
       });
       setFileStatus("saved");
+      return result.filename;
     } catch (error) {
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename: original.filename, language: original.language } : tab));
       if (activeTab?.id === original.id) setLanguage(original.language);
       setFileStatus(error instanceof Error ? error.message : String(error));
+      return null;
     }
   };
 
@@ -1338,6 +1478,46 @@ function App() {
     try { await invoke("open_workspace_folder_location", { request: { folderPath: workspacePath, directory } }); }
     catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
+
+  /**
+   * Picks up whatever changed in the folder behind the editor's back. `.mild-editor.json`
+   * is only reconciled with the disk by a scan, and the one in `load_workspace` runs at
+   * start-up, so a file dropped in by another program — an unzipped contest, a copy from a
+   * terminal — would otherwise stay invisible until the workspace was opened again. Open
+   * tabs keep their own text; only the saved-file list is rebuilt.
+   */
+  const lastRescanRef = useRef(0);
+  const rescanWorkspaceFiles = async (announce = false, force = false) => {
+    if (!workspacePath) return;
+    if (!announce && !force && Date.now() - lastRescanRef.current < 3000) return;
+    lastRescanRef.current = Date.now();
+    try {
+      const files = await invoke<WorkspaceFileResult[]>("reload_workspace_files", { request: { folderPath: workspacePath } });
+      setSavedFiles((current) => files.map((file) => {
+        // A file the editor already knew keeps its tab identity, so a scan that found
+        // nothing new leaves every binding to it — an open tab, the contest board — alone.
+        const known = current.find((item) => fileKey(item.filename) === fileKey(file.filename));
+        return known ? { ...known, ...makeTab(file), id: known.id } : makeTab(file);
+      }));
+      await refreshWorkspaceDirectories(workspacePath);
+      if (announce) setFileStatus(t("explorerRescanned"));
+    } catch (error) {
+      if (announce) setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const rescanWorkspaceFilesRef = useRef(rescanWorkspaceFiles);
+  rescanWorkspaceFilesRef.current = rescanWorkspaceFiles;
+  // Coming back to the editor is when a change made elsewhere matters, and it is the one
+  // moment a scan cannot be mistaken for the editor reacting to its own writes.
+  useEffect(() => {
+    const rescan = () => { if (document.visibilityState === "visible") void rescanWorkspaceFilesRef.current(); };
+    window.addEventListener("focus", rescan);
+    document.addEventListener("visibilitychange", rescan);
+    return () => {
+      window.removeEventListener("focus", rescan);
+      document.removeEventListener("visibilitychange", rescan);
+    };
+  }, []);
 
   const refreshWorkspaceDirectories = async (folderPath = workspacePath) => {
     if (!folderPath) { setWorkspaceDirectories([]); return; }
@@ -1442,28 +1622,57 @@ function App() {
   const renameWorkspaceFolder = (directory: string, newName: string) => relocateWorkspaceFolder(directory, "rename_workspace_folder", { newName });
 
   /** Moves a file or a folder into `targetDirectory` ("" is the workspace root). */
-  const moveExplorerEntry = async (entry: NonNullable<ExplorerSelection>, targetDirectory: string) => {
-    if (!workspacePath) return;
+  const moveExplorerEntry = async (entry: NonNullable<ExplorerSelection>, targetDirectory: string): Promise<string | null> => {
+    if (!workspacePath) return null;
     const target = normalizedExplorerPath(targetDirectory);
-    if (!canMoveInto(entry, target)) return;
+    if (!canMoveInto(entry, target)) return null;
     if (entry.kind === "directory") {
       await relocateWorkspaceFolder(entry.path, "move_workspace_folder", { targetDirectory: target });
-      return;
+      return null;
     }
     const original = explorerFiles.find((file) => fileKey(file.filename) === fileKey(entry.filename));
-    if (!original) return;
+    if (!original) return null;
     const basename = explorerBasename(original.filename);
-    await commitWorkspaceRename(original, target ? `${target}/${basename}` : basename);
+    const moved = await commitWorkspaceRename(original, target ? `${target}/${basename}` : basename);
     await refreshWorkspaceDirectories(workspacePath);
+    return moved;
   };
 
   // Dragging a row onto a folder moves it there. Pointer events, as for the panels and the
   // tabs: every row names the folder a drop on it goes to in `data-drop-directory`.
   const moveExplorerEntryRef = useRef(moveExplorerEntry);
   moveExplorerEntryRef.current = moveExplorerEntry;
+  /**
+   * What the pointer is over. A file row is split: its middle two thirds drop the dragged
+   * row into the folder that file lives in, and the quarters at its top and bottom are the
+   * slots either side of it, which is what arranges files by hand. A folder row and the
+   * empty space below the tree only ever mean "into", so a drag that is simply moving a
+   * file across the tree never has to aim.
+   */
+  const dropTargetAt = (x: number, y: number, entry: NonNullable<ExplorerSelection>): ExplorerDropTarget | null => {
+    const host = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-directory]");
+    if (!host) return null;
+    const directory = host.dataset.dropDirectory ?? "";
+    const slot = host.dataset.fileSlot;
+    if (slot !== undefined && entry.kind === "file") {
+      const box = host.getBoundingClientRect();
+      const edge = box.height / 4;
+      const after = y > box.bottom - edge;
+      if (after || y < box.top + edge) {
+        return {
+          kind: "between",
+          directory,
+          index: Number(slot) + (after ? 1 : 0),
+          line: { x: box.left, width: box.width, y: after ? box.bottom : box.top },
+        };
+      }
+    }
+    return canMoveInto(entry, directory) ? { kind: "into", directory } : null;
+  };
+
   const beginExplorerDrag = (entry: NonNullable<ExplorerSelection>, label: string, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || !workspacePath) return;
-    explorerDragRef.current = { entry, label, startX: event.clientX, startY: event.clientY, active: false, over: null };
+    explorerDragRef.current = { entry, label, startX: event.clientX, startY: event.clientY, active: false, target: null };
   };
   useEffect(() => {
     const track = (event: PointerEvent) => {
@@ -1473,10 +1682,8 @@ function App() {
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
         drag.active = true;
       }
-      const host = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-directory]");
-      const target = host ? host.dataset.dropDirectory ?? "" : null;
-      drag.over = target !== null && canMoveInto(drag.entry, target) ? target : null;
-      setExplorerDrag({ entry: drag.entry, label: drag.label, x: event.clientX, y: event.clientY, over: drag.over });
+      drag.target = dropTargetAt(event.clientX, event.clientY, drag.entry);
+      setExplorerDrag({ entry: drag.entry, label: drag.label, x: event.clientX, y: event.clientY, target: drag.target });
     };
     const finish = (event: PointerEvent | KeyboardEvent) => {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
@@ -1486,7 +1693,9 @@ function App() {
       setExplorerDrag(null);
       explorerDragClickRef.current = true;
       window.setTimeout(() => { explorerDragClickRef.current = false; }, 0);
-      if (event.type === "pointerup" && drag.over !== null) void moveExplorerEntryRef.current(drag.entry, drag.over);
+      if (event.type !== "pointerup" || !drag.target) return;
+      if (drag.target.kind === "between" && drag.entry.kind === "file") void placeExplorerFileRef.current(drag.entry.filename, drag.target.directory, drag.target.index);
+      else void moveExplorerEntryRef.current(drag.entry, drag.target.directory);
     };
     window.addEventListener("pointermove", track);
     window.addEventListener("pointerup", finish);
@@ -1501,11 +1710,58 @@ function App() {
   }, []);
   // A folded folder opens when a drag rests on it, so the drop can go deeper.
   useEffect(() => {
-    const over = explorerDrag?.over;
+    const over = explorerDrag?.target?.kind === "into" ? explorerDrag.target.directory : undefined;
     if (!over || !collapsedDirectories.has(fileKey(over))) return;
     const timer = window.setTimeout(() => updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(over)); return next; }), 650);
     return () => window.clearTimeout(timer);
-  }, [explorerDrag?.over]);
+  }, [explorerDrag?.target?.kind === "into" ? explorerDrag.target.directory : undefined]);
+
+  /**
+   * Writes the order of one folder's files, exactly as the explorer is showing them.
+   * Dropping between rows while another sort is chosen switches to the hand-arranged one:
+   * otherwise the drop would appear to do nothing, the rows snapping back to where the
+   * chosen sort wants them.
+   */
+  const reorderExplorerFiles = async (directory: string, filenames: string[]) => {
+    if (!workspacePath) return;
+    const positions = new Map(filenames.map((filename, index) => [fileKey(filename), index]));
+    setSavedFiles((items) => items.map((file) => positions.has(fileKey(file.filename)) ? { ...file, order: positions.get(fileKey(file.filename)) } : file));
+    try {
+      await invoke("reorder_workspace_files", { request: { folderPath: workspacePath, directory, filenames } });
+      if (explorerSort !== "custom") {
+        setExplorerSort("custom");
+        setFileStatus(t("customOrderSet"));
+      }
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+      void rescanWorkspaceFiles();
+    }
+  };
+
+  /**
+   * A row dropped between two others: `index` is the slot it takes among the files the
+   * target folder shows. One arriving from another folder is moved there first, and the
+   * folder's whole order is then written so it keeps the slot it was dropped into.
+   */
+  const placeExplorerFile = async (filename: string, directory: string, index: number) => {
+    if (!workspacePath) return;
+    // Every file of the folder, not just the ones on screen: a source filter hides some,
+    // and leaving them out of the arrangement would throw away the places they had.
+    const siblings = sortExplorerFiles(explorerFileSet.filter((file) => fileKey(explorerParent(file.filename)) === fileKey(directory)));
+    let placed = filename;
+    if (fileKey(explorerParent(filename)) !== fileKey(directory)) {
+      // The move reports the name it settled on, which is not the one asked for when the
+      // folder already had a file by that name.
+      const moved = await moveExplorerEntry({ kind: "file", filename }, directory);
+      if (!moved) return;
+      placed = moved;
+    }
+    const rest = siblings.map((file) => file.filename).filter((name) => fileKey(name) !== fileKey(filename) && fileKey(name) !== fileKey(placed));
+    const at = Math.max(0, Math.min(rest.length, index));
+    await reorderExplorerFiles(directory, [...rest.slice(0, at), placed, ...rest.slice(at)]);
+  };
+  const placeExplorerFileRef = useRef(placeExplorerFile);
+  placeExplorerFileRef.current = placeExplorerFile;
 
   const commitExplorerRename = async () => {
     const target = explorerRename;
@@ -1702,6 +1958,10 @@ function App() {
 
   const closeProblem = (id: string) => {
     const index = tabs.findIndex((tab) => tab.id === id);
+    const closed = tabs.find((tab) => tab.id === id);
+    if (closed && savedFiles.some((file) => fileKey(file.filename) === fileKey(closed.filename))) {
+      closedTabsRef.current = [closed.filename, ...closedTabsRef.current.filter((name) => fileKey(name) !== fileKey(closed.filename))].slice(0, 20);
+    }
     const remaining = tabs.filter((tab) => tab.id !== id);
     tabHistoryRef.current = tabHistoryRef.current.filter((item) => item !== id);
     if (!remaining.length) {
@@ -1736,6 +1996,17 @@ function App() {
   };
 
   /** Ctrl+W with the problem browser focused: the panel or window goes, and typing resumes in the editor. */
+  /** Reopens the most recently closed tab, skipping any whose file has since gone. */
+  const reopenClosedTab = () => {
+    while (closedTabsRef.current.length) {
+      const filename = closedTabsRef.current.shift() as string;
+      if (tabs.some((tab) => fileKey(tab.filename) === fileKey(filename))) continue;
+      const file = savedFiles.find((item) => fileKey(item.filename) === fileKey(filename));
+      if (file) { openSavedFile(file); return; }
+    }
+    setFileStatus(t("noClosedTabs"));
+  };
+
   const closeProblemBrowser = () => {
     browserClosedAtRef.current = Date.now();
     cefFocusedRef.current = false;
@@ -2262,7 +2533,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt, order: problem.order, submissions: problem.submissions,
       }));
       setWorkspacePath(loaded.folderPath);
       setPanelMode(loaded.panelMode === "interactive" ? "interactive" : "tests");
@@ -2290,7 +2561,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt, order: problem.order, submissions: problem.submissions,
       }));
       let restoredFilenames: string[] = [];
       let restoredActiveFilename = "";
@@ -2321,6 +2592,17 @@ function App() {
   useEffect(() => {
     if (workspacePath) localStorage.setItem(WORKSPACE_KEY, workspacePath);
   }, [workspacePath]);
+
+  // An update left its notes behind; this is the build it was talking about. The notes are
+  // only dropped once they have been shown, so a version that arrives late cannot lose them.
+  useEffect(() => {
+    if (!appVersionResolved) return;
+    let stored: { version?: string; notes?: string } | null = null;
+    try { stored = JSON.parse(localStorage.getItem(RELEASE_NOTES_KEY) || "null"); } catch { localStorage.removeItem(RELEASE_NOTES_KEY); }
+    if (!stored?.version || stored.version.replace(/^v/, "") !== appVersion.replace(/^v/, "")) return;
+    localStorage.removeItem(RELEASE_NOTES_KEY);
+    setReleaseNotes({ version: stored.version, notes: stored.notes?.trim() || undefined });
+  }, [appVersion, appVersionResolved]);
 
   useEffect(() => {
     if (!workspacePath) setCollapsedDirectories(new Set());
@@ -2562,7 +2844,7 @@ function App() {
       });
       const update = (file: ProblemTab) => {
         const result = results.find((item) => item.sourceUrl === file.sourceUrl);
-        return result?.status ? { ...file, judgeStatus: result.status, submissionUrl: result.submissionUrl || file.submissionUrl } : file;
+        return result?.status ? { ...file, judgeStatus: result.status, submissionUrl: result.submissionUrl || file.submissionUrl, submissions: result.submissions?.length ? result.submissions : file.submissions } : file;
       };
       setTabs((items) => items.map(update));
       setSavedFiles((items) => items.map(update));
@@ -2783,6 +3065,50 @@ function App() {
     void invoke("stop_interactive");
   };
 
+  const exportSettings = async () => {
+    try {
+      const path = await save({ title: t("settingsExport"), defaultPath: `mild-editor-settings-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path) return;
+      const settings: Record<string, string> = {};
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key && isPortableSetting(key)) settings[key] = localStorage.getItem(key) ?? "";
+      }
+      const contents = JSON.stringify({ kind: SETTINGS_BACKUP_KIND, version: appVersion, savedAt: new Date().toISOString(), settings }, null, 2);
+      await invoke("export_settings_file", { request: { path, contents } });
+      setFileStatus(t("settingsExported"));
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const importSettings = async () => {
+    try {
+      const path = await open({ multiple: false, title: t("settingsImport"), filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path || Array.isArray(path)) return;
+      const contents = await invoke<string>("import_settings_file", { request: { path } });
+      const parsed = JSON.parse(contents) as { kind?: string; settings?: Record<string, unknown> };
+      if (parsed?.kind !== SETTINGS_BACKUP_KIND || !parsed.settings || typeof parsed.settings !== "object") {
+        setFileStatus(t("settingsImportWrongFile"));
+        return;
+      }
+      const entries = Object.entries(parsed.settings).filter((entry): entry is [string, string] => isPortableSetting(entry[0]) && typeof entry[1] === "string");
+      // Settings the backup does not mention are cleared, so what comes back is the setup
+      // that was exported rather than a mix of it and whatever this machine had.
+      for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+        const key = localStorage.key(index);
+        if (key && isPortableSetting(key)) localStorage.removeItem(key);
+      }
+      for (const [key, value] of entries) localStorage.setItem(key, value);
+      setFileStatus(t("settingsImported"));
+      // Almost every setting is read once at start-up, so the only honest way to apply a
+      // restored set is to start again.
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const checkForUpdates = async () => {
     if (!UPDATES_SUPPORTED) { setUpdateStatus({ phase: "unavailable" }); return; }
     setUpdateStatus((current) => ({ ...current, phase: "checking", error: undefined }));
@@ -2811,6 +3137,8 @@ function App() {
     });
     const unlistenFinished = await listen("update-download-finished", () => {
       setUpdateStatus((current) => ({ ...current, phase: "installing" }));
+      // Written before the install, which does not return once it relaunches the app.
+      try { localStorage.setItem(RELEASE_NOTES_KEY, JSON.stringify({ version: update.version, notes: update.notes || "" })); } catch { /* notes are a nicety */ }
     });
     try {
       await invoke("install_update");
@@ -2856,7 +3184,7 @@ function App() {
   // popover or menu above it: hide it while anything floats over the workspace.
   const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
-    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .explorer-context-menu, .contest-popover")));
+    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .explorer-context-menu, .contest-popover, .quick-open")));
   });
   // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
@@ -3090,12 +3418,46 @@ function App() {
     setContestFolderChoice(null);
     setContestExcluded(new Set());
   };
+  /**
+   * The submissions this contest is answerable for: the ones the judge timestamped after
+   * the clock started. A judge that reports no time is taken at its word only for the
+   * verdict, never for the score, so an untimed submission counts for nothing here.
+   */
+  const contestSubmissions = (file: ProblemTab) => {
+    if (!contest) return [];
+    const startedSecond = Math.floor(contest.startedAt / 1000);
+    return (file.submissions || []).filter((record) => record.at >= startedSecond);
+  };
+
+  /** Tries that were rejected before the problem was solved, which is what a penalty counts. */
+  const contestPenaltyTries = (file: ProblemTab) => {
+    const records = contestSubmissions(file);
+    const solved = records.findIndex((record) => isAccepted(record.status));
+    return (solved === -1 ? records : records.slice(0, solved))
+      .filter((record) => !isPendingVerdict(record.status)).length;
+  };
+
+  /** Solve time plus the penalty its rejected tries carry, in milliseconds. */
+  const contestScore = useMemo(() => {
+    if (!contest) return { solved: 0, penalty: 0 };
+    let solved = 0;
+    let penalty = 0;
+    for (const file of contestProblems) {
+      const solvedAt = contest.solved[fileKey(file.filename)];
+      if (solvedAt === undefined) continue;
+      solved += 1;
+      penalty += solvedAt + contestPenaltyTries(file) * CONTEST_PENALTY_MINUTES * 60000;
+    }
+    return { solved, penalty };
+  }, [contest, contestProblems]);
+
   /** What the board shows for one problem: the judge's word first, the local tests otherwise. */
-  const contestProblemState = (file: ProblemTab): { tone: "solved" | "failed" | "ready" | "partial" | "idle"; label: string } => {
+  const contestProblemState = (file: ProblemTab): { tone: "solved" | "failed" | "ready" | "partial" | "idle"; label: string; tries?: number } => {
     const solvedAt = contest?.solved[fileKey(file.filename)];
-    if (solvedAt !== undefined || acceptedInContest(file)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC" };
+    const tries = contest ? contestPenaltyTries(file) : 0;
+    if (solvedAt !== undefined || acceptedInContest(file)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC", tries };
     // An AC from before the contest says nothing about this attempt.
-    if (file.judgeStatus && !isAccepted(file.judgeStatus)) return { tone: "failed", label: file.judgeStatus };
+    if (file.judgeStatus && !isAccepted(file.judgeStatus)) return { tone: "failed", label: file.judgeStatus, tries };
     const open = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
     const results = (open?.id === activeTabId ? tests : open?.tests ?? []).filter((test) => finalVerdicts.includes(test.status));
     if (!results.length) return { tone: "idle", label: "" };
@@ -3423,9 +3785,147 @@ function App() {
 
   useEffect(() => () => { void invoke("stop_interactive"); }, []);
 
+  const storedStressChoices = (): Record<string, StressChoice> => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(stressChoiceKey(workspacePath)) || "{}");
+      return stored && typeof stored === "object" ? stored as Record<string, StressChoice> : {};
+    } catch { return {}; }
+  };
+
+  /**
+   * Creates one of the two helpers, saved straight into the workspace and left closed: the
+   * file under test has to stay the active tab, since that is what the search runs.
+   */
+  const createStressCompanion = async (filename: string, fileLanguage: Language) => {
+    if (!workspacePath) return "";
+    const title = explorerBasename(filename).replace(/\.[^.]+$/, "");
+    const rendered = (forLanguage: Language) => renderTemplateWithCursor(storedTemplate(forLanguage, "other"), { source: "other", filename, title, url: "", now: new Date() }).code;
+    await invoke<LoadedWorkspace>("save_workspace", {
+      request: {
+        folderPath: workspacePath,
+        problems: [{ filename, title, language: fileLanguage, code: rendered(fileLanguage), tests: [], source: "other", sourceUrl: null, judgeStatus: null, limits: null, modifiedAt: Date.now() }],
+      },
+    });
+    return filename;
+  };
+
+  /**
+   * Settles which generator and reference this problem uses. An existing pair is taken as
+   * it is; anything missing is created from the new-file template, so the dialog always
+   * opens on two real files and the only thing left to do is write them.
+   */
+  /**
+   * Settles which file each role starts on: the one picked last time if it is still there,
+   * otherwise the problem's own helper if it has been written, otherwise `STRESS_CREATE`,
+   * which offers to make it. Nothing is written here — opening the dialog to look at it
+   * must not leave files behind.
+   */
+  const openStressDialog = () => {
+    if (!activeTab) return;
+    setStressOpen(true);
+    setStressOutcome(null);
+    setStressCreated([]);
+    if (!workspacePath) return;
+    const remembered = storedStressChoices()[fileKey(activeTab.filename)];
+    const resolve = (role: StressRole) => {
+      const chosen = remembered?.[role];
+      if (chosen && savedFiles.some((file) => fileKey(file.filename) === fileKey(chosen))) return chosen;
+      return findStressCompanion(savedFiles, activeTab.filename, role)?.filename ?? STRESS_CREATE;
+    };
+    setStressChoice({ generator: resolve("generator"), reference: resolve("reference") });
+  };
+
+  /**
+   * Runs the generator and the reference against this file on random inputs until their
+   * answers part. The two helpers are ordinary workspace files, so their saved text is
+   * what runs; the file under test uses the editor's current text, unsaved edits included,
+   * which is the whole point of looking for the case that breaks it.
+   */
+  const startStressTest = async () => {
+    if (!activeTab || stressBusy || running) return;
+    // A role left on "create" gets its file now. The search does not follow: the file is a
+    // bare template, so there would be nothing to compare until it has been written.
+    if (stressChoice.generator === STRESS_CREATE || stressChoice.reference === STRESS_CREATE) {
+      const settled = { ...stressChoice };
+      const created: string[] = [];
+      for (const role of ["generator", "reference"] as StressRole[]) {
+        if (settled[role] !== STRESS_CREATE) continue;
+        const filename = stressCompanionName(activeTab.filename, role, activeTab.language);
+        // Something may have written that file since the dialog opened; taking it is right,
+        // overwriting it with a template is not.
+        const already = savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
+        try {
+          settled[role] = already ? already.filename : await createStressCompanion(filename, activeTab.language);
+          if (!already) created.push(settled[role]);
+        } catch (error) {
+          setFileStatus(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      await rescanWorkspaceFiles(false, true);
+      setStressChoice(settled);
+      setStressCreated(created);
+      return;
+    }
+    const pick = (filename: string) => savedFiles.find((file) => fileKey(file.filename) === fileKey(filename));
+    const generator = pick(stressChoice.generator);
+    const reference = pick(stressChoice.reference);
+    if (!generator || !reference) { setFileStatus(t("stressNeedFiles")); return; }
+    if (fileKey(generator.filename) === fileKey(activeTab.filename) || fileKey(reference.filename) === fileKey(activeTab.filename)) {
+      setFileStatus(t("stressSameFile"));
+      return;
+    }
+    localStorage.setItem(stressChoiceKey(workspacePath), JSON.stringify({ ...storedStressChoices(), [fileKey(activeTab.filename)]: stressChoice }));
+    const rounds = Math.min(100000, Math.max(1, Math.round(Number(stressRounds)) || 300));
+    localStorage.setItem("mild-stress-rounds", String(rounds));
+    setStressRounds(String(rounds));
+    const runId = crypto.randomUUID();
+    setStressBusy(true);
+    setStressOutcome(null);
+    setStressCreated([]);
+    setStressRound(0);
+    const unlisten = await listen<{ runId: string; round: number }>("stress-progress", (event) => {
+      if (event.payload.runId === runId) setStressRound(event.payload.round);
+    });
+    try {
+      const outcome = await invoke<StressOutcome>("stress_test", {
+        request: {
+          runId,
+          generator: { language: generator.language, code: generator.codes[generator.language] },
+          reference: { language: reference.language, code: reference.codes[reference.language] },
+          solution: { language, code: codes[language] },
+          rounds,
+          timeLimitMs: (activeTab.limits?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS) * (language === "cpp" && compileProfile === "debug" ? DEBUG_TIME_FACTOR : 1),
+          atcoderLibraryPath: atcoderLibraryPath || null,
+          floatTolerance,
+          ...buildOptions(),
+        },
+      });
+      setStressOutcome(outcome);
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      unlisten();
+      setStressBusy(false);
+    }
+  };
+
+  /** Keeps a counterexample: it becomes a test case, which is where it is of use. */
+  const addStressCase = () => {
+    if (stressOutcome?.kind !== "mismatch" && stressOutcome?.kind !== "crashed") return;
+    const id = Math.max(0, ...tests.map((test) => test.id)) + 1;
+    const expected = stressOutcome.kind === "mismatch" ? stressOutcome.expected : "";
+    const next: TestCase[] = [...tests.map((test) => ({ ...test, open: false })),
+      { id, name: `counterexample ${id}`, input: stressOutcome.input, expected, output: "", error: "", status: "idle", open: true }];
+    setTests(next);
+    autoSaveTests(next);
+    setStressOpen(false);
+  };
+
+  // The counterexample search shares the runner's cancel flag, so one stop serves both.
   const stopRun = () => {
-    if (!running) return;
-    runCancelledRef.current = true;
+    if (!running && !stressBusy) return;
+    if (running) runCancelledRef.current = true;
     void invoke("stop_run");
   };
 
@@ -3491,7 +3991,7 @@ function App() {
       // handling them here as well would run every command twice.
       if (isMac && "__TAURI_INTERNALS__" in window) {
         const key = event.key.toLowerCase();
-        if ((event.metaKey || event.ctrlKey) && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
+        if ((event.metaKey || event.ctrlKey) && !(event.shiftKey && key === "t") && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
@@ -3510,7 +4010,13 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "t") {
         event.preventDefault();
-        beginImport();
+        if (event.shiftKey) reopenClosedTab();
+        else beginImport();
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        setQuickOpen((open) => open === null ? "" : null);
+        setQuickOpenIndex(0);
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault();
@@ -3576,6 +4082,8 @@ function App() {
       else if (closeConfirmTabId) setCloseConfirmTabId(null);
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
       else if (deleteConfirmDirectory) setDeleteConfirmDirectory(null);
+      else if (quickOpen !== null) setQuickOpen(null);
+      else if (stressOpen) setStressOpen(false);
       else if (moveEntry) setMoveEntry(null);
       else if (sourceFile) setSourceFile(null);
       else if (explorerRename) cancelExplorerRename();
@@ -3585,13 +4093,14 @@ function App() {
       else if (settingsOpen) setSettingsOpen(false);
       else if (atCoderOpen) cancelProblemImport();
       else if (explorerMenu) setExplorerMenu(null);
+      else if (releaseNotes) setReleaseNotes(null);
       else if (contestOpen) setContestOpen(false);
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, moveEntry, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, moveEntry, quickOpen, releaseNotes, settingsOpen, sourceFile, stressOpen]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3693,7 +4202,10 @@ function App() {
   const renamingDirectory = (path: string) => explorerRename?.kind === "directory" && fileKey(explorerRename.path) === fileKey(path);
   const renamingFile = (filename: string) => explorerRename?.kind === "file" && fileKey(explorerRename.filename) === fileKey(filename);
 
-  const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => nodes.flatMap((node) => {
+  const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => {
+    // `nodes` is one folder's children, so a file's position among them is its slot there.
+    const siblingSlots = new Map(nodes.filter((node) => node.kind === "file").map((node, slot) => [node.file.id, slot]));
+    return nodes.flatMap((node) => {
     if (node.kind === "directory") {
       const collapsed = collapsedDirectories.has(fileKey(node.path));
       if (renamingDirectory(node.path)) {
@@ -3705,7 +4217,7 @@ function App() {
         </div>];
       }
       return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
-        <button className={`explorer-directory ${explorerDrag?.over != null && fileKey(explorerDrag.over) === fileKey(node.path) ? "drop-target" : ""}`} data-drop-directory={node.path} onPointerDown={(event) => beginExplorerDrag({ kind: "directory", path: node.path }, node.name, event)} style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
+        <button className={`explorer-directory ${explorerDrag?.target?.kind === "into" && fileKey(explorerDrag.target.directory) === fileKey(node.path) ? "drop-target" : ""}`} data-drop-directory={node.path} onPointerDown={(event) => beginExplorerDrag({ kind: "directory", path: node.path }, node.name, event)} style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
           const next = new Set(items);
           const key = fileKey(node.path);
           if (next.has(key)) next.delete(key); else next.add(key);
@@ -3720,18 +4232,19 @@ function App() {
     const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
     if (renamingFile(tab.filename)) {
       return [<div className="explorer-file-row" key={tab.id}>
-        <div className="explorer-rename-row" style={{ paddingLeft: `${14 + depth * 14}px` }}><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>{renameInput}</div>
+        <div className="explorer-rename-row" style={{ paddingLeft: `${14 + depth * 14}px` }}><LanguageIcon language={tab.language} />{renameInput}</div>
       </div>];
     }
     return [<div className="explorer-file-row" key={tab.id}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} onPointerDown={(event) => beginExplorerDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
-        <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} data-file-slot={siblingSlots.get(tab.id)} onPointerDown={(event) => beginExplorerDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+        <LanguageIcon language={tab.language} />
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
         {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
       </button>
     </div>];
-  });
+    });
+  };
 
   return (
     <main
@@ -3814,7 +4327,7 @@ function App() {
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
                   finishTabDrag();
                 }}
-              ><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span></span>
+              ><LanguageIcon language={tab.language} /></span>
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
                 : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
@@ -3905,7 +4418,10 @@ function App() {
                 </article>
               ))}
             </div>
-            <div className="test-actions"><button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case"><Icon name="plus" size={14} /><span>{t("addTest")}</span></button></div>
+            <div className="test-actions">
+              <button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case"><Icon name="plus" size={14} /><span>{t("addTest")}</span></button>
+              <button className="add-test" onClick={openStressDialog} disabled={!activeTab || !workspacePath} title={t("stressHint")}><Icon name="flask" size={14} /><span>{t("stress")}</span></button>
+            </div>
             </> : <div className="interactive-panel">
               <div className="interactive-log" ref={interactiveLogRef}>
                 {interactiveLog.length
@@ -4027,20 +4543,21 @@ function App() {
             <span className="explorer-header-actions">
               <button onClick={() => beginBlankFile()} title={t("newFile")} aria-label={t("newFile")}><Icon name="filePlus" /></button>
               <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><Icon name="folderPlus" /></button>
+              {workspacePath && <button onClick={() => void rescanWorkspaceFiles(true)} title={t("explorerRefresh")} aria-label={t("explorerRefresh")}><Icon name="refresh" /></button>}
             </span>
           </div>
           <div className="explorer-controls">
-            <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
+            <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option><option value="custom">{t("customOrder")}</option></select></label>
             <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
           </div>
-          <div className={`explorer-files ${explorerDrag?.over === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
+          <div className={`explorer-files ${explorerDrag?.target?.kind === "into" && explorerDrag.target.directory === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
             if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-metadata"))) return;
             event.preventDefault();
             setExplorerMenu({ x: event.clientX, y: event.clientY });
           }}>
             {!explorerFiles.length && !workspaceDirectories.length && <div className="explorer-empty">{t("noFiles")}</div>}
             {renderExplorerTree(explorerTree)}
-            {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
+            {workspacePath && <div className="explorer-metadata"><Icon name="braces" size={14} className="file-icon json" /><span>.mild-editor.json</span></div>}
           </div>
         </aside>}
         </Fragment>))}
@@ -4310,6 +4827,12 @@ function App() {
               </div>
               {updateStatus.phase === "downloading" && <progress max={updateStatus.total || 1} value={updateStatus.total ? updateStatus.received || 0 : undefined} aria-label={t("updatesDownloading")} />}
               {updateStatus.notes && <pre className="update-notes">{updateStatus.notes}</pre>}
+              <h3 className="settings-subheading">{t("settingsBackup")}</h3>
+              <p className="settings-help">{t("settingsBackupHelp")}</p>
+              <div className="companion-controls">
+                <button className="subtle-button" onClick={() => void exportSettings()}><Icon name="download" size={14} />{t("settingsExport")}</button>
+                <button className="subtle-button" onClick={() => void importSettings()}><Icon name="upload" size={14} />{t("settingsImport")}</button>
+              </div>
             </div> : <div className="language-server-settings">
               <div className={`lsp-state ${clangdStatus}`}><span className="lsp-dot" /><div><strong>{clangdStatus === "ready" ? "clangd connected" : clangdStatus === "connecting" ? "connecting…" : clangdStatus === "missing" ? "clangd not found" : clangdStatus === "error" ? "connection failed" : "clangd idle"}</strong><small>{clangdInfo?.version || "C++ semantic completion, diagnostics, hover and signature help"}</small></div></div>
               <label className="clangd-path-label">clangd executable path<input value={clangdPath} onChange={(event) => setClangdPath(event.target.value)} placeholder="Auto-detect from PATH, or C:\\Program Files\\LLVM\\bin\\clangd.exe" spellCheck={false} /></label>
@@ -4332,7 +4855,139 @@ function App() {
         </section>
       </div>}
 
-      {explorerDrag && <div className={`explorer-drag-ghost ${explorerDrag.over === null ? "" : "ok"}`} style={{ left: explorerDrag.x + 12, top: explorerDrag.y + 10 }}>{explorerDrag.label}{explorerDrag.over !== null && <small>→ {explorerDrag.over || t("contestWorkspaceRoot")}</small>}</div>}
+      {stressOpen && (() => {
+        const candidates = savedFiles.filter((file) => fileKey(file.filename) !== fileKey(activeTab?.filename || ""));
+        const creating = stressChoice.generator === STRESS_CREATE || stressChoice.reference === STRESS_CREATE;
+        const chooser = (which: StressRole) => {
+          const picked = stressChoice[which] === STRESS_CREATE ? undefined : savedFiles.find((file) => fileKey(file.filename) === fileKey(stressChoice[which]));
+          const wouldCreate = activeTab ? stressCompanionName(activeTab.filename, which, activeTab.language) : "";
+          return <label className="stress-field">{which === "generator" ? t("stressGenerator") : t("stressReference")}
+            <span className="stress-picker">
+              <select value={stressChoice[which]} disabled={stressBusy} onChange={(event) => setStressChoice((choice) => ({ ...choice, [which]: event.target.value }))}>
+                <option value={STRESS_CREATE}>{t("stressCreateNew")} · {explorerBasename(wouldCreate)}</option>
+                {candidates.map((file) => <option key={file.id} value={file.filename}>{file.filename}</option>)}
+              </select>
+              <button className="subtle-button" disabled={!picked} title={t("stressEdit")} aria-label={t("stressEdit")} onClick={() => { if (picked) { openSavedFile(picked); setStressOpen(false); } }}><Icon name="file" size={14} /></button>
+            </span>
+          </label>;
+        };
+        return <div className="modal-backdrop close-confirm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !stressBusy) setStressOpen(false); }}>
+          <section className="confirm-dialog stress-dialog" role="dialog" aria-modal="true" aria-labelledby="stress-title">
+            <h2 id="stress-title">{t("stress")}</h2>
+            <p>{t("stressHelp")}</p>
+            <>
+              <div className="stress-fields">
+                {chooser("generator")}
+                {chooser("reference")}
+                <label className="stress-field">{t("stressRounds")}
+                  <input type="number" min={1} max={100000} value={stressRounds} disabled={stressBusy} onChange={(event) => setStressRounds(event.target.value)} />
+                </label>
+              </div>
+              {stressCreated.length > 0 && (() => {
+                const made = stressCreated.map((filename) => savedFiles.find((item) => fileKey(item.filename) === fileKey(filename))).filter((file): file is ProblemTab => Boolean(file));
+                return <div className="stress-result made">
+                  <strong>{t("stressMade")}</strong>
+                  <span>{t("stressMadeNext")}</span>
+                  <ul className="stress-made-files">{stressCreated.map((filename) => {
+                    const file = savedFiles.find((item) => fileKey(item.filename) === fileKey(filename));
+                    return <li key={filename}><LanguageIcon language={file?.language || "cpp"} />{explorerBasename(filename)}</li>;
+                  })}</ul>
+                  <button className="subtle-button stress-open-made" disabled={!made.length} onClick={() => { openSavedFiles(made); setStressOpen(false); }}>{t("stressOpenMade")}</button>
+                </div>;
+              })()}
+              {stressBusy && <p className="stress-progress">{t("stressRunning")} {stressRound}</p>}
+              {stressOutcome?.kind === "passed" && <p className="stress-result ok">{t("stressPassed")} {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
+              {stressOutcome?.kind === "stopped" && <p className="stress-result">{t("stop")} · {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
+              {stressOutcome?.kind === "compileError" && <div className="stress-result bad"><strong>{stressOutcome.program} {t("stressCompileError")}</strong><pre>{stressOutcome.message}</pre></div>}
+              {stressOutcome?.kind === "crashed" && <div className="stress-result bad">
+                <strong>{stressOutcome.program} {t("stressCrashed")} · {stressOutcome.rounds} {t("stressFoundIn")}</strong>
+                <pre>{stressOutcome.message}</pre>
+                {stressOutcome.input && <><small>{t("stressInput")}</small><pre className="stress-case">{stressOutcome.input}</pre></>}
+              </div>}
+              {stressOutcome?.kind === "mismatch" && <div className="stress-result bad">
+                <strong>{t("stressFoundTitle")} · {stressOutcome.rounds} {t("stressFoundIn")}</strong>
+                <div className="stress-case-grid">
+                  <div><small>{t("stressInput")}</small><pre className="stress-case">{stressOutcome.input}</pre></div>
+                  <div><small>{t("stressExpected")}</small><pre className="stress-case">{stressOutcome.expected}</pre></div>
+                  <div><small>{t("stressActual")}</small><pre className="stress-case">{stressOutcome.actual}</pre></div>
+                </div>
+              </div>}
+            </>
+            <footer className="settings-footer">
+              <span className="footer-spacer" />
+              {(stressOutcome?.kind === "mismatch" || (stressOutcome?.kind === "crashed" && stressOutcome.input)) && <button className="subtle-button" onClick={addStressCase}>{t("stressAddTest")}</button>}
+              <button className="subtle-button" onClick={() => setStressOpen(false)} disabled={stressBusy}>{t("cancel")}</button>
+              {stressBusy
+                ? <button className="danger-button" onClick={stopRun}>{t("stop")}</button>
+                : <button className="primary-button" onClick={() => void startStressTest()} disabled={!stressChoice.generator || !stressChoice.reference}>{creating ? t("stressCreate") : t("stressStart")}</button>}
+            </footer>
+          </section>
+        </div>;
+      })()}
+
+      {quickOpen !== null && <div className="modal-backdrop quick-open" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setQuickOpen(null); }}>
+        <section className="quick-open-dialog" role="dialog" aria-modal="true" aria-label={t("quickOpen")}>
+          <input
+            className="quick-open-field"
+            autoFocus
+            spellCheck={false}
+            value={quickOpen}
+            placeholder={t("quickOpenPlaceholder")}
+            aria-label={t("quickOpen")}
+            onChange={(event) => { setQuickOpen(event.target.value); setQuickOpenIndex(0); }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                setQuickOpenIndex((index) => quickOpenMatches.length ? (index + step + quickOpenMatches.length) % quickOpenMatches.length : 0);
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                const chosen = quickOpenMatches[quickOpenIndex];
+                if (!chosen) return;
+                setQuickOpen(null);
+                openSavedFile(chosen.file);
+              }
+            }}
+          />
+          <div className="quick-open-list" role="listbox">
+            {quickOpenMatches.length ? quickOpenMatches.map((row, index) => {
+              const marked = new Set(row.match.positions);
+              const parent = explorerParent(row.file.filename);
+              return <button
+                key={row.file.id}
+                role="option"
+                aria-selected={index === quickOpenIndex}
+                className={`quick-open-row ${index === quickOpenIndex ? "active" : ""}`}
+                onMouseMove={() => setQuickOpenIndex(index)}
+                onClick={() => { setQuickOpen(null); openSavedFile(row.file); }}
+              >
+                <LanguageIcon language={row.file.language} />
+                <span className="quick-open-name">{[...row.file.filename].map((character, position) => marked.has(position)
+                  ? <b key={position}>{character}</b>
+                  : <span key={position}>{character}</span>)}</span>
+                {parent && <small>{parent}</small>}
+                {row.file.judgeStatus && <span className={`judge-badge ${isAccepted(row.file.judgeStatus) ? "accepted" : ""}`}>{row.file.judgeStatus}</span>}
+              </button>;
+            }) : <p className="quick-open-empty">{t("quickOpenEmpty")}</p>}
+          </div>
+          <footer className="quick-open-hint">{t("quickOpenHint")}</footer>
+        </section>
+      </div>}
+
+      {releaseNotes && <div className="modal-backdrop close-confirm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReleaseNotes(null); }}>
+        <section className="confirm-dialog release-notes" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+          <span className="eyebrow">{t("releaseNotesUpdated")}{releaseNotes.version.replace(/^v/, "")}</span>
+          <h2 id="release-notes-title">{t("releaseNotesTitle")}</h2>
+          {releaseNotes.notes
+            ? <div className="release-notes-body">{renderReleaseNotes(releaseNotes.notes)}</div>
+            : <p>{t("releaseNotesNone")}</p>}
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" autoFocus onClick={() => setReleaseNotes(null)}>{t("releaseNotesClose")}</button></footer>
+        </section>
+      </div>}
+
+      {explorerDrag?.target?.kind === "between" && <div className="explorer-drop-line" style={{ left: explorerDrag.target.line.x, top: explorerDrag.target.line.y, width: explorerDrag.target.line.width }} />}
+      {explorerDrag && <div className={`explorer-drag-ghost ${explorerDrag.target ? "ok" : ""}`} style={{ left: explorerDrag.x + 12, top: explorerDrag.y + 10 }}>{explorerDrag.label}{explorerDrag.target && <small>→ {explorerDrag.target.directory || t("contestWorkspaceRoot")}</small>}</div>}
 
       {moveEntry && (() => {
         const targets = ["", ...workspaceDirectories].filter((directory) => canMoveInto(moveEntry, directory)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
@@ -4405,14 +5060,16 @@ function App() {
             <div className="contest-board">
               {contestProblems.length ? contestProblems.map((file) => {
                 const state = contestProblemState(file);
-                return <button key={file.id} className={`contest-problem ${state.tone} ${fileKey(file.filename) === fileKey(activeTab?.filename || "") ? "current" : ""}`} onClick={() => openSavedFile(file)} title={file.title || file.filename}>
+                const tries = state.tries || 0;
+                return <button key={file.id} className={`contest-problem ${state.tone} ${fileKey(file.filename) === fileKey(activeTab?.filename || "") ? "current" : ""}`} onClick={() => openSavedFile(file)} title={`${file.title || file.filename}${tries ? ` \u00b7 ${tries} ${t("contestTries")}` : ""}`}>
                   <strong>{explorerBasename(file.filename).replace(/\.[^.]+$/, "").split(/[_\s]/)[0]}</strong>
-                  <span>{state.label || "—"}</span>
+                  <span>{state.label || "\u2014"}</span>
+                  {tries > 0 && <i className="contest-tries">-{tries}</i>}
                 </button>;
               }) : <p className="settings-help">{t("contestNoProblems")}</p>}
             </div>
             <footer>
-              <small>{contest.folder || t("contestWorkspaceRoot")} · {Object.keys(contest.solved).length}/{contestProblems.length} {t("contestSolved")}</small>
+              <small>{contest.folder || t("contestWorkspaceRoot")} · {contestScore.solved}/{contestProblems.length} {t("contestSolved")}{contestScore.solved > 0 ? ` · ${t("contestPenalty")} ${Math.round(contestScore.penalty / 60000)}` : ""}</small>
               <button className="subtle-button" onClick={() => setContest(null)}>{t("contestEnd")}</button>
             </footer>
           </> : <>

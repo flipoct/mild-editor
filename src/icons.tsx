@@ -30,6 +30,8 @@ const paths = {
   send: <path d="M14 2 7.2 8.8M14 2 9.6 14l-2.4-5.2L2 6.4Z" />,
   trophy: <path d="M5 2.2h6v4a3 3 0 0 1-6 0ZM5 3.4H2.6c0 2 .8 3.2 2.6 3.4M11 3.4h2.4c0 2-.8 3.2-2.6 3.4M8 9.2v2.6M5.4 13.8h5.2M6.2 11.8h3.6" />,
   upload: <path d="M8 10.4v-8M4.6 5.6 8 2.2l3.4 3.4M2.8 13.2h10.4" />,
+  braces: <path d="M6.4 2.4c-1.5 0-1.5 1.1-1.5 2.5s-.3 2.2-1.4 2.2v1.8c1.1 0 1.4.8 1.4 2.2s0 2.5 1.5 2.5M9.6 2.4c1.5 0 1.5 1.1 1.5 2.5s.3 2.2 1.4 2.2v1.8c-1.1 0-1.4.8-1.4 2.2s0 2.5-1.5 2.5" />,
+  refresh: <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8M13.6 2.2v3.2h-3.2" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;
@@ -49,6 +51,46 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
       aria-hidden="true"
     >
       {paths[name]}
+    </svg>
+  );
+}
+
+/**
+ * The language marks beside a filename: the C++ and Python logos in the colours everyone
+ * knows them by, from Devicon (https://devicon.dev), MIT licensed — Copyright (c) 2015
+ * konpa. The marks remain trademarks of their owners and are used here only to say which
+ * language a file is in.
+ *
+ * Each `viewBox` is the artwork's own bounding box squared off, not the 128 box it ships
+ * in, for two reasons. Devicon's Python is drawn with a drop shadow below it, which is
+ * dropped here; left in the original box the snakes then hang a tenth of the height above
+ * centre, which is plainly visible against a filename. And the two logos fill their boxes
+ * by different amounts, so cropping each to itself is what makes them the same size. The
+ * hexagon is then eased back a little: a solid convex shape reads larger than open
+ * artwork of the same height.
+ */
+const CPP_LOGO = {
+  viewBox: "-6.82 -6.39 140.54 140.54",
+  paths: [{ fill: "#00599C", d: "M63.443 0c-1.782 0-3.564.39-4.916 1.172L11.594 28.27C8.89 29.828 6.68 33.66 6.68 36.78v54.197c0 1.562.55 3.298 1.441 4.841l-.002.002c.89 1.543 2.123 2.89 3.475 3.672l46.931 27.094c2.703 1.562 7.13 1.562 9.832 0h.002l46.934-27.094c1.352-.78 2.582-2.129 3.473-3.672.89-1.543 1.441-3.28 1.441-4.843V36.779c0-1.557-.55-3.295-1.441-4.838v-.002c-.891-1.545-2.121-2.893-3.473-3.67L68.359 1.173C67.008.39 65.226 0 63.443 0zm.002 26.033c13.465 0 26.02 7.246 32.77 18.91l-16.38 9.479c-3.372-5.836-9.66-9.467-16.39-9.467-10.432 0-18.922 8.49-18.922 18.924S53.013 82.8 63.445 82.8c6.735 0 13.015-3.625 16.395-9.465l16.375 9.477c-6.746 11.662-19.305 18.91-32.77 18.91-20.867 0-37.843-16.977-37.843-37.844s16.976-37.844 37.843-37.844v-.002zM92.881 57.57h4.201v4.207h4.203v4.203h-4.203v4.207h-4.201V65.98h-4.207v-4.203h4.207V57.57zm15.765 0h4.208v4.207h4.203v4.203h-4.203v4.207h-4.208V65.98h-4.205v-4.203h4.205V57.57z" }],
+};
+const PYTHON_LOGO = {
+  viewBox: "12.24 1.99 103.51 103.51",
+  paths: [{ fill: "#3776AB", d: "M63.391 1.988c-4.222.02-8.252.379-11.8 1.007-10.45 1.846-12.346 5.71-12.346 12.837v9.411h24.693v3.137H29.977c-7.176 0-13.46 4.313-15.426 12.521-2.268 9.405-2.368 15.275 0 25.096 1.755 7.311 5.947 12.519 13.124 12.519h8.491V67.234c0-8.151 7.051-15.34 15.426-15.34h24.665c6.866 0 12.346-5.654 12.346-12.548V15.833c0-6.693-5.646-11.72-12.346-12.837-4.244-.706-8.645-1.027-12.866-1.008zM50.037 9.557c2.55 0 4.634 2.117 4.634 4.721 0 2.593-2.083 4.69-4.634 4.69-2.56 0-4.633-2.097-4.633-4.69-.001-2.604 2.073-4.721 4.633-4.721z" }, { fill: "#FFD43B", d: "M91.682 28.38v10.966c0 8.5-7.208 15.655-15.426 15.655H51.591c-6.756 0-12.346 5.783-12.346 12.549v23.515c0 6.691 5.818 10.628 12.346 12.547 7.816 2.297 15.312 2.713 24.665 0 6.216-1.801 12.346-5.423 12.346-12.547v-9.412H63.938v-3.138h37.012c7.176 0 9.852-5.005 12.348-12.519 2.578-7.735 2.467-15.174 0-25.096-1.774-7.145-5.161-12.521-12.348-12.521h-9.268zM77.809 87.927c2.561 0 4.634 2.097 4.634 4.692 0 2.602-2.074 4.719-4.634 4.719-2.55 0-4.633-2.117-4.633-4.719 0-2.595 2.083-4.692 4.633-4.692z" }],
+};
+
+export function LanguageIcon({ language, size = 16, className }: { language: string; size?: number; className?: string }) {
+  const python = language === "python";
+  const logo = python ? PYTHON_LOGO : CPP_LOGO;
+  return (
+    <svg
+      className={`language-icon ${python ? "python" : "cpp"}${className ? ` ${className}` : ""}`}
+      width={size}
+      height={size}
+      viewBox={logo.viewBox}
+      role="img"
+      aria-label={python ? "Python" : "C++"}
+    >
+      {logo.paths.map((path) => <path key={path.fill} fill={path.fill} d={path.d} />)}
     </svg>
   );
 }

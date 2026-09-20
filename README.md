@@ -77,6 +77,14 @@ The status bar switches between two compile profiles. **Release** is `-O2`, the 
 
 When the expected output holds a decimal, an answer within an absolute or relative error of 1e-6 is accepted. Integers, words and spacing are always compared exactly. The same settings page changes the tolerance or turns it off.
 
+## Finding a counterexample
+
+**Find a counterexample**, beside *Add test* under the test cases, runs the open file against a reference solution on random inputs until their answers differ. Nothing is taken from the judge: the *generator* prints one small random input, and the *reference* is a slow solution that is obviously correct — an exhaustive search, say.
+
+Both are ordinary files of the workspace. Each dropdown starts on the problem's own helper when it has been written — `B_Exit_Order.cpp` looks for `B_Exit_Order_generator.cpp` and `B_Exit_Order_bruteforce.cpp` beside it, in either language and whatever the case — and otherwise on **Create**, which names the file it would make. Nothing is written by opening the dialog: a role left on *Create* gets its file, from the same template a new file would use, when the button is pressed. The dialog then lists what it made, with one button that opens all of it for editing, since a bare template has nothing to compare yet — write them, and start the search on the next press. Either dropdown can point at any other file instead, and the button next to one opens that file to write it.
+
+Outputs are compared by the same rule the test cases use, float tolerance included. The search stops at the first input the two disagree on, or at the first one that makes a program crash or time out, and shows the input beside both answers; **Add as a test case** keeps it. The file under test runs from the editor's current text, unsaved edits included.
+
 ## Submitting
 
 **Submit** in the title bar, or `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS), saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder, Codeforces and DOJ forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
@@ -115,7 +123,9 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | Shortcut | Action |
 | --- | --- |
 | `⌘N` / `⌘O` / `⌘S` | New file / Open / Save |
+| `⌘P` | Go to file |
 | `⌘T` | Import problem |
+| `⌘⇧T` | Reopen the tab closed last |
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch to tab |
 | `⌘↵` / `⌘.` | Run the panel on screen (tests, or interactive when that panel is showing) / Stop |
@@ -128,6 +138,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌥⌘R` | Reveal the selected file or folder in Finder |
 | `↩` | Rename the selected Explorer file or folder in place |
 | `⌘⌫` | Delete the selected Explorer file or folder |
+| `Del` | Delete the selected Explorer file or folder (Windows and Linux) |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
 
@@ -199,5 +210,9 @@ npm run tauri:build
 ```
 
 Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Actions builds Windows, macOS, and Linux packages on their native runners and attaches them to the matching release.
+
+## Credits
+
+The C++ and Python marks beside a filename come from [Devicon](https://devicon.dev), MIT licensed, Copyright (c) 2015 konpa, in the colours the two languages are known by rather than the theme's. Each is cropped to its own artwork so the pair line up with a filename and come out the same size — Devicon's Python is drawn with a drop shadow, which is dropped here, and the snakes would otherwise hang above centre. The marks remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
 
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.

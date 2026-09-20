@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.13.0
+
+- Language marks. The `C++` and `Py` badges beside a filename are now the C++ and Python logos in their own colours, from [Devicon](https://devicon.dev) under MIT.
+- Arrange files by hand. Dropping a row between two others in the explorer puts it there and switches the sort to **my order**, which is saved with the workspace. Dropping it on a folder still just moves it.
+- Files added, renamed or deleted outside the editor are picked up. `.mild-editor.json` was only reconciled with the folder when the workspace opened, so anything another program put there stayed invisible until a restart; the explorer now rescans when the window comes back into focus, and its header has a button for it.
+- `Ctrl+Shift+T` (`⌘⇧T`) reopens the tab closed last. `Del` deletes the selected explorer row on Windows and Linux, as `⌘⌫` already did on macOS.
+- After an update installs, the new build opens with the release notes of the version it just became.
+- **Find a counterexample.** Beside *Add test*: a generator and a reference solution run against the open file on random inputs until their answers differ, and the case that separated them can be kept as a test. Both helpers are files named after the problem — `B_Exit_Order_generator.cpp`, `B_Exit_Order_bruteforce.cpp`. Each dropdown starts on the one already written, in either language, or on **Create**, which makes it when the search is started and not before. Outputs are compared by the same rule the test cases use.
+- `Ctrl+P` (`⌘P`) opens a file by name, which beats scrolling an explorer with hundreds of problems in it.
+- **Settings → updates → backup** exports snippets, templates, themes, judge handles and compile flags to one file, and imports them back. They lived only in the app's own storage, which no backup reached and a reinstall could empty.
+- Every verdict a judge reports is kept with the problem, not just the latest. The contest board marks rejected tries on each problem and the footer totals the ICPC penalty.
+
 ## 1.12.0
 
 - Move files and folders. Drag a row of the explorer onto a folder (or onto the empty space, for the workspace root), or use **Move to…** in its context menu. Open tabs, saved tests, folded folders and a running contest's solve times follow the move.

@@ -566,6 +566,26 @@ struct WorkspaceProblemMetadata {
     limits: Option<ProblemLimits>,
     #[serde(default)]
     modified_at: u64,
+    /// Position inside its folder when the explorer is sorted by hand. Absent until the
+    /// file is dragged into place, and then the files without one follow those with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order: Option<u32>,
+    /// Every verdict seen for this problem, oldest first. The judges only report the
+    /// latest submission, so this is built up one poll at a time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    submissions: Vec<SubmissionRecord>,
+}
+
+/// One submission as a judge reported it. `at` is the judge's own submission time in
+/// seconds where it gives one, which is what a contest has to count against the clock.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionRecord {
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default)]
+    at: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -591,6 +611,8 @@ struct WorkspaceProblemOutput {
     judge_status: Option<String>,
     limits: Option<ProblemLimits>,
     modified_at: u64,
+    order: Option<u32>,
+    submissions: Vec<SubmissionRecord>,
 }
 
 #[derive(Serialize)]
@@ -639,6 +661,12 @@ struct SubmissionStatus {
     source_url: String,
     status: Option<String>,
     submission_url: Option<String>,
+    /// Seconds since the epoch, from the judge; 0 when it does not say.
+    #[serde(default)]
+    submitted_at: u64,
+    /// Everything known about this problem's submissions, oldest first.
+    #[serde(default)]
+    submissions: Vec<SubmissionRecord>,
 }
 
 fn file_modified_at(path: &std::path::Path) -> u64 {
@@ -975,6 +1003,181 @@ async fn run_code(app: tauri::AppHandle, state: tauri::State<'_, RunState>, requ
         .map_err(|error| error.to_string())?
 }
 
+// ---------------------------------------------------------------------------------------
+// Finding a counterexample.
+//
+// Nothing here comes from the judge. The generator prints a small random input and the
+// reference is a slow solution that is obviously right; running both against the real
+// solution on random inputs until their answers part is what turns "it is wrong somewhere"
+// into a concrete failing case.
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StressProgram {
+    language: String,
+    code: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StressRequest {
+    run_id: String,
+    generator: StressProgram,
+    reference: StressProgram,
+    solution: StressProgram,
+    /// How many random inputs to try before giving up.
+    rounds: u32,
+    #[serde(default)]
+    time_limit_ms: Option<u64>,
+    #[serde(default)]
+    atcoder_library_path: Option<String>,
+    /// 0 or less compares outputs exactly; otherwise decimals may differ by this much.
+    #[serde(default)]
+    float_tolerance: f64,
+    #[serde(flatten)]
+    build: BuildOptions,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StressProgress {
+    run_id: String,
+    round: u32,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum StressOutcome {
+    /// The two solutions disagreed: `input` is the case that separated them.
+    Mismatch { rounds: u32, input: String, expected: String, actual: String, reason: String },
+    /// Every round agreed.
+    Passed { rounds: u32 },
+    /// One of the three programs did not build.
+    CompileError { program: String, message: String },
+    /// A program failed at run time, which is a finding of its own.
+    Crashed { rounds: u32, program: String, input: String, message: String },
+    Stopped { rounds: u32 },
+}
+
+/// Mirrors `outputsMatch` in src/judge.ts: lines are compared exactly, and with a tolerance
+/// a differing line gets a second chance token by token, where two decimals pass if they
+/// are within the tolerance absolutely or relatively. Integers never take that path.
+fn outputs_match(expected: &str, actual: &str, tolerance: f64) -> bool {
+    let normalise = |value: &str| value.replace("\r\n", "\n").trim_end().to_string();
+    let (expected, actual) = (normalise(expected), normalise(actual));
+    if expected == actual { return true; }
+    if !(tolerance > 0.0) { return false; }
+    let left: Vec<&str> = expected.split('\n').collect();
+    let right: Vec<&str> = actual.split('\n').collect();
+    if left.len() != right.len() { return false; }
+    left.iter().zip(right.iter()).all(|(want, got)| {
+        if want == got { return true; }
+        let want_tokens: Vec<&str> = want.split_whitespace().collect();
+        let got_tokens: Vec<&str> = got.split_whitespace().collect();
+        if want_tokens.len() != got_tokens.len() { return false; }
+        want_tokens.iter().zip(got_tokens.iter()).all(|(want, got)| {
+            if want == got { return true; }
+            // The expected output decides whether the answer is a real number at all.
+            if !want.contains(['.', 'e', 'E']) { return false; }
+            let (Ok(want), Ok(got)) = (want.parse::<f64>(), got.parse::<f64>()) else { return false };
+            if !want.is_finite() || !got.is_finite() { return false; }
+            let error = (want - got).abs();
+            error <= tolerance || error <= tolerance * want.abs()
+        })
+    })
+}
+
+fn stress_sync(request: StressRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBool>) -> Result<StressOutcome, String> {
+    let run_id = request.run_id.clone();
+    stress_search(&request, &cancelled, &move |round| {
+        let _ = app.emit("stress-progress", StressProgress { run_id: run_id.clone(), round });
+    })
+}
+
+fn stress_search(request: &StressRequest, cancelled: &AtomicBool, progress: &dyn Fn(u32)) -> Result<StressOutcome, String> {
+    for program in [&request.generator, &request.reference, &request.solution] {
+        if !matches!(program.language.as_str(), "cpp" | "python") { return Err("Unsupported language.".into()); }
+        if program.code.len() > MAX_CODE { return Err("The source code is too large.".into()); }
+    }
+    let directory = tempfile::Builder::new().prefix("mild-stress-").tempdir().map_err(|error| error.to_string())?;
+
+    // Each program is built in a directory of its own: prepare_program writes its source as
+    // main.cpp, so sharing one would have them overwrite each other.
+    let mut built = Vec::new();
+    for (name, program) in [("generator", &request.generator), ("reference", &request.reference), ("solution", &request.solution)] {
+        let cwd = directory.path().join(name);
+        fs::create_dir_all(&cwd).map_err(|error| error.to_string())?;
+        match prepare_program(&program.language, &program.code, request.atcoder_library_path.as_deref(), &cwd, false, &request.build)? {
+            PreparedProgram::Ready { command, args, .. } => built.push((command, args, cwd)),
+            PreparedProgram::CompileError(result) => {
+                return Ok(StressOutcome::CompileError { program: name.into(), message: result.stderr });
+            }
+        }
+    }
+    let [generator, reference, solution] = <[_; 3]>::try_from(built).ok().ok_or("Could not prepare the programs.")?;
+
+    let time_limit = Duration::from_millis(request.time_limit_ms.unwrap_or(2000).clamp(100, 60_000));
+    let rounds = request.rounds.clamp(1, 100_000);
+    let mut done = 0;
+    for round in 1..=rounds {
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
+        done = round;
+        // Reported every so often rather than every round: the rounds are short, and an
+        // event each would flood the webview with more work than the run itself.
+        if round % 10 == 1 || round == rounds { progress(round); }
+
+        let made = execute_with_cancel(&generator.0, &generator.1, &generator.2, "", time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
+        if !made.ok {
+            return Ok(StressOutcome::Crashed { rounds: done, program: "generator".into(), input: String::new(), message: crash_message(&made) });
+        }
+        let input = made.stdout;
+
+        let expected = execute_with_cancel(&reference.0, &reference.1, &reference.2, &input, time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
+        if !expected.ok {
+            return Ok(StressOutcome::Crashed { rounds: done, program: "reference".into(), input, message: crash_message(&expected) });
+        }
+        let actual = execute_with_cancel(&solution.0, &solution.1, &solution.2, &input, time_limit, Some(cancelled), None);
+        if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
+        if !actual.ok {
+            // The solution falling over on this input is exactly what the search is for.
+            return Ok(StressOutcome::Crashed { rounds: done, program: "solution".into(), input, message: crash_message(&actual) });
+        }
+        if !outputs_match(&expected.stdout, &actual.stdout, request.float_tolerance) {
+            return Ok(StressOutcome::Mismatch {
+                rounds: done,
+                input,
+                expected: expected.stdout,
+                actual: actual.stdout,
+                reason: String::new(),
+            });
+        }
+    }
+    Ok(StressOutcome::Passed { rounds: done })
+}
+
+fn crash_message(result: &RunResult) -> String {
+    let detail = result.stderr.trim();
+    let verdict = match result.verdict {
+        Verdict::Tle => "timed out",
+        Verdict::Mle => "ran out of memory",
+        Verdict::Limit => "wrote too much output",
+        _ => "failed",
+    };
+    if detail.is_empty() { verdict.to_string() } else { format!("{verdict}: {detail}") }
+}
+
+/// Shares `RunState` with the test runner, so the stop button stops whichever is going.
+#[tauri::command]
+async fn stress_test(app: tauri::AppHandle, state: tauri::State<'_, RunState>, request: StressRequest) -> Result<StressOutcome, String> {
+    state.0.store(false, Ordering::Relaxed);
+    let cancelled = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || stress_sync(request, app, cancelled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 fn stop_run(state: tauri::State<'_, RunState>) {
     state.0.store(true, Ordering::Relaxed);
@@ -987,6 +1190,30 @@ async fn close_app(window: tauri::Window) {
     // The problem window, shown or hidden, would keep the process alive by itself.
     let _ = browser::close_problem_window(window.app_handle());
     let _ = window.destroy();
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsFileRequest {
+    path: String,
+    #[serde(default)]
+    contents: String,
+}
+
+/// Settings live in the webview's local storage, which no backup reaches and which a
+/// reinstall or a changed app identifier can empty without warning. These two write and
+/// read the one file the user can keep somewhere safe.
+#[tauri::command]
+fn export_settings_file(request: SettingsFileRequest) -> Result<(), String> {
+    if request.contents.len() > 8 * 1024 * 1024 { return Err("The settings are too large to export.".into()); }
+    fs::write(&request.path, &request.contents).map_err(|error| format!("Could not write {}: {error}", request.path))
+}
+
+#[tauri::command]
+fn import_settings_file(request: SettingsFileRequest) -> Result<String, String> {
+    let metadata = fs::metadata(&request.path).map_err(|error| format!("Could not read {}: {error}", request.path))?;
+    if metadata.len() > 8 * 1024 * 1024 { return Err("That file is too large to be a settings backup.".into()); }
+    fs::read_to_string(&request.path).map_err(|error| format!("Could not read {}: {error}", request.path))
 }
 
 #[tauri::command]
@@ -1265,6 +1492,8 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
                 source_url: None,
                 judge_status: None, limits: None,
                 modified_at: file_modified_at(&source_path),
+                order: None,
+                submissions: Vec::new(),
             });
         }
     }
@@ -1351,7 +1580,11 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             source_url: problem.source_url.clone(),
             judge_status: problem.judge_status.clone(), limits: problem.limits,
             modified_at: logical_modified_at,
+            order: metadata_problems.iter().find(|item| item.filename == filename).and_then(|item| item.order),
+            submissions: metadata_problems.iter().find(|item| item.filename == filename).map(|item| item.submissions.clone()).unwrap_or_default(),
         };
+        let order = metadata_problem.order;
+        let submissions = metadata_problem.submissions.clone();
         if let Some(index) = metadata_problems.iter().position(|item| item.filename == filename) {
             metadata_problems[index] = metadata_problem;
         } else {
@@ -1367,6 +1600,8 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             source_url: problem.source_url,
             judge_status: problem.judge_status, limits: problem.limits,
             modified_at: logical_modified_at,
+            order,
+            submissions,
         });
     }
     let metadata = WorkspaceMetadata {
@@ -1517,10 +1752,10 @@ fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<Wo
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
     let code = fs::read_to_string(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
-    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), limits: source_problem.limits, modified_at: file_modified_at(&destination) };
+    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), limits: source_problem.limits, modified_at: file_modified_at(&destination), order: source_problem.order, submissions: Vec::new() };
     metadata.problems.push(duplicated.clone());
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
-    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, limits: duplicated.limits, modified_at: duplicated.modified_at })
+    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, limits: duplicated.limits, modified_at: duplicated.modified_at, order: duplicated.order, submissions: duplicated.submissions })
 }
 
 #[tauri::command]
@@ -1549,7 +1784,7 @@ fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<Workspac
     }
     problem.filename = new_filename.clone();
     problem.language = new_language.clone();
-    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), limits: problem.limits, modified_at: problem.modified_at };
+    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), limits: problem.limits, modified_at: problem.modified_at, order: problem.order, submissions: problem.submissions.clone() };
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
     Ok(result)
 }
@@ -1586,6 +1821,8 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                         source_url: None,
                         judge_status: None, limits: None,
                         modified_at: 0,
+                        order: None,
+                        submissions: Vec::new(),
                     }],
                 }
             }
@@ -1597,6 +1834,14 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
     sync_workspace_source_files(&folder, &mut metadata)?;
     fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
         .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(LoadedWorkspace {
+        problems: read_workspace_problems(&folder, metadata)?,
+        folder_path: folder.to_string_lossy().into_owned(),
+        panel_mode,
+    })
+}
+
+fn read_workspace_problems(folder: &Path, metadata: WorkspaceMetadata) -> Result<Vec<WorkspaceProblemOutput>, String> {
     let mut problems = Vec::new();
     for problem in metadata.problems {
         let source_path = folder.join(&problem.filename);
@@ -1612,13 +1857,71 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             source_url: problem.source_url,
             judge_status: problem.judge_status, limits: problem.limits,
             modified_at: if problem.modified_at > 0 { problem.modified_at } else { file_modified_at(&source_path) },
+            order: problem.order,
+            submissions: problem.submissions,
         });
     }
-    Ok(LoadedWorkspace {
-        folder_path: folder.to_string_lossy().into_owned(),
-        panel_mode,
-        problems,
-    })
+    Ok(problems)
+}
+
+/// Rescans the folder and returns every source file in it. Files created, deleted or
+/// renamed outside the editor only reach `.mild-editor.json` through a scan, and the one
+/// in `load_workspace` runs at start-up, so without this the explorer would not show them
+/// until the workspace was opened again.
+#[tauri::command]
+fn reload_workspace_files(request: ListWorkspaceFilesRequest) -> Result<Vec<WorkspaceProblemOutput>, String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    if !folder.is_dir() { return Err("The workspace folder is gone.".into()); }
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = match fs::read_to_string(&metadata_path) {
+        Ok(json) => serde_json::from_str(&json).map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?,
+        Err(_) => WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() },
+    };
+    let before = serde_json::to_string(&metadata).unwrap_or_default();
+    sync_workspace_source_files(&folder, &mut metadata)?;
+    // Only written when the scan found something, so an idle editor does not keep
+    // rewriting the file and changing its timestamp.
+    if serde_json::to_string(&metadata).unwrap_or_default() != before {
+        fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    }
+    read_workspace_problems(&folder, metadata)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderWorkspaceFilesRequest {
+    folder_path: String,
+    /// The folder whose files are being arranged; empty for the workspace root.
+    directory: String,
+    /// Every source file of that folder, in the order the explorer should show them.
+    filenames: Vec<String>,
+}
+
+/// Records the order the explorer shows a folder's files in, so a drag between two rows
+/// survives a restart. Files of other folders keep the order they had.
+#[tauri::command]
+fn reorder_workspace_files(request: ReorderWorkspaceFilesRequest) -> Result<(), String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?.to_string_lossy().replace('\\', "/");
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("Could not read workspace metadata: {error}"))
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
+    let wanted: Vec<String> = request.filenames.iter()
+        .map(|filename| workspace_relative_filename(filename))
+        .collect::<Result<Vec<_>, _>>()?
+        .iter().map(|filename| filename_key(filename)).collect();
+    for problem in &mut metadata.problems {
+        let parent = Path::new(&problem.filename).parent().map(|parent| parent.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        if !parent.eq_ignore_ascii_case(&directory) { continue; }
+        // A file of this folder that the caller did not list keeps no position, so it
+        // falls in with the ones that were never arranged.
+        problem.order = wanted.iter().position(|key| *key == filename_key(&problem.filename)).map(|index| index as u32);
+    }
+    fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(())
 }
 
 fn parse_atcoder_samples(html: &str) -> Vec<SavedTestCase> {
@@ -2228,6 +2531,27 @@ fn fetch_atcoder_submissions(
     submissions
 }
 
+/// Adds the submission the judge is reporting to a problem's history, if it is not the one
+/// already at the end of it. A judge only ever names the latest submission, so a verdict
+/// that is still being decided is replaced in place as it settles rather than appended
+/// again — otherwise one submission would leave `WJ`, `WJ`, `AC` behind it.
+fn record_submission(history: &mut Vec<SubmissionRecord>, status: &SubmissionStatus) {
+    let Some(verdict) = status.status.clone() else { return };
+    let record = SubmissionRecord { status: verdict, url: status.submission_url.clone(), at: status.submitted_at };
+    match history.last_mut() {
+        Some(last) if last.url.is_some() && last.url == record.url => *last = record,
+        // Without a submission link, the only handle on identity is the time it was made.
+        Some(last) if last.url.is_none() && record.url.is_none() && last.at == record.at && record.at != 0 => *last = record,
+        Some(last) if *last == record => {}
+        _ => history.push(record),
+    }
+    // A long history is of no use and would bloat the metadata of every solved problem.
+    if history.len() > 50 {
+        let excess = history.len() - 50;
+        history.drain(0..excess);
+    }
+}
+
 fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("MildEditor/", env!("CARGO_PKG_VERSION")))
@@ -2259,6 +2583,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
     for problem in request.problems {
         let mut status = None;
         let mut submission_url = None;
+        let mut submitted_at = 0u64;
         match problem.source.as_str() {
             "codeforces" if !request.codeforces_handle.trim().is_empty() => {
                 if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
@@ -2267,6 +2592,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                             && submission.pointer("/problem/index").and_then(|value| value.as_str()).is_some_and(|value| value.eq_ignore_ascii_case(&index))
                     }) {
                         status = Some(submission.get("verdict").and_then(|value| value.as_str()).unwrap_or("TESTING").replace('_', " "));
+                        submitted_at = submission.get("creationTimeSeconds").and_then(|value| value.as_u64()).unwrap_or_default();
                         if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
                             submission_url = Some(format!("https://codeforces.com/contest/{contest}/submission/{id}"));
                         }
@@ -2293,6 +2619,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                     }
                     if let Some(submission) = submission {
                         status = submission.get("result").and_then(|value| value.as_str()).map(str::to_string);
+                        submitted_at = submission.get("epoch_second").and_then(|value| value.as_u64()).unwrap_or_default();
                         if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
                             submission_url = Some(format!("https://atcoder.jp/contests/{contest}/submissions/{id}"));
                         }
@@ -2318,7 +2645,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
             }
             _ => {}
         }
-        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url });
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new() });
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
@@ -2337,9 +2664,11 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                     };
                     let effective_url = problem.source_url.clone().or(inferred_url);
                     if let Some(url) = effective_url {
-                        if let Some(result) = statuses.iter().find(|result| result.source_url == url.as_str()) {
+                        if let Some(index) = statuses.iter().position(|result| result.source_url == url.as_str()) {
                             problem.source_url = Some(url);
-                            problem.judge_status = result.status.clone();
+                            problem.judge_status = statuses[index].status.clone();
+                            record_submission(&mut problem.submissions, &statuses[index]);
+                            statuses[index].submissions = problem.submissions.clone();
                         }
                     }
                 }
@@ -2665,6 +2994,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             run_code,
+            stress_test,
             stop_run,
             updates::check_update,
             updates::install_update,
@@ -2673,6 +3003,8 @@ pub fn run() {
             interactive::close_interactive_input,
             interactive::stop_interactive,
             close_app,
+            export_settings_file,
+            import_settings_file,
             read_font_file,
             read_image_file,
             save_workspace_tests,
@@ -2684,6 +3016,8 @@ pub fn run() {
             save_workspace_panel_mode,
             list_workspace_source_filenames,
             list_workspace_directories,
+            reload_workspace_files,
+            reorder_workspace_files,
             create_workspace_folder,
             rename_workspace_folder,
             move_workspace_folder,
@@ -2951,6 +3285,182 @@ mod tests {
         // Both fields emptied: back to the defaults, and nothing left in the file.
         edit(Some(ProblemLimits::default()));
         assert_eq!(loaded(), None);
+    }
+
+    #[test]
+    fn the_counterexample_search_finds_a_case_that_separates_two_solutions() {
+        if find_tool("python3").is_none() && find_tool("python").is_none() { return; }
+        let program = |code: &str| StressProgram { language: "python".into(), code: code.into() };
+        // A maximum-subarray problem whose "solution" never allows an all-negative answer,
+        // which only a generator that can produce one will expose.
+        let request = StressRequest {
+            run_id: "test".into(),
+            generator: program("import random\nn = random.randint(1, 4)\nprint(n)\nprint(*[random.randint(-5, -1) for _ in range(n)])\n"),
+            reference: program("n = int(input()); a = list(map(int, input().split()))\nprint(max(sum(a[i:j+1]) for i in range(n) for j in range(i, n)))\n"),
+            solution: program("n = int(input()); a = list(map(int, input().split()))\nbest = cur = 0\nfor x in a:\n    cur = max(0, cur + x)\n    best = max(best, cur)\nprint(best)\n"),
+            rounds: 30,
+            time_limit_ms: Some(10_000),
+            atcoder_library_path: None,
+            float_tolerance: 0.0,
+            build: BuildOptions::default(),
+        };
+        let seen = std::sync::Mutex::new(Vec::new());
+        let outcome = stress_search(&request, &AtomicBool::new(false), &|round| seen.lock().expect("rounds").push(round))
+            .expect("the search runs");
+        match outcome {
+            StressOutcome::Mismatch { input, expected, actual, .. } => {
+                assert!(!input.trim().is_empty());
+                assert_ne!(expected.trim(), actual.trim());
+                // The reference is right: an all-negative array answers with its largest element.
+                assert_eq!(actual.trim(), "0");
+            }
+            other => panic!("expected a counterexample, got {}", serde_json::to_string(&other).expect("outcome")),
+        }
+        assert_eq!(seen.lock().expect("rounds").first(), Some(&1));
+
+        // Two solutions that agree are reported as such rather than as a finding.
+        let agreeing = StressRequest {
+            run_id: "test".into(),
+            solution: program("n = int(input()); a = list(map(int, input().split()))\nprint(max(sum(a[i:j+1]) for i in range(n) for j in range(i, n)))\n"),
+            rounds: 5,
+            ..request
+        };
+        assert!(matches!(stress_search(&agreeing, &AtomicBool::new(false), &|_| {}), Ok(StressOutcome::Passed { rounds: 5 })));
+
+        // Cancelling stops it where it is.
+        assert!(matches!(stress_search(&agreeing, &AtomicBool::new(true), &|_| {}), Ok(StressOutcome::Stopped { .. })));
+
+        // And the stop button works mid-search, which is the case that matters: the flag is
+        // set from another thread while the rounds are already running.
+        let long = StressRequest { rounds: 400, ..agreeing };
+        let flag = Arc::new(AtomicBool::new(false));
+        let raised = flag.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            raised.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let outcome = stress_search(&long, &flag, &|_| {}).expect("the search runs");
+        stopper.join().expect("stopper");
+        match outcome {
+            StressOutcome::Stopped { rounds } => assert!(rounds < 400, "stopped after {rounds} of 400"),
+            other => panic!("expected a stop, got {}", serde_json::to_string(&other).expect("outcome")),
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "the stop was not acted on promptly");
+    }
+
+    #[test]
+    fn stress_output_comparison_matches_the_editors_own_rule() {
+        // Exactly the cases src/judge.ts is written around, so the counterexample search
+        // accepts and rejects what the test panel would.
+        assert!(outputs_match("1 2\n3\n", "1 2\r\n3", 0.0));
+        assert!(outputs_match("YES", "YES\n\n", 0.0));
+        assert!(!outputs_match("1 2", "1  2", 0.0));
+        assert!(!outputs_match("7", "9", 1e-6));
+        // A decimal may drift; an integer may not, however small the difference looks.
+        assert!(outputs_match("0.5000000", "0.4999999", 1e-6));
+        assert!(!outputs_match("0.5", "0.6", 1e-6));
+        assert!(outputs_match("1e9", "1000000000.0000001", 1e-6));
+        assert!(!outputs_match("5", "5.0000001", 1e-6));
+        // Tolerance never rescues a different shape.
+        assert!(!outputs_match("1.0\n2.0", "1.0", 1e-6));
+        assert!(!outputs_match("abc", "abd", 1e-6));
+    }
+
+    #[test]
+    fn submission_history_follows_one_verdict_and_appends_the_next() {
+        let status = |verdict: &str, url: Option<&str>, at: u64| SubmissionStatus {
+            source_url: "https://atcoder.jp/contests/abc400/tasks/abc400_a".into(),
+            status: Some(verdict.into()),
+            submission_url: url.map(str::to_string),
+            submitted_at: at,
+            submissions: Vec::new(),
+        };
+        let mut history = Vec::new();
+
+        // One submission settling from judging to a verdict stays one entry.
+        record_submission(&mut history, &status("WJ", Some("s/1"), 100));
+        record_submission(&mut history, &status("WA", Some("s/1"), 100));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, "WA");
+
+        // The next submission is a new entry, and polling again does not duplicate it.
+        record_submission(&mut history, &status("AC", Some("s/2"), 200));
+        record_submission(&mut history, &status("AC", Some("s/2"), 200));
+        assert_eq!(history.iter().map(|item| item.status.as_str()).collect::<Vec<_>>(), vec!["WA", "AC"]);
+        assert_eq!(history[1].at, 200);
+
+        // A judge that gives no link is told apart by the time it reports instead.
+        let mut linkless = Vec::new();
+        record_submission(&mut linkless, &status("JUDGING", None, 10));
+        record_submission(&mut linkless, &status("SCORE 50/100", None, 10));
+        record_submission(&mut linkless, &status("SCORE 100/100", None, 20));
+        assert_eq!(linkless.iter().map(|item| item.status.as_str()).collect::<Vec<_>>(), vec!["SCORE 50/100", "SCORE 100/100"]);
+
+        // Nothing to report leaves the history alone, and it never grows without bound.
+        let mut empty = Vec::new();
+        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new() });
+        assert!(empty.is_empty());
+        let mut long = Vec::new();
+        for index in 0..60 {
+            record_submission(&mut long, &status("WA", Some(&format!("s/{index}")), index));
+        }
+        assert_eq!(long.len(), 50);
+        assert_eq!(long[0].url.as_deref(), Some("s/10"));
+    }
+
+    #[test]
+    fn a_rescan_picks_up_files_added_outside_the_editor_and_keeps_the_arranged_order() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "B.cpp".into(), title: "B".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            }],
+        }).expect("save source");
+
+        // Something outside the editor drops two files into the folder.
+        fs::write(directory.path().join("A.py"), "print(1)").expect("write A");
+        fs::create_dir(directory.path().join("day2")).expect("subfolder");
+        fs::write(directory.path().join("day2").join("C.cpp"), "int main() {}").expect("write C");
+
+        let files = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan");
+        let names: Vec<&str> = files.iter().map(|problem| problem.filename.as_str()).collect();
+        assert_eq!(names, vec!["A.py", "B.cpp", "day2/C.cpp"]);
+        assert_eq!(files.iter().find(|problem| problem.filename == "A.py").expect("A").language, "python");
+        // The rescan does not disturb what was already known.
+        assert_eq!(files.iter().find(|problem| problem.filename == "B.cpp").expect("B").title, "B");
+
+        reorder_workspace_files(ReorderWorkspaceFilesRequest {
+            folder_path: folder_path.clone(), directory: String::new(), filenames: vec!["B.cpp".into(), "A.py".into()],
+        }).expect("reorder the root");
+        let arranged = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan again");
+        let order = |name: &str| arranged.iter().find(|problem| problem.filename == name).expect("problem").order;
+        assert_eq!((order("B.cpp"), order("A.py")), (Some(0), Some(1)));
+        // A file of another folder is not touched by that folder's arrangement.
+        assert_eq!(order("day2/C.cpp"), None);
+
+        // Saving a file again keeps the place it was dragged to.
+        save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "A.py".into(), title: "A".into(), language: "python".into(), code: "print(2)".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            }],
+        }).expect("save again");
+        let after = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan once more");
+        assert_eq!(after.iter().find(|problem| problem.filename == "A.py").expect("A").order, Some(1));
+        // Saving one file alone is how the counterexample dialog creates a problem's helpers,
+        // so it has to leave every other problem in the workspace exactly as it was.
+        assert_eq!(after.iter().find(|problem| problem.filename == "B.cpp").expect("B").title, "B");
+        assert_eq!(after.iter().find(|problem| problem.filename == "day2/C.cpp").expect("C").filename, "day2/C.cpp");
+        assert_eq!(after.len(), 3);
+
+        // Deleting outside the editor drops the file from the metadata too.
+        fs::remove_file(directory.path().join("B.cpp")).expect("delete B");
+        let pruned = reload_workspace_files(ListWorkspaceFilesRequest { folder_path }).expect("final rescan");
+        assert!(!pruned.iter().any(|problem| problem.filename == "B.cpp"));
     }
 
     #[test]
