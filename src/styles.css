@@ -440,10 +440,9 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .stress-result.made { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); }
 .stress-result.made strong { color: var(--accent); font-weight: 650; }
 .stress-result.made > span { color: var(--text-2); }
-.stress-made-file { width: 100%; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: var(--r-m); background: var(--bg-2); color: var(--text); text-align: left; font-size: var(--fs-s); transition: border-color .12s, background .12s; }
-.stress-made-file:hover { border-color: var(--accent); background: var(--bg-3); }
-.stress-made-file > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stress-made-file small { flex: 0 0 auto; color: var(--muted); font-size: var(--fs-xs); }
+.stress-made-files { margin: 2px 0 0; padding: 0; display: grid; gap: 4px; list-style: none; }
+.stress-made-files li { min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.stress-open-made { height: var(--control); justify-self: start; margin-top: 4px; }
 .stress-result small { color: var(--muted); font-size: var(--fs-xs); }
 .stress-result pre { max-height: 150px; margin: 0; overflow: auto; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs); white-space: pre-wrap; word-break: break-word; }
 .stress-case { padding: 7px 9px; border-radius: var(--r-m); background: var(--field); }
