@@ -149,9 +149,10 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 .app-shell:has(.tab-strip:empty) .problem-tabs { border-bottom: 0; }
 
 /* Language badge, shared by tabs and the explorer */
-.file-icon { min-width: 24px; height: 16px; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 0 4px; border-radius: var(--r-s); background: color-mix(in srgb, currentColor 14%, transparent); font-size: 9.5px; font-weight: 700; line-height: 1; letter-spacing: .01em; }
-.file-icon.cpp { color: var(--cpp); }
-.file-icon.python { color: var(--python); }
+.file-icon { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: 0 0 auto; }
+.language-icon { flex: 0 0 auto; }
+.language-icon.cpp { color: var(--cpp); }
+.language-icon.python { color: var(--python); }
 .file-icon.json { color: var(--json); }
 
 /* ── Workspace and panel mechanics ────────────────────────────────────────── */
@@ -342,6 +343,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-directory-chevron { transition: transform .12s ease; }
 .explorer-directory-chevron.open { transform: rotate(90deg); }
 .explorer-directory.drop-target, .explorer-files.drop-target { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
+/* Where a dragged row would be inserted, drawn on the edge between two files. */
+.explorer-drop-line { position: fixed; z-index: 2050; height: 2px; margin-top: -1px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); pointer-events: none; }
 .explorer-files.drop-target { border-radius: var(--r-m); }
 .explorer-drag-ghost { position: fixed; z-index: 2100; max-width: 260px; display: flex; align-items: center; gap: 6px; padding: 4px 9px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--bg-2); color: var(--muted); box-shadow: var(--elevation); font-size: var(--fs-s); white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
 .explorer-drag-ghost.ok { border-color: var(--accent); color: var(--text); }
@@ -395,6 +398,14 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .confirm-dialog p { margin: 0; color: var(--muted); font-size: var(--fs-m); line-height: 1.5; }
 .confirm-dialog > input { margin-top: 8px; }
 .confirm-dialog .settings-footer { padding-top: 20px; }
+.release-notes { width: min(480px, 92vw); }
+.release-notes .eyebrow { display: block; margin-bottom: 4px; color: var(--accent); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.release-notes-body { max-height: min(50vh, 380px); margin-top: 12px; overflow-y: auto; color: var(--text-2); font-size: var(--fs-m); line-height: 1.55; }
+.release-notes-body h3 { margin: 14px 0 6px; color: var(--text); font-size: var(--fs-m); font-weight: 650; }
+.release-notes-body h3:first-child { margin-top: 0; }
+.release-notes-body p { margin: 0 0 8px; }
+.release-notes-body ul { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 5px; }
+.release-notes-body strong { color: var(--text); font-weight: 600; }
 .atcoder-url { width: 100%; height: 36px; padding: 0 11px; font-size: var(--fs-m); }
 .eyebrow { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

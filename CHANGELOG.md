@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Language marks. The `C++` and `Py` badges beside a filename are now the C++ hexagon and the Python logo, drawn on the same grid as the rest of the icons and tinted by the theme.
+- Arrange files by hand. Dropping a row between two others in the explorer puts it there and switches the sort to **my order**, which is saved with the workspace. Dropping it on a folder still just moves it.
+- Files added, renamed or deleted outside the editor are picked up. `.mild-editor.json` was only reconciled with the folder when the workspace opened, so anything another program put there stayed invisible until a restart; the explorer now rescans when the window comes back into focus, and its header has a button for it.
+- `Ctrl+Shift+T` (`⌘⇧T`) reopens the tab closed last. `Del` deletes the selected explorer row on Windows and Linux, as `⌘⌫` already did on macOS.
+- After an update installs, the new build opens with the release notes of the version it just became.
+
 ## 1.12.0
 
 - Move files and folders. Drag a row of the explorer onto a folder (or onto the empty space, for the workspace root), or use **Move to…** in its context menu. Open tabs, saved tests, folded folders and a running contest's solve times follow the move.

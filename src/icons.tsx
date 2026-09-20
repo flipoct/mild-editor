@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 /** One stroke icon set for the whole interface: 16px grid, 1.4px round strokes, currentColor. */
 const paths = {
@@ -30,6 +30,8 @@ const paths = {
   send: <path d="M14 2 7.2 8.8M14 2 9.6 14l-2.4-5.2L2 6.4Z" />,
   trophy: <path d="M5 2.2h6v4a3 3 0 0 1-6 0ZM5 3.4H2.6c0 2 .8 3.2 2.6 3.4M11 3.4h2.4c0 2-.8 3.2-2.6 3.4M8 9.2v2.6M5.4 13.8h5.2M6.2 11.8h3.6" />,
   upload: <path d="M8 10.4v-8M4.6 5.6 8 2.2l3.4 3.4M2.8 13.2h10.4" />,
+  braces: <path d="M6.4 2.4c-1.5 0-1.5 1.1-1.5 2.5s-.3 2.2-1.4 2.2v1.8c1.1 0 1.4.8 1.4 2.2s0 2.5 1.5 2.5M9.6 2.4c1.5 0 1.5 1.1 1.5 2.5s.3 2.2 1.4 2.2v1.8c-1.1 0-1.4.8-1.4 2.2s0 2.5-1.5 2.5" />,
+  refresh: <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8M13.6 2.2v3.2h-3.2" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;
@@ -49,6 +51,46 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
       aria-hidden="true"
     >
       {paths[name]}
+    </svg>
+  );
+}
+
+/**
+ * The language marks beside a filename: the ISO C++ hexagon and the Python two-snake logo,
+ * each drawn on the same 16px grid as the icon set and tinted through `currentColor`, so a
+ * theme's `--cpp` and `--python` still decide the colour.
+ *
+ * The hexagon carries its "C++" as a hole rather than a second colour, which keeps it
+ * legible on every surface the mark appears on — explorer row, hovered row, active tab —
+ * without any of them having to tell the icon what is behind it. The mask needs an id of
+ * its own per instance, since one shared id would break every other mark the moment the
+ * first one left the tree.
+ */
+export function LanguageIcon({ language, size = 16, className }: { language: string; size?: number; className?: string }) {
+  const maskId = useId();
+  const name = language === "python" ? "python" : "cpp";
+  return (
+    <svg
+      className={`language-icon ${name}${className ? ` ${className}` : ""}`}
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      role="img"
+      aria-label={name === "python" ? "Python" : "C++"}
+    >
+      {name === "cpp" ? <>
+        <mask id={maskId}>
+          <rect width="16" height="16" fill="#fff" />
+          <g fill="none" stroke="#000" strokeWidth="1.35" strokeLinecap="round">
+            <path d="M7.25 6.15A2.3 2.3 0 1 0 7.25 9.85" />
+            <path d="M9.4 8h1.9M10.35 7.05v1.9M12.05 8h1.9M13 7.05v1.9" strokeWidth="1.15" />
+          </g>
+        </mask>
+        <path d="M8 1.3 13.8 4.65v6.7L8 14.7 2.2 11.35v-6.7Z" fill="currentColor" mask={`url(#${maskId})`} />
+      </> : <>
+        <path fill="currentColor" d="M7.9 1.2c-1.1 0-2 .1-2.6.3-.9.3-1.1.9-1.1 1.6v1.2h3.8v.5H2.7c-.9 0-1.7.5-1.9 1.5-.3 1.1-.3 1.8 0 3 .2.9.8 1.5 1.7 1.5h1.2V9.1c0-1 .9-1.9 1.9-1.9h2.4c.9 0 1.6-.7 1.6-1.6V3.1c0-.9-.7-1.5-1.6-1.7-.5-.1-1.1-.2-2.1-.2Zm-2 1.1c.4 0 .7.3.7.7s-.3.7-.7.7-.7-.3-.7-.7.3-.7.7-.7Z" />
+        <path fill="currentColor" opacity=".7" d="M8.1 14.8c1.1 0 2-.1 2.6-.3.9-.3 1.1-.9 1.1-1.6v-1.2H8v-.5h5.3c.9 0 1.7-.5 1.9-1.5.3-1.1.3-1.8 0-3-.2-.9-.8-1.5-1.7-1.5h-1.2v1.7c0 1-.9 1.9-1.9 1.9H8c-.9 0-1.6.7-1.6 1.6v2.5c0 .9.7 1.5 1.6 1.7.5.1 1.1.2 2.1.2Zm2-1.1c-.4 0-.7-.3-.7-.7s.3-.7.7-.7.7.3.7.7-.3.7-.7.7Z" />
+      </>}
     </svg>
   );
 }

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Icon } from "./icons";
+import { Icon, LanguageIcon } from "./icons";
 import { DEFAULT_FLOAT_TOLERANCE, diffLines, outputsMatch, splitFlags } from "./judge";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
@@ -30,7 +30,7 @@ type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" |
 type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 type UiLocale = "en" | "ko";
 type WallpaperLayout = "cover" | "contain" | "stretch" | "original" | "tile" | "custom";
-type ExplorerSort = "modified" | "problem" | "name";
+type ExplorerSort = "modified" | "problem" | "name" | "custom";
 type EditorFont = string;
 type EditorFontOption = { id: string; label: string; family: string; path?: string };
 
@@ -127,6 +127,8 @@ type ProblemTab = {
   submissionUrl?: string;
   limits?: ProblemLimits;
   modifiedAt?: number;
+  /** Where the file sits in its folder when the explorer is sorted by hand. */
+  order?: number;
 };
 
 type LoadedProblem = {
@@ -151,6 +153,7 @@ type LoadedWorkspace = {
     judgeStatus?: string;
     limits?: ProblemLimits;
     modifiedAt: number;
+    order?: number;
   }>;
 };
 
@@ -177,10 +180,18 @@ type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderProblem[
 type ExplorerMenu = { file?: ProblemTab; directory?: string; x: number; y: number };
 /** Explorer row the menu bar acts on. Files and folders share one slot. */
 type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory"; path: string } | null;
+/**
+ * Where a dragged row would land. `into` puts it in a folder and leaves the order to the
+ * chosen sort; `between` is a slot among the files a folder shows, which also arranges
+ * them by hand. `line` is the rectangle the insertion mark is drawn on, in client pixels.
+ */
+type ExplorerDropTarget =
+  | { kind: "into"; directory: string }
+  | { kind: "between"; directory: string; index: number; line: { x: number; width: number; y: number } };
 /** Explorer row whose name is being edited in place. */
 type ExplorerRename = { kind: "file"; filename: string } | { kind: "directory"; path: string };
 type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ProblemTab };
-type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number };
+type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: LoadedProblem["tests"]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number; order?: number };
 
 type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string };
 type BackgroundImageFile = { bytes: number[]; mime: string };
@@ -461,6 +472,37 @@ const IS_DEV_BUILD = import.meta.env.DEV;
 // under its own app data directory, so testing an import cannot disturb the folder the
 // installed app is working in.
 const WORKSPACE_KEY = IS_DEV_BUILD ? "mild-dev-last-workspace" : "mild-last-workspace";
+/** Release notes parked by an update for the build that comes up after it. */
+const RELEASE_NOTES_KEY = "mild-release-notes";
+
+/**
+ * The little of GitHub's release markdown that the notes actually use: a heading, bullets,
+ * and paragraphs, with `**bold**` reduced to strong text. Anything else is shown as
+ * written rather than guessed at — these notes come from a release this build did not
+ * compose, so the safe reading of an unknown line is that it is a line of prose.
+ */
+const renderReleaseNotes = (notes: string): ReactNode[] => {
+  const blocks: ReactNode[] = [];
+  let bullets: string[] = [];
+  const emphasise = (text: string) => text.split(/\*\*([^*]+)\*\*/g).map((part, index) => index % 2 ? <strong key={index}>{part}</strong> : part);
+  const flush = () => {
+    if (!bullets.length) return;
+    blocks.push(<ul key={`list-${blocks.length}`}>{bullets.map((item, index) => <li key={index}>{emphasise(item)}</li>)}</ul>);
+    bullets = [];
+  };
+  for (const line of notes.replace(/\r\n/g, "\n").split("\n")) {
+    const text = line.trim();
+    if (!text) { flush(); continue; }
+    const bullet = text.match(/^[-*]\s+(.*)$/);
+    if (bullet) { bullets.push(bullet[1]); continue; }
+    flush();
+    const heading = text.match(/^#+\s+(.*)$/);
+    if (heading) blocks.push(<h3 key={`heading-${blocks.length}`}>{heading[1]}</h3>);
+    else blocks.push(<p key={`text-${blocks.length}`}>{emphasise(text)}</p>);
+  }
+  flush();
+  return blocks;
+};
 const OPEN_TABS_KEY = IS_DEV_BUILD ? "mild-dev-last-open-tabs" : "mild-last-open-tabs";
 const UPDATES_SUPPORTED = "__TAURI_INTERNALS__" in window && !IS_DEV_BUILD;
 
@@ -478,7 +520,7 @@ const messages = {
     buildSettings: "Build & judging", compileProfiles: "Compile profiles", compileProfilesHelp: "Flags passed to g++ after -std. Release is what the judge runs; Debug trades speed for checks that catch out-of-range access and overflow before the judge does. LOCAL is defined in Debug, so #ifdef LOCAL output stays out of a submission.", activeProfile: "Active profile", activeProfileHelp: "Also in the status bar, next to the language. A Debug run gets three times the time limit.", precompileHeaders: "Precompile bits/stdc++.h", precompileHeadersHelp: "Built once per profile and compiler, then reused: compiling a typical solution drops from seconds to a fraction of one. GCC only; Clang is skipped.",
     judging: "Judging", floatTolerance: "Floating-point tolerance", floatToleranceOff: "Off (exact match)", floatToleranceHelp: "When the expected output holds a decimal, an answer within this absolute or relative error is accepted. Integers and words are always compared exactly.",
     noWorkspace: "No workspace", unsavedWorkspace: "Unsaved workspace", snippetPlaceholder: "Snippet…", insert: "Insert", run: "Run", runTests: "Run tests", stop: "Stop", addTest: "Add test", errorTitle: "Something went wrong", theme: "Theme",
-    updates: "Updates", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
+    updates: "Updates", releaseNotesTitle: "What's new", releaseNotesUpdated: "Updated to v", releaseNotesNone: "This release ships without notes. The changelog on GitHub has the details.", releaseNotesClose: "Got it", updatesHelp: "Mild Editor checks the latest GitHub release when it starts. An update downloads in the background and the app restarts into the new version.", updatesCheck: "Check for updates", updatesIdle: "Not checked yet", updatesChecking: "Checking…", updatesUpToDate: "Up to date", updatesAvailable: "Update available:", updatesInstall: "Update and restart", updatesDownloading: "Downloading update…", updatesInstalling: "Installing… the app will restart", updatesInstalled: "Update installed — restart the app to finish", updatesError: "Update failed", updatesRetry: "Retry", updatesLater: "Later", updatesDev: "Not available in the development build",
     appearance: "Appearance", template: "Template", snippets: "Snippets", judge: "Online judges", languageServer: "Language server",
     preferences: "Preferences", interfaceLanguage: "Interface language", english: "English", korean: "Korean", interfaceScale: "Interface scale", interfaceScaleHelp: "Also on " + (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + ".",
     templateHelp: "Templates are saved separately for each judge and language. Variables: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. Put [[cursor]] where the editor cursor should start. Time values follow this computer's time zone. The existing ${...} syntax remains supported.",
@@ -489,7 +531,7 @@ const messages = {
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
     chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
-    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
+    sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
     welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
     backgroundImage: "Background image", chooseBackground: "Choose image", clearBackground: "Remove image", acrylicOpacity: "Panel opacity", acrylicBlur: "Background blur", backgroundHelp: "The image stays on your device. Panels and the editor become translucent while a background is selected.", noBackground: "No image selected",
@@ -513,7 +555,7 @@ const messages = {
     buildSettings: "빌드 및 채점", compileProfiles: "컴파일 프로필", compileProfilesHelp: "-std 뒤에 g++로 전달되는 플래그입니다. Release는 저지와 같은 조건이고, Debug는 속도를 내주는 대신 범위 밖 접근과 오버플로를 저지보다 먼저 잡아냅니다. Debug에서는 LOCAL이 정의되므로 #ifdef LOCAL 출력은 제출 코드에 섞이지 않습니다.", activeProfile: "사용 중인 프로필", activeProfileHelp: "상태바의 언어 옆에서도 바꿀 수 있습니다. Debug 실행은 시간 제한이 3배가 됩니다.", precompileHeaders: "bits/stdc++.h 미리 컴파일", precompileHeadersHelp: "프로필과 컴파일러별로 한 번 만들어 재사용합니다. 일반적인 풀이의 컴파일 시간이 몇 초에서 1초 미만으로 줄어듭니다. GCC 전용이며 Clang에서는 건너뜁니다.",
     judging: "채점", floatTolerance: "실수 오차 허용", floatToleranceOff: "끔 (완전 일치)", floatToleranceHelp: "예상 출력에 소수가 있을 때, 절대 또는 상대 오차가 이 값 이내인 답을 정답으로 처리합니다. 정수와 문자열은 항상 그대로 비교합니다.",
     noWorkspace: "워크스페이스 없음", unsavedWorkspace: "저장되지 않은 워크스페이스", snippetPlaceholder: "스니펫…", insert: "삽입", run: "실행", runTests: "테스트 실행", stop: "중지", addTest: "테스트 추가", errorTitle: "문제가 발생했습니다", theme: "테마",
-    updates: "업데이트", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
+    updates: "업데이트", releaseNotesTitle: "새로운 기능", releaseNotesUpdated: "업데이트 완료 — v", releaseNotesNone: "이번 릴리스에는 별도 설명이 없습니다. 자세한 내용은 GitHub 변경 내역을 참고하세요.", releaseNotesClose: "확인", updatesHelp: "시작할 때 GitHub 최신 릴리스를 확인합니다. 업데이트는 백그라운드로 내려받고, 설치 후 새 버전으로 다시 시작합니다.", updatesCheck: "업데이트 확인", updatesIdle: "아직 확인 안 함", updatesChecking: "확인 중…", updatesUpToDate: "최신 버전입니다", updatesAvailable: "새 버전:", updatesInstall: "업데이트 후 재시작", updatesDownloading: "업데이트 내려받는 중…", updatesInstalling: "설치 중… 앱이 다시 시작됩니다", updatesInstalled: "설치됨 — 앱을 다시 시작하면 적용됩니다", updatesError: "업데이트 실패", updatesRetry: "다시 시도", updatesLater: "나중에", updatesDev: "개발 빌드에서는 쓸 수 없습니다",
     appearance: "화면", template: "템플릿", snippets: "코드 스니펫", judge: "온라인 저지", languageServer: "언어 서버",
     preferences: "설정", interfaceLanguage: "인터페이스 언어", english: "영어", korean: "한국어", interfaceScale: "화면 배율", interfaceScaleHelp: (isMac ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0") + " 단축키로도 조절됩니다.",
     templateHelp: "템플릿은 사이트와 언어별로 저장됩니다. 변수: [[timestamp]], [[createdAt]], [[date]], [[time]], [[filename]], [[title]], [[url]], [[platform]]. 시작 커서에는 [[cursor]]를 넣으세요. 시간 값은 이 컴퓨터의 시간대를 따릅니다. 기존 ${...} 문법도 계속 지원됩니다.",
@@ -524,7 +566,7 @@ const messages = {
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
-    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
+    sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
     backgroundImage: "배경 이미지", chooseBackground: "이미지 선택", clearBackground: "이미지 제거", acrylicOpacity: "패널 불투명도", acrylicBlur: "배경 블러", backgroundHelp: "이미지는 기기에만 저장됩니다. 배경을 선택하면 패널과 에디터가 반투명하게 바뀝니다.", noBackground: "선택된 이미지 없음",
@@ -577,8 +619,11 @@ function App() {
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<ProblemTab | null>(null);
   const [explorerMenu, setExplorerMenu] = useState<ExplorerMenu | null>(null);
   const [moveEntry, setMoveEntry] = useState<NonNullable<ExplorerSelection> | null>(null);
-  const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; over: string | null } | null>(null);
-  const explorerDragRef = useRef<{ entry: NonNullable<ExplorerSelection>; label: string; startX: number; startY: number; active: boolean; over: string | null } | null>(null);
+  const [explorerDrag, setExplorerDrag] = useState<{ entry: NonNullable<ExplorerSelection>; label: string; x: number; y: number; target: ExplorerDropTarget | null } | null>(null);
+  const explorerDragRef = useRef<{ entry: NonNullable<ExplorerSelection>; label: string; startX: number; startY: number; active: boolean; target: ExplorerDropTarget | null } | null>(null);
+  /** Filenames of closed tabs, newest first, for Ctrl+Shift+T. Only the name is kept: the
+   * file is read from the workspace again, so reopening never resurrects stale code. */
+  const closedTabsRef = useRef<string[]>([]);
   /** Set for the click that ends a drag, so dropping a row does not also open or fold it. */
   const explorerDragClickRef = useRef(false);
   const [verdictNotices, setVerdictNotices] = useState<VerdictNotice[]>([]);
@@ -622,6 +667,12 @@ function App() {
   // against; package.json is only the fallback for the browser preview.
   const [appVersion, setAppVersion] = useState(APP_VERSION);
   const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
+  /**
+   * The release notes of the version now running, shown once after an update replaced the
+   * app under it. They are kept from the moment the download finished, because by the time
+   * the new build starts there is nothing left to ask: the updater has already handed over.
+   */
+  const [releaseNotes, setReleaseNotes] = useState<{ version: string; notes?: string } | null>(null);
   const pendingUpdateRef = useRef<AvailableUpdate | null>(null);
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => (localStorage.getItem("mild-ui-locale") as UiLocale) || "en");
   const [atcoderHandle, setAtcoderHandle] = useState(() => localStorage.getItem("mild-atcoder-handle") || "");
@@ -727,18 +778,29 @@ function App() {
           : `${wallpaperScale}% auto`;
   const wallpaperRepeat = wallpaperLayout === "tile" ? "repeat" : "no-repeat";
   const wallpaperPosition = `${wallpaperPositionX}% ${wallpaperPositionY}%`;
-  const explorerFiles = useMemo(() => {
-    const files = workspacePath
+  const explorerFileSet = useMemo(() => workspacePath
       ? [...savedFiles.map((saved) => tabs.find((tab) => fileKey(tab.filename) === fileKey(saved.filename)) || saved), ...tabs.filter((tab) => !savedFiles.some((saved) => fileKey(saved.filename) === fileKey(tab.filename)))]
-      : tabs;
-    const filtered = explorerSource === "all" ? files : files.filter((file) => (file.source || "other") === explorerSource);
+      : tabs, [savedFiles, tabs, workspacePath]);
+  const sortExplorerFiles = (files: ProblemTab[]) => {
     const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-    return [...filtered].sort((left, right) => {
+    return [...files].sort((left, right) => {
       if (explorerSort === "modified") return (right.modifiedAt || 0) - (left.modifiedAt || 0) || natural.compare(left.filename, right.filename);
       if (explorerSort === "name") return natural.compare(left.title || left.filename, right.title || right.filename);
+      // Hand-arranged files come first, in the order they were dragged into; the rest keep
+      // the problem-number order behind them, so a folder never has to be arranged in full.
+      if (explorerSort === "custom" && (left.order !== undefined || right.order !== undefined)) {
+        if (left.order === undefined) return 1;
+        if (right.order === undefined) return -1;
+        if (left.order !== right.order) return left.order - right.order;
+      }
       return natural.compare(left.filename.replace(/\.[^.]+$/, ""), right.filename.replace(/\.[^.]+$/, "")) || natural.compare(left.filename, right.filename);
     });
-  }, [explorerSort, explorerSource, savedFiles, tabs, workspacePath]);
+  };
+  const sortExplorerFilesRef = useRef(sortExplorerFiles);
+  sortExplorerFilesRef.current = sortExplorerFiles;
+  const explorerFiles = useMemo(
+    () => sortExplorerFilesRef.current(explorerSource === "all" ? explorerFileSet : explorerFileSet.filter((file) => (file.source || "other") === explorerSource)),
+    [explorerSort, explorerSource, explorerFileSet]);
   const explorerTree = useMemo(() => {
     type DirectoryNode = Extract<ExplorerTreeNode, { kind: "directory" }>;
     const root: DirectoryNode = { kind: "directory", name: "", path: "", children: [] };
@@ -856,9 +918,12 @@ function App() {
     else document.documentElement.style.setProperty("zoom", `${uiZoom}%`);
   }, [uiZoom]);
 
+  // True once the running build has told us its version. Anything that compares against
+  // it has to wait: until then `appVersion` is only what package.json said at build time.
+  const [appVersionResolved, setAppVersionResolved] = useState(!("__TAURI_INTERNALS__" in window));
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    void getAppVersion().then(setAppVersion).catch(() => undefined);
+    void getAppVersion().then(setAppVersion).catch(() => undefined).finally(() => setAppVersionResolved(true));
   }, []);
 
   // One check per launch, a few seconds in so it never competes with opening the workspace.
@@ -1173,7 +1238,7 @@ function App() {
     id: crypto.randomUUID(), title: file.title, filename: file.filename, language: file.language,
     codes: { cpp: storedTemplate("cpp", file.source || "other"), python: storedTemplate("python", file.source || "other"), [file.language]: file.code },
     tests: hydrateTests(file.tests),
-    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt,
+    source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt, order: file.order,
   });
 
   const changeActiveLanguage = async (next: Language) => {
@@ -1256,17 +1321,18 @@ function App() {
     } catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
 
-  const commitWorkspaceRename = async (original: ProblemTab, requestedFilename: string) => {
-    if (!workspacePath) return;
+  /** Returns the name the file now has, or null when nothing was renamed. */
+  const commitWorkspaceRename = async (original: ProblemTab, requestedFilename: string): Promise<string | null> => {
+    if (!workspacePath) return null;
     const typed = requestedFilename.trim();
-    if (!typed) return;
+    if (!typed) return null;
     if (!languageFromFilename(typed) && /\.[^./\\]+$/.test(explorerBasename(typed))) {
       setFileStatus("Use a .cpp, .cc, .cxx or .py extension, or leave it off.");
-      return;
+      return null;
     }
     // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
     const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
-    if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return;
+    if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return original.filename;
     const occupied = [...savedFiles, ...tabs]
       .filter((file) => file.id !== original.id && fileKey(file.filename) !== fileKey(original.filename))
       .map((file) => file.filename);
@@ -1277,7 +1343,7 @@ function App() {
       if (activeTab?.id === original.id && nextLanguage) setLanguage(nextLanguage);
       setFileStatus("saved");
       setAutoSaveRevision((revision) => revision + 1);
-      return;
+      return filename;
     }
     try {
       const result = await invoke<WorkspaceFileResult>("rename_workspace_file", { request: { folderPath: workspacePath, filename: original.filename, newFilename: filename } });
@@ -1297,10 +1363,12 @@ function App() {
         acceptedBefore: current.acceptedBefore && Object.fromEntries(Object.entries(current.acceptedBefore).map(([key, url]) => [rekey(key), url])),
       });
       setFileStatus("saved");
+      return result.filename;
     } catch (error) {
       setTabs((items) => items.map((tab) => tab.id === original.id ? { ...tab, filename: original.filename, language: original.language } : tab));
       if (activeTab?.id === original.id) setLanguage(original.language);
       setFileStatus(error instanceof Error ? error.message : String(error));
+      return null;
     }
   };
 
@@ -1338,6 +1406,46 @@ function App() {
     try { await invoke("open_workspace_folder_location", { request: { folderPath: workspacePath, directory } }); }
     catch (error) { setFileStatus(error instanceof Error ? error.message : String(error)); }
   };
+
+  /**
+   * Picks up whatever changed in the folder behind the editor's back. `.mild-editor.json`
+   * is only reconciled with the disk by a scan, and the one in `load_workspace` runs at
+   * start-up, so a file dropped in by another program — an unzipped contest, a copy from a
+   * terminal — would otherwise stay invisible until the workspace was opened again. Open
+   * tabs keep their own text; only the saved-file list is rebuilt.
+   */
+  const lastRescanRef = useRef(0);
+  const rescanWorkspaceFiles = async (announce = false) => {
+    if (!workspacePath) return;
+    if (!announce && Date.now() - lastRescanRef.current < 3000) return;
+    lastRescanRef.current = Date.now();
+    try {
+      const files = await invoke<WorkspaceFileResult[]>("reload_workspace_files", { request: { folderPath: workspacePath } });
+      setSavedFiles((current) => files.map((file) => {
+        // A file the editor already knew keeps its tab identity, so a scan that found
+        // nothing new leaves every binding to it — an open tab, the contest board — alone.
+        const known = current.find((item) => fileKey(item.filename) === fileKey(file.filename));
+        return known ? { ...known, ...makeTab(file), id: known.id } : makeTab(file);
+      }));
+      await refreshWorkspaceDirectories(workspacePath);
+      if (announce) setFileStatus(t("explorerRescanned"));
+    } catch (error) {
+      if (announce) setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const rescanWorkspaceFilesRef = useRef(rescanWorkspaceFiles);
+  rescanWorkspaceFilesRef.current = rescanWorkspaceFiles;
+  // Coming back to the editor is when a change made elsewhere matters, and it is the one
+  // moment a scan cannot be mistaken for the editor reacting to its own writes.
+  useEffect(() => {
+    const rescan = () => { if (document.visibilityState === "visible") void rescanWorkspaceFilesRef.current(); };
+    window.addEventListener("focus", rescan);
+    document.addEventListener("visibilitychange", rescan);
+    return () => {
+      window.removeEventListener("focus", rescan);
+      document.removeEventListener("visibilitychange", rescan);
+    };
+  }, []);
 
   const refreshWorkspaceDirectories = async (folderPath = workspacePath) => {
     if (!folderPath) { setWorkspaceDirectories([]); return; }
@@ -1442,28 +1550,57 @@ function App() {
   const renameWorkspaceFolder = (directory: string, newName: string) => relocateWorkspaceFolder(directory, "rename_workspace_folder", { newName });
 
   /** Moves a file or a folder into `targetDirectory` ("" is the workspace root). */
-  const moveExplorerEntry = async (entry: NonNullable<ExplorerSelection>, targetDirectory: string) => {
-    if (!workspacePath) return;
+  const moveExplorerEntry = async (entry: NonNullable<ExplorerSelection>, targetDirectory: string): Promise<string | null> => {
+    if (!workspacePath) return null;
     const target = normalizedExplorerPath(targetDirectory);
-    if (!canMoveInto(entry, target)) return;
+    if (!canMoveInto(entry, target)) return null;
     if (entry.kind === "directory") {
       await relocateWorkspaceFolder(entry.path, "move_workspace_folder", { targetDirectory: target });
-      return;
+      return null;
     }
     const original = explorerFiles.find((file) => fileKey(file.filename) === fileKey(entry.filename));
-    if (!original) return;
+    if (!original) return null;
     const basename = explorerBasename(original.filename);
-    await commitWorkspaceRename(original, target ? `${target}/${basename}` : basename);
+    const moved = await commitWorkspaceRename(original, target ? `${target}/${basename}` : basename);
     await refreshWorkspaceDirectories(workspacePath);
+    return moved;
   };
 
   // Dragging a row onto a folder moves it there. Pointer events, as for the panels and the
   // tabs: every row names the folder a drop on it goes to in `data-drop-directory`.
   const moveExplorerEntryRef = useRef(moveExplorerEntry);
   moveExplorerEntryRef.current = moveExplorerEntry;
+  /**
+   * What the pointer is over. A file row is split: its middle two thirds drop the dragged
+   * row into the folder that file lives in, and the quarters at its top and bottom are the
+   * slots either side of it, which is what arranges files by hand. A folder row and the
+   * empty space below the tree only ever mean "into", so a drag that is simply moving a
+   * file across the tree never has to aim.
+   */
+  const dropTargetAt = (x: number, y: number, entry: NonNullable<ExplorerSelection>): ExplorerDropTarget | null => {
+    const host = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-directory]");
+    if (!host) return null;
+    const directory = host.dataset.dropDirectory ?? "";
+    const slot = host.dataset.fileSlot;
+    if (slot !== undefined && entry.kind === "file") {
+      const box = host.getBoundingClientRect();
+      const edge = box.height / 4;
+      const after = y > box.bottom - edge;
+      if (after || y < box.top + edge) {
+        return {
+          kind: "between",
+          directory,
+          index: Number(slot) + (after ? 1 : 0),
+          line: { x: box.left, width: box.width, y: after ? box.bottom : box.top },
+        };
+      }
+    }
+    return canMoveInto(entry, directory) ? { kind: "into", directory } : null;
+  };
+
   const beginExplorerDrag = (entry: NonNullable<ExplorerSelection>, label: string, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || !workspacePath) return;
-    explorerDragRef.current = { entry, label, startX: event.clientX, startY: event.clientY, active: false, over: null };
+    explorerDragRef.current = { entry, label, startX: event.clientX, startY: event.clientY, active: false, target: null };
   };
   useEffect(() => {
     const track = (event: PointerEvent) => {
@@ -1473,10 +1610,8 @@ function App() {
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
         drag.active = true;
       }
-      const host = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-directory]");
-      const target = host ? host.dataset.dropDirectory ?? "" : null;
-      drag.over = target !== null && canMoveInto(drag.entry, target) ? target : null;
-      setExplorerDrag({ entry: drag.entry, label: drag.label, x: event.clientX, y: event.clientY, over: drag.over });
+      drag.target = dropTargetAt(event.clientX, event.clientY, drag.entry);
+      setExplorerDrag({ entry: drag.entry, label: drag.label, x: event.clientX, y: event.clientY, target: drag.target });
     };
     const finish = (event: PointerEvent | KeyboardEvent) => {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
@@ -1486,7 +1621,9 @@ function App() {
       setExplorerDrag(null);
       explorerDragClickRef.current = true;
       window.setTimeout(() => { explorerDragClickRef.current = false; }, 0);
-      if (event.type === "pointerup" && drag.over !== null) void moveExplorerEntryRef.current(drag.entry, drag.over);
+      if (event.type !== "pointerup" || !drag.target) return;
+      if (drag.target.kind === "between" && drag.entry.kind === "file") void placeExplorerFileRef.current(drag.entry.filename, drag.target.directory, drag.target.index);
+      else void moveExplorerEntryRef.current(drag.entry, drag.target.directory);
     };
     window.addEventListener("pointermove", track);
     window.addEventListener("pointerup", finish);
@@ -1501,11 +1638,58 @@ function App() {
   }, []);
   // A folded folder opens when a drag rests on it, so the drop can go deeper.
   useEffect(() => {
-    const over = explorerDrag?.over;
+    const over = explorerDrag?.target?.kind === "into" ? explorerDrag.target.directory : undefined;
     if (!over || !collapsedDirectories.has(fileKey(over))) return;
     const timer = window.setTimeout(() => updateCollapsedDirectories((items) => { const next = new Set(items); next.delete(fileKey(over)); return next; }), 650);
     return () => window.clearTimeout(timer);
-  }, [explorerDrag?.over]);
+  }, [explorerDrag?.target?.kind === "into" ? explorerDrag.target.directory : undefined]);
+
+  /**
+   * Writes the order of one folder's files, exactly as the explorer is showing them.
+   * Dropping between rows while another sort is chosen switches to the hand-arranged one:
+   * otherwise the drop would appear to do nothing, the rows snapping back to where the
+   * chosen sort wants them.
+   */
+  const reorderExplorerFiles = async (directory: string, filenames: string[]) => {
+    if (!workspacePath) return;
+    const positions = new Map(filenames.map((filename, index) => [fileKey(filename), index]));
+    setSavedFiles((items) => items.map((file) => positions.has(fileKey(file.filename)) ? { ...file, order: positions.get(fileKey(file.filename)) } : file));
+    try {
+      await invoke("reorder_workspace_files", { request: { folderPath: workspacePath, directory, filenames } });
+      if (explorerSort !== "custom") {
+        setExplorerSort("custom");
+        setFileStatus(t("customOrderSet"));
+      }
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+      void rescanWorkspaceFiles();
+    }
+  };
+
+  /**
+   * A row dropped between two others: `index` is the slot it takes among the files the
+   * target folder shows. One arriving from another folder is moved there first, and the
+   * folder's whole order is then written so it keeps the slot it was dropped into.
+   */
+  const placeExplorerFile = async (filename: string, directory: string, index: number) => {
+    if (!workspacePath) return;
+    // Every file of the folder, not just the ones on screen: a source filter hides some,
+    // and leaving them out of the arrangement would throw away the places they had.
+    const siblings = sortExplorerFiles(explorerFileSet.filter((file) => fileKey(explorerParent(file.filename)) === fileKey(directory)));
+    let placed = filename;
+    if (fileKey(explorerParent(filename)) !== fileKey(directory)) {
+      // The move reports the name it settled on, which is not the one asked for when the
+      // folder already had a file by that name.
+      const moved = await moveExplorerEntry({ kind: "file", filename }, directory);
+      if (!moved) return;
+      placed = moved;
+    }
+    const rest = siblings.map((file) => file.filename).filter((name) => fileKey(name) !== fileKey(filename) && fileKey(name) !== fileKey(placed));
+    const at = Math.max(0, Math.min(rest.length, index));
+    await reorderExplorerFiles(directory, [...rest.slice(0, at), placed, ...rest.slice(at)]);
+  };
+  const placeExplorerFileRef = useRef(placeExplorerFile);
+  placeExplorerFileRef.current = placeExplorerFile;
 
   const commitExplorerRename = async () => {
     const target = explorerRename;
@@ -1702,6 +1886,10 @@ function App() {
 
   const closeProblem = (id: string) => {
     const index = tabs.findIndex((tab) => tab.id === id);
+    const closed = tabs.find((tab) => tab.id === id);
+    if (closed && savedFiles.some((file) => fileKey(file.filename) === fileKey(closed.filename))) {
+      closedTabsRef.current = [closed.filename, ...closedTabsRef.current.filter((name) => fileKey(name) !== fileKey(closed.filename))].slice(0, 20);
+    }
     const remaining = tabs.filter((tab) => tab.id !== id);
     tabHistoryRef.current = tabHistoryRef.current.filter((item) => item !== id);
     if (!remaining.length) {
@@ -1736,6 +1924,17 @@ function App() {
   };
 
   /** Ctrl+W with the problem browser focused: the panel or window goes, and typing resumes in the editor. */
+  /** Reopens the most recently closed tab, skipping any whose file has since gone. */
+  const reopenClosedTab = () => {
+    while (closedTabsRef.current.length) {
+      const filename = closedTabsRef.current.shift() as string;
+      if (tabs.some((tab) => fileKey(tab.filename) === fileKey(filename))) continue;
+      const file = savedFiles.find((item) => fileKey(item.filename) === fileKey(filename));
+      if (file) { openSavedFile(file); return; }
+    }
+    setFileStatus(t("noClosedTabs"));
+  };
+
   const closeProblemBrowser = () => {
     browserClosedAtRef.current = Date.now();
     cefFocusedRef.current = false;
@@ -2262,7 +2461,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt, order: problem.order,
       }));
       setWorkspacePath(loaded.folderPath);
       setPanelMode(loaded.panelMode === "interactive" ? "interactive" : "tests");
@@ -2290,7 +2489,7 @@ function App() {
         language: problem.language,
         codes: { cpp: storedTemplate("cpp", problem.source || "other"), python: storedTemplate("python", problem.source || "other"), [problem.language]: problem.code },
         tests: hydrateTests(problem.tests),
-        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt,
+        source: problem.source || "other", sourceUrl: problem.sourceUrl || inferredSourceUrl(problem.source, problem.filename), judgeStatus: problem.judgeStatus, limits: problem.limits, modifiedAt: problem.modifiedAt, order: problem.order,
       }));
       let restoredFilenames: string[] = [];
       let restoredActiveFilename = "";
@@ -2321,6 +2520,17 @@ function App() {
   useEffect(() => {
     if (workspacePath) localStorage.setItem(WORKSPACE_KEY, workspacePath);
   }, [workspacePath]);
+
+  // An update left its notes behind; this is the build it was talking about. The notes are
+  // only dropped once they have been shown, so a version that arrives late cannot lose them.
+  useEffect(() => {
+    if (!appVersionResolved) return;
+    let stored: { version?: string; notes?: string } | null = null;
+    try { stored = JSON.parse(localStorage.getItem(RELEASE_NOTES_KEY) || "null"); } catch { localStorage.removeItem(RELEASE_NOTES_KEY); }
+    if (!stored?.version || stored.version.replace(/^v/, "") !== appVersion.replace(/^v/, "")) return;
+    localStorage.removeItem(RELEASE_NOTES_KEY);
+    setReleaseNotes({ version: stored.version, notes: stored.notes?.trim() || undefined });
+  }, [appVersion, appVersionResolved]);
 
   useEffect(() => {
     if (!workspacePath) setCollapsedDirectories(new Set());
@@ -2811,6 +3021,8 @@ function App() {
     });
     const unlistenFinished = await listen("update-download-finished", () => {
       setUpdateStatus((current) => ({ ...current, phase: "installing" }));
+      // Written before the install, which does not return once it relaunches the app.
+      try { localStorage.setItem(RELEASE_NOTES_KEY, JSON.stringify({ version: update.version, notes: update.notes || "" })); } catch { /* notes are a nicety */ }
     });
     try {
       await invoke("install_update");
@@ -3491,7 +3703,7 @@ function App() {
       // handling them here as well would run every command twice.
       if (isMac && "__TAURI_INTERNALS__" in window) {
         const key = event.key.toLowerCase();
-        if ((event.metaKey || event.ctrlKey) && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
+        if ((event.metaKey || event.ctrlKey) && !(event.shiftKey && key === "t") && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
@@ -3510,7 +3722,8 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "t") {
         event.preventDefault();
-        beginImport();
+        if (event.shiftKey) reopenClosedTab();
+        else beginImport();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault();
@@ -3585,13 +3798,14 @@ function App() {
       else if (settingsOpen) setSettingsOpen(false);
       else if (atCoderOpen) cancelProblemImport();
       else if (explorerMenu) setExplorerMenu(null);
+      else if (releaseNotes) setReleaseNotes(null);
       else if (contestOpen) setContestOpen(false);
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, moveEntry, settingsOpen, sourceFile]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmDirectory, deleteConfirmFile, explorerMenu, folderNameOpen, hasFileStatusError, explorerRename, importCollision, moveEntry, releaseNotes, settingsOpen, sourceFile]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3693,7 +3907,10 @@ function App() {
   const renamingDirectory = (path: string) => explorerRename?.kind === "directory" && fileKey(explorerRename.path) === fileKey(path);
   const renamingFile = (filename: string) => explorerRename?.kind === "file" && fileKey(explorerRename.filename) === fileKey(filename);
 
-  const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => nodes.flatMap((node) => {
+  const renderExplorerTree = (nodes: ExplorerTreeNode[], depth = 0): ReactNode[] => {
+    // `nodes` is one folder's children, so a file's position among them is its slot there.
+    const siblingSlots = new Map(nodes.filter((node) => node.kind === "file").map((node, slot) => [node.file.id, slot]));
+    return nodes.flatMap((node) => {
     if (node.kind === "directory") {
       const collapsed = collapsedDirectories.has(fileKey(node.path));
       if (renamingDirectory(node.path)) {
@@ -3705,7 +3922,7 @@ function App() {
         </div>];
       }
       return [<div className="explorer-tree-branch" key={`directory-${node.path}`}>
-        <button className={`explorer-directory ${explorerDrag?.over != null && fileKey(explorerDrag.over) === fileKey(node.path) ? "drop-target" : ""}`} data-drop-directory={node.path} onPointerDown={(event) => beginExplorerDrag({ kind: "directory", path: node.path }, node.name, event)} style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
+        <button className={`explorer-directory ${explorerDrag?.target?.kind === "into" && fileKey(explorerDrag.target.directory) === fileKey(node.path) ? "drop-target" : ""}`} data-drop-directory={node.path} onPointerDown={(event) => beginExplorerDrag({ kind: "directory", path: node.path }, node.name, event)} style={{ paddingLeft: `${10 + depth * 14}px` }} title={node.path} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); setExplorerSelection({ kind: "directory", path: node.path }); updateCollapsedDirectories((items) => {
           const next = new Set(items);
           const key = fileKey(node.path);
           if (next.has(key)) next.delete(key); else next.add(key);
@@ -3720,18 +3937,19 @@ function App() {
     const openIndex = tabs.findIndex((item) => fileKey(item.filename) === fileKey(tab.filename));
     if (renamingFile(tab.filename)) {
       return [<div className="explorer-file-row" key={tab.id}>
-        <div className="explorer-rename-row" style={{ paddingLeft: `${14 + depth * 14}px` }}><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>{renameInput}</div>
+        <div className="explorer-rename-row" style={{ paddingLeft: `${14 + depth * 14}px` }}><LanguageIcon language={tab.language} />{renameInput}</div>
       </div>];
     }
     return [<div className="explorer-file-row" key={tab.id}>
-      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} onPointerDown={(event) => beginExplorerDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
-        <span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span>
+      <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeTab?.filename || "") ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} data-file-slot={siblingSlots.get(tab.id)} onPointerDown={(event) => beginExplorerDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (explorerDragClickRef.current) return; event.currentTarget.focus(); openSavedFile(tab); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); setExplorerMenu({ file: tab, x: event.clientX, y: event.clientY }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
+        <LanguageIcon language={tab.language} />
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
         {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
         {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
       </button>
     </div>];
-  });
+    });
+  };
 
   return (
     <main
@@ -3814,7 +4032,7 @@ function App() {
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
                   finishTabDrag();
                 }}
-              ><span className={`file-icon ${tab.language}`}>{tab.language === "cpp" ? "C++" : "Py"}</span></span>
+              ><LanguageIcon language={tab.language} /></span>
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
                 : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
@@ -4027,20 +4245,21 @@ function App() {
             <span className="explorer-header-actions">
               <button onClick={() => beginBlankFile()} title={t("newFile")} aria-label={t("newFile")}><Icon name="filePlus" /></button>
               <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><Icon name="folderPlus" /></button>
+              {workspacePath && <button onClick={() => void rescanWorkspaceFiles(true)} title={t("explorerRefresh")} aria-label={t("explorerRefresh")}><Icon name="refresh" /></button>}
             </span>
           </div>
           <div className="explorer-controls">
-            <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option></select></label>
+            <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option><option value="custom">{t("customOrder")}</option></select></label>
             <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
           </div>
-          <div className={`explorer-files ${explorerDrag?.over === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
+          <div className={`explorer-files ${explorerDrag?.target?.kind === "into" && explorerDrag.target.directory === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
             if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-metadata"))) return;
             event.preventDefault();
             setExplorerMenu({ x: event.clientX, y: event.clientY });
           }}>
             {!explorerFiles.length && !workspaceDirectories.length && <div className="explorer-empty">{t("noFiles")}</div>}
             {renderExplorerTree(explorerTree)}
-            {workspacePath && <div className="explorer-metadata"><span className="file-icon json">{`{}`}</span><span>.mild-editor.json</span></div>}
+            {workspacePath && <div className="explorer-metadata"><Icon name="braces" size={14} className="file-icon json" /><span>.mild-editor.json</span></div>}
           </div>
         </aside>}
         </Fragment>))}
@@ -4332,7 +4551,19 @@ function App() {
         </section>
       </div>}
 
-      {explorerDrag && <div className={`explorer-drag-ghost ${explorerDrag.over === null ? "" : "ok"}`} style={{ left: explorerDrag.x + 12, top: explorerDrag.y + 10 }}>{explorerDrag.label}{explorerDrag.over !== null && <small>→ {explorerDrag.over || t("contestWorkspaceRoot")}</small>}</div>}
+      {releaseNotes && <div className="modal-backdrop close-confirm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReleaseNotes(null); }}>
+        <section className="confirm-dialog release-notes" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+          <span className="eyebrow">{t("releaseNotesUpdated")}{releaseNotes.version.replace(/^v/, "")}</span>
+          <h2 id="release-notes-title">{t("releaseNotesTitle")}</h2>
+          {releaseNotes.notes
+            ? <div className="release-notes-body">{renderReleaseNotes(releaseNotes.notes)}</div>
+            : <p>{t("releaseNotesNone")}</p>}
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" autoFocus onClick={() => setReleaseNotes(null)}>{t("releaseNotesClose")}</button></footer>
+        </section>
+      </div>}
+
+      {explorerDrag?.target?.kind === "between" && <div className="explorer-drop-line" style={{ left: explorerDrag.target.line.x, top: explorerDrag.target.line.y, width: explorerDrag.target.line.width }} />}
+      {explorerDrag && <div className={`explorer-drag-ghost ${explorerDrag.target ? "ok" : ""}`} style={{ left: explorerDrag.x + 12, top: explorerDrag.y + 10 }}>{explorerDrag.label}{explorerDrag.target && <small>→ {explorerDrag.target.directory || t("contestWorkspaceRoot")}</small>}</div>}
 
       {moveEntry && (() => {
         const targets = ["", ...workspaceDirectories].filter((directory) => canMoveInto(moveEntry, directory)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));

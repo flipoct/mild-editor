@@ -116,6 +116,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | --- | --- |
 | `⌘N` / `⌘O` / `⌘S` | New file / Open / Save |
 | `⌘T` | Import problem |
+| `⌘⇧T` | Reopen the tab closed last |
 | `⌘W` | Close tab |
 | `⌘1`–`⌘9` | Switch to tab |
 | `⌘↵` / `⌘.` | Run the panel on screen (tests, or interactive when that panel is showing) / Stop |
@@ -128,6 +129,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌥⌘R` | Reveal the selected file or folder in Finder |
 | `↩` | Rename the selected Explorer file or folder in place |
 | `⌘⌫` | Delete the selected Explorer file or folder |
+| `Del` | Delete the selected Explorer file or folder (Windows and Linux) |
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
 

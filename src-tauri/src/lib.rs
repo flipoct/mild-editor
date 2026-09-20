@@ -566,6 +566,10 @@ struct WorkspaceProblemMetadata {
     limits: Option<ProblemLimits>,
     #[serde(default)]
     modified_at: u64,
+    /// Position inside its folder when the explorer is sorted by hand. Absent until the
+    /// file is dragged into place, and then the files without one follow those with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -591,6 +595,7 @@ struct WorkspaceProblemOutput {
     judge_status: Option<String>,
     limits: Option<ProblemLimits>,
     modified_at: u64,
+    order: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -1265,6 +1270,7 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
                 source_url: None,
                 judge_status: None, limits: None,
                 modified_at: file_modified_at(&source_path),
+                order: None,
             });
         }
     }
@@ -1351,7 +1357,9 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             source_url: problem.source_url.clone(),
             judge_status: problem.judge_status.clone(), limits: problem.limits,
             modified_at: logical_modified_at,
+            order: metadata_problems.iter().find(|item| item.filename == filename).and_then(|item| item.order),
         };
+        let order = metadata_problem.order;
         if let Some(index) = metadata_problems.iter().position(|item| item.filename == filename) {
             metadata_problems[index] = metadata_problem;
         } else {
@@ -1367,6 +1375,7 @@ fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, Stri
             source_url: problem.source_url,
             judge_status: problem.judge_status, limits: problem.limits,
             modified_at: logical_modified_at,
+            order,
         });
     }
     let metadata = WorkspaceMetadata {
@@ -1517,10 +1526,10 @@ fn duplicate_workspace_file(request: DuplicateWorkspaceFileRequest) -> Result<Wo
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
     let code = fs::read_to_string(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
-    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), limits: source_problem.limits, modified_at: file_modified_at(&destination) };
+    let duplicated = WorkspaceProblemMetadata { filename: new_filename.clone(), title: source_problem.title.clone(), language: new_language.clone(), tests: source_problem.tests.clone(), source: source_problem.source.clone(), source_url: source_problem.source_url.clone(), judge_status: source_problem.judge_status.clone(), limits: source_problem.limits, modified_at: file_modified_at(&destination), order: source_problem.order };
     metadata.problems.push(duplicated.clone());
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
-    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, limits: duplicated.limits, modified_at: duplicated.modified_at })
+    Ok(WorkspaceProblemOutput { filename: new_filename, title: duplicated.title, language: new_language, code, tests: duplicated.tests, source: duplicated.source, source_url: duplicated.source_url, judge_status: duplicated.judge_status, limits: duplicated.limits, modified_at: duplicated.modified_at, order: duplicated.order })
 }
 
 #[tauri::command]
@@ -1549,7 +1558,7 @@ fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<Workspac
     }
     problem.filename = new_filename.clone();
     problem.language = new_language.clone();
-    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), limits: problem.limits, modified_at: problem.modified_at };
+    let result = WorkspaceProblemOutput { filename: new_filename, title: problem.title.clone(), language: new_language, code: fs::read_to_string(folder.join(&problem.filename)).map_err(|error| format!("Could not read renamed source file: {error}"))?, tests: problem.tests.clone(), source: problem.source.clone(), source_url: problem.source_url.clone(), judge_status: problem.judge_status.clone(), limits: problem.limits, modified_at: problem.modified_at, order: problem.order };
     fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?).map_err(|error| format!("Could not update workspace metadata: {error}"))?;
     Ok(result)
 }
@@ -1586,6 +1595,7 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                         source_url: None,
                         judge_status: None, limits: None,
                         modified_at: 0,
+                        order: None,
                     }],
                 }
             }
@@ -1597,6 +1607,14 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
     sync_workspace_source_files(&folder, &mut metadata)?;
     fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
         .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(LoadedWorkspace {
+        problems: read_workspace_problems(&folder, metadata)?,
+        folder_path: folder.to_string_lossy().into_owned(),
+        panel_mode,
+    })
+}
+
+fn read_workspace_problems(folder: &Path, metadata: WorkspaceMetadata) -> Result<Vec<WorkspaceProblemOutput>, String> {
     let mut problems = Vec::new();
     for problem in metadata.problems {
         let source_path = folder.join(&problem.filename);
@@ -1612,13 +1630,70 @@ fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
             source_url: problem.source_url,
             judge_status: problem.judge_status, limits: problem.limits,
             modified_at: if problem.modified_at > 0 { problem.modified_at } else { file_modified_at(&source_path) },
+            order: problem.order,
         });
     }
-    Ok(LoadedWorkspace {
-        folder_path: folder.to_string_lossy().into_owned(),
-        panel_mode,
-        problems,
-    })
+    Ok(problems)
+}
+
+/// Rescans the folder and returns every source file in it. Files created, deleted or
+/// renamed outside the editor only reach `.mild-editor.json` through a scan, and the one
+/// in `load_workspace` runs at start-up, so without this the explorer would not show them
+/// until the workspace was opened again.
+#[tauri::command]
+fn reload_workspace_files(request: ListWorkspaceFilesRequest) -> Result<Vec<WorkspaceProblemOutput>, String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    if !folder.is_dir() { return Err("The workspace folder is gone.".into()); }
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = match fs::read_to_string(&metadata_path) {
+        Ok(json) => serde_json::from_str(&json).map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?,
+        Err(_) => WorkspaceMetadata { version: 2, panel_mode: None, problems: Vec::new() },
+    };
+    let before = serde_json::to_string(&metadata).unwrap_or_default();
+    sync_workspace_source_files(&folder, &mut metadata)?;
+    // Only written when the scan found something, so an idle editor does not keep
+    // rewriting the file and changing its timestamp.
+    if serde_json::to_string(&metadata).unwrap_or_default() != before {
+        fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    }
+    read_workspace_problems(&folder, metadata)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderWorkspaceFilesRequest {
+    folder_path: String,
+    /// The folder whose files are being arranged; empty for the workspace root.
+    directory: String,
+    /// Every source file of that folder, in the order the explorer should show them.
+    filenames: Vec<String>,
+}
+
+/// Records the order the explorer shows a folder's files in, so a drag between two rows
+/// survives a restart. Files of other folders keep the order they had.
+#[tauri::command]
+fn reorder_workspace_files(request: ReorderWorkspaceFilesRequest) -> Result<(), String> {
+    let folder = std::path::PathBuf::from(&request.folder_path);
+    let directory = workspace_directory_path(&request.directory)?.to_string_lossy().replace('\\', "/");
+    let metadata_path = workspace_metadata_path(&folder);
+    let mut metadata: WorkspaceMetadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("Could not read workspace metadata: {error}"))
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))?;
+    let wanted: Vec<String> = request.filenames.iter()
+        .map(|filename| workspace_relative_filename(filename))
+        .collect::<Result<Vec<_>, _>>()?
+        .iter().map(|filename| filename_key(filename)).collect();
+    for problem in &mut metadata.problems {
+        let parent = Path::new(&problem.filename).parent().map(|parent| parent.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        if !parent.eq_ignore_ascii_case(&directory) { continue; }
+        // A file of this folder that the caller did not list keeps no position, so it
+        // falls in with the ones that were never arranged.
+        problem.order = wanted.iter().position(|key| *key == filename_key(&problem.filename)).map(|index| index as u32);
+    }
+    fs::write(metadata_path, serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Could not update workspace metadata: {error}"))?;
+    Ok(())
 }
 
 fn parse_atcoder_samples(html: &str) -> Vec<SavedTestCase> {
@@ -2684,6 +2759,8 @@ pub fn run() {
             save_workspace_panel_mode,
             list_workspace_source_filenames,
             list_workspace_directories,
+            reload_workspace_files,
+            reorder_workspace_files,
             create_workspace_folder,
             rename_workspace_folder,
             move_workspace_folder,
@@ -2951,6 +3028,55 @@ mod tests {
         // Both fields emptied: back to the defaults, and nothing left in the file.
         edit(Some(ProblemLimits::default()));
         assert_eq!(loaded(), None);
+    }
+
+    #[test]
+    fn a_rescan_picks_up_files_added_outside_the_editor_and_keeps_the_arranged_order() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(CreateWorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "B.cpp".into(), title: "B".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            }],
+        }).expect("save source");
+
+        // Something outside the editor drops two files into the folder.
+        fs::write(directory.path().join("A.py"), "print(1)").expect("write A");
+        fs::create_dir(directory.path().join("day2")).expect("subfolder");
+        fs::write(directory.path().join("day2").join("C.cpp"), "int main() {}").expect("write C");
+
+        let files = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan");
+        let names: Vec<&str> = files.iter().map(|problem| problem.filename.as_str()).collect();
+        assert_eq!(names, vec!["A.py", "B.cpp", "day2/C.cpp"]);
+        assert_eq!(files.iter().find(|problem| problem.filename == "A.py").expect("A").language, "python");
+        // The rescan does not disturb what was already known.
+        assert_eq!(files.iter().find(|problem| problem.filename == "B.cpp").expect("B").title, "B");
+
+        reorder_workspace_files(ReorderWorkspaceFilesRequest {
+            folder_path: folder_path.clone(), directory: String::new(), filenames: vec!["B.cpp".into(), "A.py".into()],
+        }).expect("reorder the root");
+        let arranged = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan again");
+        let order = |name: &str| arranged.iter().find(|problem| problem.filename == name).expect("problem").order;
+        assert_eq!((order("B.cpp"), order("A.py")), (Some(0), Some(1)));
+        // A file of another folder is not touched by that folder's arrangement.
+        assert_eq!(order("day2/C.cpp"), None);
+
+        // Saving a file again keeps the place it was dragged to.
+        save_workspace(SaveWorkspaceRequest {
+            folder_path: folder_path.clone(),
+            problems: vec![WorkspaceProblemInput {
+                filename: "A.py".into(), title: "A".into(), language: "python".into(), code: "print(2)".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            }],
+        }).expect("save again");
+        let after = reload_workspace_files(ListWorkspaceFilesRequest { folder_path: folder_path.clone() }).expect("rescan once more");
+        assert_eq!(after.iter().find(|problem| problem.filename == "A.py").expect("A").order, Some(1));
+
+        // Deleting outside the editor drops the file from the metadata too.
+        fs::remove_file(directory.path().join("B.cpp")).expect("delete B");
+        let pruned = reload_workspace_files(ListWorkspaceFilesRequest { folder_path }).expect("final rescan");
+        assert!(!pruned.iter().any(|problem| problem.filename == "B.cpp"));
     }
 
     #[test]
