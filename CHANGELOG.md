@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.13.0
 
 - Language marks. The `C++` and `Py` badges beside a filename are now the C++ and Python logos in their own colours, from [Devicon](https://devicon.dev) under MIT.
 - Arrange files by hand. Dropping a row between two others in the explorer puts it there and switches the sort to **my order**, which is saved with the workspace. Dropping it on a folder still just moves it.

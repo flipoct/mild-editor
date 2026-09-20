@@ -57,14 +57,17 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.12.0
+            ## What's changed in v1.13.0
 
-            - **Move files and folders.** Drag a row of the explorer onto a folder, or use *Move to…* in its context menu. Tabs, tests and a running contest follow the move.
-            - **A contest without a workspace of its own.** *Start a contest* asks which folder the problems come from and lets you leave some out. Problems accepted before the clock started no longer count as solved.
-            - **Submission results are announced** in the editor when the verdict of a new submission arrives, whichever file is open.
-            - On Windows the close button answers from the very corner of the screen.
+            - **Find a counterexample.** A generator and a reference solution run against the open file on random inputs until their answers differ, and the case that separated them can be kept as a test. Both helpers are files named after the problem, which the dialog offers to create.
+            - **`Ctrl+P` opens a file by name**, which beats scrolling an explorer with hundreds of problems in it. **`Ctrl+Shift+T`** reopens the tab closed last.
+            - **Move and arrange files.** Drag a row of the explorer onto a folder to move it, or between two rows to put it there and sort by hand.
+            - **Files changed outside the editor are picked up** when the window comes back into focus, instead of staying invisible until the workspace was opened again.
+            - **Settings → updates → backup** exports snippets, templates, themes, handles and compile flags to one file, and reads them back.
+            - Every verdict a judge reports is kept with the problem. The contest board marks rejected tries and totals the ICPC penalty.
+            - The language badges beside a filename are the C++ and Python logos, and an update now opens on its own release notes.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.12.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.13.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
