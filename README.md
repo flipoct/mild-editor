@@ -213,6 +213,6 @@ Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Act
 
 ## Credits
 
-The C++ and Python marks beside a filename are the official logos, taken from [Simple Icons](https://simpleicons.org), whose icon files are released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) — public domain. The marks themselves remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
+The C++ and Python marks beside a filename are the official logos, taken from [Simple Icons](https://simpleicons.org), whose icon files are released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) — public domain. They are drawn as outlines in the theme's own `--cpp` and `--python`, so they sit at the weight of the rest of the interface rather than as a block of brand colour. The marks themselves remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
 
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.

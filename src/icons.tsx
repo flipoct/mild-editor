@@ -66,10 +66,13 @@ const PYTHON_LOGO = "M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26
  * public domain. The marks themselves remain trademarks of their owners and are used here
  * only to say which language a file is in.
  *
- * Each is one filled path on a 24px grid, drawn in `currentColor`, so a theme's `--cpp`
- * and `--python` decide the colour and the counters inside the shape — the "C++" in the
- * hexagon, the snakes' eyes — are holes rather than a second colour. That keeps them
- * legible on every surface they appear on: explorer row, hovered row, active tab.
+ * Each is one path on a 24px grid, drawn as an outline rather than filled: a solid mark
+ * reads as a block of colour beside a filename, which is heavier than everything else in
+ * the interface. The stroke is thinner than the icon set's 1.4 on its 16px grid, because
+ * these shapes carry far more detail and thicken into a blob before they read.
+ *
+ * The colour is `currentColor`, so a theme's `--cpp` and `--python` decide it, and the
+ * counters inside the shape — the "C++" in the hexagon, the snakes' eyes — stay open.
  */
 export function LanguageIcon({ language, size = 16, className }: { language: string; size?: number; className?: string }) {
   const name = language === "python" ? "python" : "cpp";
@@ -82,7 +85,14 @@ export function LanguageIcon({ language, size = 16, className }: { language: str
       role="img"
       aria-label={name === "python" ? "Python" : "C++"}
     >
-      <path fill="currentColor" d={name === "cpp" ? CPP_LOGO : PYTHON_LOGO} />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        d={name === "cpp" ? CPP_LOGO : PYTHON_LOGO}
+      />
     </svg>
   );
 }
