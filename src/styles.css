@@ -150,7 +150,7 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 
 /* Language badge, shared by tabs and the explorer */
 .file-icon { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: 0 0 auto; }
-.language-icon { flex: 0 0 auto; }
+.language-icon { flex: 0 0 auto; opacity: .82; }
 .language-icon.cpp { color: var(--cpp); }
 .language-icon.python { color: var(--python); }
 .file-icon.json { color: var(--json); }
