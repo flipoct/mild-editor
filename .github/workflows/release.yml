@@ -57,11 +57,14 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.11.1
+            ## What's changed in v1.12.0
 
-            - **DOJ submissions fill again.** The site moved to a newer CodeMirror build, which left the source out of the submit dialog; with *Really submit* on, a submission stopped at the source check. The editor is found the new way now.
+            - **Move files and folders.** Drag a row of the explorer onto a folder, or use *Move to…* in its context menu. Tabs, tests and a running contest follow the move.
+            - **A contest without a workspace of its own.** *Start a contest* asks which folder the problems come from and lets you leave some out. Problems accepted before the clock started no longer count as solved.
+            - **Submission results are announced** in the editor when the verdict of a new submission arrives, whichever file is open.
+            - On Windows the close button answers from the very corner of the screen.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.11.1/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.12.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

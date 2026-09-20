@@ -241,7 +241,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .verdict.stopped { color: var(--muted); }
 .delete-test { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s, background .12s, color .12s; }
 .test-row:hover .delete-test, .delete-test:focus-visible { opacity: 1; }
-.delete-test:hover, .explorer-delete:hover, .snippet-delete:hover { background: var(--danger-soft); color: var(--danger); }
+.delete-test:hover, .snippet-delete:hover { background: var(--danger-soft); color: var(--danger); }
 .test-fields { display: grid; gap: 10px; padding: 2px 10px 12px; }
 .test-fields label { min-width: 0; display: grid; gap: 5px; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 .field-label { min-height: 20px; display: flex; align-items: center; justify-content: space-between; }
@@ -341,10 +341,17 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-directory > span:last-child, .explorer-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-directory-chevron { transition: transform .12s ease; }
 .explorer-directory-chevron.open { transform: rotate(90deg); }
-.explorer-delete { position: absolute; right: 3px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-s); background: var(--bg-3); color: var(--muted); opacity: 0; transition: opacity .12s, color .12s, background .12s; }
-.explorer-file-row:hover .explorer-delete, .explorer-delete:focus-visible { opacity: 1; }
+.explorer-directory.drop-target, .explorer-files.drop-target { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
+.explorer-files.drop-target { border-radius: var(--r-m); }
+.explorer-drag-ghost { position: fixed; z-index: 2100; max-width: 260px; display: flex; align-items: center; gap: 6px; padding: 4px 9px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--bg-2); color: var(--muted); box-shadow: var(--elevation); font-size: var(--fs-s); white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
+.explorer-drag-ghost.ok { border-color: var(--accent); color: var(--text); }
+.explorer-drag-ghost small { color: var(--accent); font-size: var(--fs-xs); }
+.move-folder-list { max-height: min(320px, 50vh); display: grid; gap: 2px; margin-top: 12px; overflow-y: auto; }
+.move-folder-list button { min-width: 0; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: var(--r-m); background: transparent; color: var(--text); text-align: left; font-size: var(--fs-s); }
+.move-folder-list button:hover, .move-folder-list button:focus-visible { background: var(--active); }
+.move-folder-list button .icon { flex: 0 0 auto; color: var(--muted); }
+.move-folder-list button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-file kbd { min-width: 16px; height: 16px; display: grid; place-items: center; flex: 0 0 auto; border-radius: var(--r-s); background: var(--active); color: var(--muted); font-size: 10px; font-weight: 600; }
-.explorer-file-row:hover kbd { visibility: hidden; }
 .explorer-metadata { padding-left: 14px; opacity: .55; font-size: var(--fs-xs); }
 .explorer-rename-row { min-width: 0; flex: 1; color: var(--text); }
 .explorer-rename-input { min-width: 0; flex: 1; height: 22px; padding: 0 6px; border-color: var(--accent); border-radius: var(--r-s); font-size: var(--fs-s); }
@@ -540,7 +547,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .contest-status.critical { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); font-weight: 700; animation: pulse 1s infinite; }
 .contest-status.over { color: var(--danger); font-weight: 600; }
 .popover-dismiss { position: fixed; inset: 0; z-index: 1190; }
-.contest-popover { position: fixed; z-index: 1200; left: 10px; bottom: 34px; width: min(360px, calc(100vw - 20px)); display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-2); color: var(--text); box-shadow: var(--elevation); animation: dialog-in .14s ease-out; }
+.contest-popover { position: fixed; z-index: 1200; left: 10px; bottom: 34px; width: min(420px, calc(100vw - 20px)); max-height: calc(100vh - 48px); overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-2); color: var(--text); box-shadow: var(--elevation); animation: dialog-in .14s ease-out; }
 .contest-popover header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .contest-popover header div { display: grid; gap: 2px; }
 .contest-popover small { color: var(--muted); font-size: var(--fs-xs); }
@@ -572,6 +579,24 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .contest-presets button { height: 24px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; transition: border-color .12s, color .12s, background .12s; }
 .contest-presets button:hover { border-color: var(--border); color: var(--text); }
 .contest-presets button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.contest-folder { display: grid; gap: 6px; color: var(--text-2); font-size: var(--fs-s); font-weight: 500; }
+.contest-folder select { width: 100%; height: var(--control-l); }
+.contest-pick { max-height: 168px; overflow-y: auto; }
+.contest-pick .contest-problem { --tone: var(--muted); }
+.contest-pick .contest-problem.excluded { border-style: dashed; background: transparent; opacity: .45; }
+.contest-pick .contest-problem.excluded strong { text-decoration: line-through; }
+
+/* Submission results, inside the editor panel: the problem browser is a native view no HTML can float over. */
+.verdict-notices { position: absolute; z-index: 30; top: 10px; right: 18px; width: min(280px, calc(100% - 36px)); display: grid; gap: 8px; pointer-events: none; }
+.verdict-notice { --tone: var(--danger); display: flex; align-items: stretch; overflow: hidden; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-left: 3px solid var(--tone); border-radius: var(--r-l); background: color-mix(in srgb, var(--tone) 10%, var(--bg-2)); color: var(--text); box-shadow: var(--elevation); pointer-events: auto; animation: dialog-in .16s ease-out; }
+.verdict-notice.accepted { --tone: var(--success); }
+.verdict-notice-body { min-width: 0; flex: 1; display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 8px; row-gap: 1px; padding: 9px 4px 9px 11px; border: 0; background: transparent; color: inherit; text-align: left; }
+.verdict-notice-body small { grid-column: 1 / -1; color: var(--muted); font-size: var(--fs-xs); }
+.verdict-notice-body strong { color: var(--tone); font-size: var(--fs-l); font-weight: 700; }
+.verdict-notice-body span { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-s); text-overflow: ellipsis; white-space: nowrap; }
+.verdict-notice-body:hover span { color: var(--text); }
+.verdict-notice-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
+.verdict-notice-close:hover { color: var(--text); }
 
 /* ── Wallpaper mode ───────────────────────────────────────────────────────────
    Keeps every surface in the selected theme while allowing the image through. */

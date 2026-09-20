@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.0
+
+- Move files and folders. Drag a row of the explorer onto a folder (or onto the empty space, for the workspace root), or use **Move to…** in its context menu. Open tabs, saved tests, folded folders and a running contest's solve times follow the move.
+- A contest no longer needs a workspace of its own. **Start a contest** now asks which folder the problems come from and shows them; click one to leave it out. Problems imported into the folder later still join.
+- Submission results are announced. When the judge's verdict on a new submission arrives, a notice appears in the editor whichever file is open; clicking it opens that problem. Results already there when a problem is first seen are not announced.
+- The contest board stays inside its popover: a long folder name in the footer used to stretch the board past it. Problems already accepted before the clock started are no longer marked solved at 0:00:00; only a newer submission counts.
+- On Windows the close button answers from the very corner of the screen. A window that started maximised kept a resize border along the top edge, which took the pointer before the title bar could.
+- The delete button on explorer rows is gone; **Delete** stays in the context menu and on the keyboard.
+
 ## 1.11.1
 
 - DOJ's submit dialog is filled again: the site moved to a CodeMirror build that hangs the editor off the content element as `cmTile` instead of `cmView`, so the source was not placed and a real submit stopped at the *source* check.
