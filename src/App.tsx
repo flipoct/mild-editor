@@ -3323,7 +3323,8 @@ function App() {
         const nonce = Math.random().toString(36).slice(2);
         submitMarkerRef.current = null;
         await invoke("browser_fill_submission", { script: pressSubmitFormScript({ ...payload, nonce }) });
-        const answered = await waitFor(() => submitMarkerRef.current?.startsWith(`${nonce}:`) ?? false, 8000);
+        // DOJ's IDE builds itself after the page loads, and the script waits up to 20 s for it.
+        const answered = await waitFor(() => submitMarkerRef.current?.startsWith(`${nonce}:`) ?? false, 30000);
         result = answered ? (submitMarkerRef.current ?? "").slice(nonce.length + 1) as PressResult : "timeout";
         if (result === "pressed") break;
       }

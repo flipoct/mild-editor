@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- DOJ submissions go through the problem's IDE page (`/problems/<n>/ide`), where DOJ moved its submit form. The editor opens that page, waits for the IDE to load its files, picks the language (C++ keeps the standard already chosen, otherwise the newest; Python goes to PyPy), puts the solution in the entry file marked `main` and checks that exactly that source is what the form will send. A contest problem keeps its `?contest=` link, so it is submitted to the contest. The older dialog on the problem page is still filled if DOJ shows it.
+- "Really submit" presses the judge's button at most once per page, even when the editor retries a check that was slow to answer.
+
 ## 1.13.0
 
 - Language marks. The `C++` and `Py` badges beside a filename are now the C++ and Python logos in their own colours, from [Devicon](https://devicon.dev) under MIT.

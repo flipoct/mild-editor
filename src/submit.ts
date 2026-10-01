@@ -22,7 +22,7 @@ export type SubmitTarget = {
   problemIndex?: string;
   /** Codeforces problem set: `1234A`, typed into `submittedProblemCode`. */
   problemCode?: string;
-  /** DOJ: the problem's segment of the URL, which the form on that page carries as `problemSlug`. */
+  /** DOJ: the problem's segment of the URL, which the submit form carries as `problemSlug`. */
   problemSlug?: string;
 };
 
@@ -44,9 +44,10 @@ export const submitTarget = (sourceUrl: string | undefined): SubmitTarget | null
     const problemSet = path.match(/^\/problemset\/problem\/(\d+)\/([^/]+)$/);
     if (problemSet) return { judge: "codeforces", url: "https://codeforces.com/problemset/submit", problemCode: `${problemSet[1]}${problemSet[2].toUpperCase()}` };
   }
-  // DOJ has no submit page of its own: the form sits on the problem page, once logged in.
-  const doj = host === "doj.kr" ? path.match(/\/problems\/([^/]+)$/) : null;
-  if (doj) return { judge: "doj", url: sourceUrl, problemSlug: doj[1] };
+  // DOJ submits from the problem's IDE page, `/<locale>/problems/<slug>/ide`. The query stays:
+  // a contest problem carries `?contest=<id>`, which is what makes it a contest submission.
+  const doj = host === "doj.kr" ? path.match(/^(.*\/problems\/([^/]+?))(?:\/ide)?$/) : null;
+  if (doj && doj[2] !== "ide") return { judge: "doj", url: `${url.origin}${doj[1]}/ide${url.search}`, problemSlug: doj[2] };
   return null;
 };
 
@@ -95,7 +96,58 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
   const settle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 60));
 
   if (payload.judge === "doj") {
-    // DOJ's form is a modal with a CodeMirror editor and its own dropdown, opened from the problem page.
+    // Both of DOJ's editors are CodeMirror 6, which hangs its view off the content element:
+    // `cmView` up to view 6.38, `cmTile` from the tile rewrite on.
+    type View = { state: { doc: { length: number } }; dispatch: (spec: unknown) => void };
+    const replaceCode = (content: Element | null) => {
+      try {
+        const marks = content as unknown as { cmView?: { view?: View }; cmTile?: { root?: { view?: View } | null } } | null;
+        const view = marks?.cmView?.view ?? marks?.cmTile?.root?.view;
+        view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: payload.code } });
+      } catch { /* not CodeMirror */ }
+    };
+    // The IDE builds itself after the page has loaded and reads its files from browser storage,
+    // so everything below waits for it, within one budget for the whole fill.
+    const deadline = Date.now() + 20000;
+    const until = async (ready: () => boolean) => {
+      while (!ready() && Date.now() < deadline) await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      return ready();
+    };
+    await until(() => Boolean(document.querySelector(".doj-local-ide, form.doj-submit-launcher-form")));
+
+    if (document.querySelector(".doj-local-ide")) {
+      // The IDE at `/problems/<slug>/ide`: a workspace of files, of which the entry file is sent.
+      const mainEditor = () => document.querySelector(".doj-local-ide-code-pane.is-main-group .cm-content");
+      const ready = () => !document.querySelector(".doj-local-ide-loading") && Boolean(mainEditor());
+      await until(ready);
+      const languageList = () => document.querySelector<HTMLSelectElement>('.doj-local-ide select[aria-label="제출 언어"], .doj-local-ide select[aria-label="Submission language"], .doj-local-ide-language select');
+      const list = languageList();
+      if (list) {
+        const value = pick([...list.options].map((option) => ({ value: option.value, text: option.text, selected: option.selected })), payload.language);
+        if (value && list.value !== value) {
+          // The language list is a dressed-up native select; its change event is what DOJ acts on.
+          // Only `change`: the IDE saves the workspace on each one before it switches.
+          assign(list, value);
+          list.dispatchEvent(new Event("change", { bubbles: true }));
+          // Each language other than C++ keeps a workspace of its own, which loads on the switch.
+          await until(() => languageList()?.value === value);
+          await settle();
+          await until(ready);
+        }
+      }
+      // The explorer marks the entry file "main": it has to be the file in the main editor.
+      const entry = [...document.querySelectorAll<HTMLButtonElement>(".doj-local-ide-file-name")].find((button) => button.querySelector("em")?.textContent?.trim() === "main");
+      if (entry && !entry.closest(".doj-local-ide-file")?.classList.contains("is-active")) {
+        entry.click();
+        await settle();
+        await until(ready);
+      }
+      replaceCode(mainEditor());
+      await settle();
+      return;
+    }
+
+    // The older form: a modal opened from the problem page, with its own dropdown.
     if (!document.querySelector(".doj-submit-modal")) {
       document.querySelector<HTMLButtonElement>('form.doj-submit-launcher-form button.doj-submit-launcher')?.click();
       await settle();
@@ -111,15 +163,7 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
       (chosen ?? trigger).click();
       await settle();
     }
-    for (const content of document.querySelectorAll(".doj-submit-modal .cm-content")) {
-      try {
-        // CodeMirror 6 hangs its view off the content element: `cmView` up to view 6.38, `cmTile` from the tile rewrite on.
-        type View = { state: { doc: { length: number } }; dispatch: (spec: unknown) => void };
-        const marks = content as unknown as { cmView?: { view?: View }; cmTile?: { root?: { view?: View } | null } };
-        const view = marks.cmView?.view ?? marks.cmTile?.root?.view;
-        view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: payload.code } });
-      } catch { /* not CodeMirror */ }
-    }
+    for (const content of document.querySelectorAll(".doj-submit-modal .cm-content")) replaceCode(content);
     await settle();
     return;
   }
@@ -173,6 +217,8 @@ export type PressResult = "pressed" | "form" | "problem" | "language" | "code" |
  */
 async function pressSubmitForm(payload: PressPayload, pick: typeof pickLanguageOption, fill: typeof fillSubmitForm) {
   const original = document.title;
+  // A retry from the editor must not send the solution a second time: one press per page.
+  const page = window as unknown as { __mildEditorPressedAt?: number };
   const report = (result: PressResult) => {
     document.title = `mild-editor:submit:${payload.nonce}:${result}`;
     if (result !== "pressed") window.setTimeout(() => { if (document.title.startsWith("mild-editor:submit:")) document.title = original; }, 1500);
@@ -185,6 +231,7 @@ async function pressSubmitForm(payload: PressPayload, pick: typeof pickLanguageO
   const aceAgrees = () => !ace || [...document.querySelectorAll(".ace_editor")].every((element) => {
     try { return same(ace.edit(element).getValue(), payload.code); } catch { return true; }
   });
+  if (page.__mildEditorPressedAt && Date.now() - page.__mildEditorPressedAt < 60000) return report("pressed");
 
   await fill(payload, pick);
   await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
@@ -215,18 +262,31 @@ async function pressSubmitForm(payload: PressPayload, pick: typeof pickLanguageO
     if (!areas.length || !areas.every((area) => same(area.value, payload.code)) || !aceAgrees()) return report("code");
     button = form.querySelector<HTMLInputElement>('input.submit[type="submit"], input[type="submit"], button[type="submit"]');
   } else {
-    // The hidden inputs mirror the modal's state: they are what the form sends.
-    const form = document.querySelector<HTMLFormElement>("form.doj-submit-launcher-form");
+    // DOJ's submit button sits in the IDE (or the older modal) and names its form, whose hidden
+    // inputs mirror the editor's state: they are what is sent.
+    const submitButton = () => [...document.querySelectorAll<HTMLButtonElement>('.doj-local-ide button[type="submit"], .doj-submit-modal button[type="submit"]')].find((item) => item.form) ?? null;
+    let found = submitButton();
+    if (!found) {
+      // With several problems open the IDE asks which one to send first; that dialog holds the button.
+      const opener = document.querySelector<HTMLButtonElement>('.doj-local-ide-submit button[type="button"]');
+      if (opener && !opener.disabled) {
+        opener.click();
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        found = submitButton();
+      }
+    }
+    const form = found?.form;
     if (!form) return report("form");
     const field = (name: string) => form.querySelector<HTMLInputElement>(`input[name="${name}"]`)?.value ?? "";
     const slug = (payload.problemSlug ?? "").toLowerCase();
     if (!slug || ![field("problemSlug"), field("problemId")].some((value) => value.toLowerCase() === slug)) return report("problem");
     if (!(payload.language === "cpp" ? /^(cpp|c\+\+)/i : /^(python|pypy)/i).test(field("language"))) return report("language");
     if (!same(field("sourceCode"), payload.code)) return report("code");
-    button = [...document.querySelectorAll<HTMLButtonElement>('.doj-submit-modal button[type="submit"]')].find((item) => item.getAttribute("form") === form.id) ?? null;
+    button = found;
   }
   if (!button || button.disabled) return report("button");
 
+  page.__mildEditorPressedAt = Date.now();
   report("pressed");
   button.click();
 }
