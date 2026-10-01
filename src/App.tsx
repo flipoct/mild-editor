@@ -3326,10 +3326,12 @@ function App() {
         // DOJ's IDE builds itself after the page loads, and the script waits up to 20 s for it.
         const answered = await waitFor(() => submitMarkerRef.current?.startsWith(`${nonce}:`) ?? false, 30000);
         result = answered ? (submitMarkerRef.current ?? "").slice(nonce.length + 1) as PressResult : "timeout";
-        if (result === "pressed") break;
+        // A second look cannot log anyone in.
+        if (result === "pressed" || result === "login") break;
       }
       if (result !== "pressed") {
-        const reason: Record<Exclude<typeof result, "pressed">, string> = { form: t("submitCheckForm"), problem: t("submitCheckProblem"), language: t("submitCheckLanguage"), code: t("submitCheckCode"), button: t("submitCheckButton"), timeout: t("submitCheckTimeout") };
+        if (result === "login") { setFileStatus(t("submitLogin")); return; }
+        const reason: Record<Exclude<typeof result, "pressed" | "login">, string> = { form: t("submitCheckForm"), problem: t("submitCheckProblem"), language: t("submitCheckLanguage"), code: t("submitCheckCode"), button: t("submitCheckButton"), timeout: t("submitCheckTimeout") };
         setFileStatus(`${t("submitUnverified")}: ${reason[result]}`);
         return;
       }

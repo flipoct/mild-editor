@@ -208,7 +208,7 @@ export const SUBMIT_MARK = "mild-editor:submit:";
 export type PressPayload = FillPayload & { nonce: string };
 
 /** What a press could not confirm, spelled out for the status bar; `pressed` means the button was clicked. */
-export type PressResult = "pressed" | "form" | "problem" | "language" | "code" | "button";
+export type PressResult = "pressed" | "form" | "problem" | "language" | "code" | "button" | "login";
 
 /**
  * Runs inside the judge's page: fills the form, checks every field it will send against the
@@ -284,7 +284,11 @@ async function pressSubmitForm(payload: PressPayload, pick: typeof pickLanguageO
     if (!same(field("sourceCode"), payload.code)) return report("code");
     button = found;
   }
-  if (!button || button.disabled) return report("button");
+  if (!button || button.disabled) {
+    // DOJ renders the page for a visitor with the button off and says why: logging in is the fix.
+    const why = button?.closest<HTMLElement>(".doj-local-ide-submit")?.title ?? "";
+    return report(/로그인|log ?in|sign ?in/i.test(why) ? "login" : "button");
+  }
 
   page.__mildEditorPressedAt = Date.now();
   report("pressed");
