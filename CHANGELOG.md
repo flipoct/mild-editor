@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.14.0
 
 - DOJ submissions go through the problem's IDE page (`/problems/<n>/ide`), where DOJ moved its submit form. The editor opens that page, waits for the IDE to load its files, picks the language (C++ keeps the standard already chosen, otherwise the newest; Python goes to PyPy), puts the solution in the entry file marked `main` and checks that exactly that source is what the form will send. A contest problem keeps its `?contest=` link, so it is submitted to the contest. The older dialog on the problem page is still filled if DOJ shows it.
 - A new mark. The serif `m` gives way to a mild chili, on the same rounded tile in the theme's colours: in the title bar, on the welcome screen, and as the window, taskbar and installer icon.
