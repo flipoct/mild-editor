@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Icon, LanguageIcon } from "./icons";
+import { APP_MARK, AppMark, Icon, LanguageIcon } from "./icons";
 import { DEFAULT_FLOAT_TOLERANCE, diffLines, outputsMatch, splitFlags } from "./judge";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
@@ -409,7 +409,6 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
 
   const mark = document.createElement("span");
   mark.className = "welcome-mark";
-  mark.textContent = "m";
   mark.style.position = "fixed";
   mark.style.visibility = "hidden";
   mark.style.pointerEvents = "none";
@@ -418,10 +417,9 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
   const sourceSize = Number.parseFloat(markStyle.width);
   const sourceRadius = Number.parseFloat(markStyle.borderRadius);
   const sourceBorderWidth = Number.parseFloat(markStyle.borderTopWidth);
-  const sourceFontSize = Number.parseFloat(markStyle.fontSize);
+  const sourcePadding = Number.parseFloat(markStyle.paddingTop);
   const background = markStyle.backgroundColor;
-  const foreground = markStyle.color;
-  const font = `${markStyle.fontStyle} ${markStyle.fontWeight} ${sourceFontSize}px ${markStyle.fontFamily}`;
+  const border = markStyle.borderTopColor;
   mark.remove();
 
   const canvas = document.createElement("canvas");
@@ -434,31 +432,30 @@ const createThemeWindowIcon = async (theme: UiTheme) => {
   const scale = size / sourceSize;
   const borderWidth = sourceBorderWidth * scale;
   const inset = borderWidth / 2;
-  const radius = sourceRadius * scale;
   context.beginPath();
-  context.moveTo(inset + radius, inset);
-  context.lineTo(size - inset - radius, inset);
-  context.quadraticCurveTo(size - inset, inset, size - inset, inset + radius);
-  context.lineTo(size - inset, size - inset - radius);
-  context.quadraticCurveTo(size - inset, size - inset, size - inset - radius, size - inset);
-  context.lineTo(inset + radius, size - inset);
-  context.quadraticCurveTo(inset, size - inset, inset, size - inset - radius);
-  context.lineTo(inset, inset + radius);
-  context.quadraticCurveTo(inset, inset, inset + radius, inset);
-  context.closePath();
+  context.roundRect(inset, inset, size - borderWidth, size - borderWidth, sourceRadius * scale);
   context.fillStyle = background;
   context.fill();
   context.lineWidth = borderWidth;
-  context.strokeStyle = foreground;
+  context.strokeStyle = border;
   context.stroke();
 
-  context.fillStyle = foreground;
-  context.font = font.replace(`${sourceFontSize}px`, `${sourceFontSize * scale}px`);
-  context.textAlign = "center";
-  context.textBaseline = "alphabetic";
-  const metrics = context.measureText("m");
-  const baseline = size / 2 + (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
-  context.fillText("m", size / 2, baseline);
+  const [x, y, width] = APP_MARK.viewBox;
+  const artInset = (sourceBorderWidth + sourcePadding) * scale;
+  const artScale = (size - artInset * 2) / width;
+  context.translate(artInset, artInset);
+  context.scale(artScale, artScale);
+  context.translate(-x, -y);
+  for (const path of APP_MARK.fills) {
+    context.fillStyle = path.fill;
+    context.fill(new Path2D(path.d));
+  }
+  context.strokeStyle = APP_MARK.stem.stroke;
+  context.lineWidth = APP_MARK.stem.width;
+  context.lineCap = "round";
+  context.stroke(new Path2D(APP_MARK.stem.d));
+  context.fillStyle = APP_MARK.cap.fill;
+  context.fill(new Path2D(APP_MARK.cap.d));
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not create the theme icon.")), "image/png");
@@ -4264,7 +4261,7 @@ function App() {
     >
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
-          <span className="titlebar-logo" aria-hidden="true">m</span>
+          <span className="titlebar-logo"><AppMark /></span>
           <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
           {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
           <span className="titlebar-file" data-tauri-drag-region>
@@ -4513,7 +4510,7 @@ function App() {
             }}
           />
           </> : <div className="welcome-screen">
-            <div className="welcome-mark">m</div>
+            <div className="welcome-mark"><AppMark /></div>
             <p className="eyebrow">{t("welcomeTagline")}</p>
             <h1>Mild Editor</h1>
             <p>{t("welcomeBody")}</p>

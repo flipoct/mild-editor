@@ -94,3 +94,29 @@ export function LanguageIcon({ language, size = 16, className }: { language: str
     </svg>
   );
 }
+
+/**
+ * The brand mark: a mild chili, in its own colours rather than the theme's. It is drawn
+ * bare; the rounded tile behind it comes from whoever places it (`.titlebar-logo`,
+ * `.welcome-mark`, the window icon App.tsx draws from `APP_MARK`), in the theme's
+ * colours. `src-tauri/icons/icon.svg` is the same paths on the default theme's tile.
+ */
+export const APP_MARK = {
+  viewBox: [61, 56, 384, 384],
+  fills: [
+    { fill: "#e24a3b", d: "M276 158C290 108 384 118 384 178C402 318 276 430 104 424C204 378 276 286 276 158Z" },
+    { fill: "#ff8266", d: "M276 158C286 126 312 120 330 126C348 304 252 406 104 424C204 378 276 286 276 158Z" },
+  ],
+  stem: { stroke: "#3fae5a", width: 28, d: "M332 132C334 102 354 86 386 78" },
+  cap: { fill: "#2f9149", d: "M260 172C274 100 388 100 400 190C366 152 306 148 260 172Z" },
+} as const;
+
+export function AppMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox={APP_MARK.viewBox.join(" ")} aria-hidden="true">
+      {APP_MARK.fills.map((path) => <path key={path.fill} fill={path.fill} d={path.d} />)}
+      <path d={APP_MARK.stem.d} fill="none" stroke={APP_MARK.stem.stroke} strokeWidth={APP_MARK.stem.width} strokeLinecap="round" />
+      <path fill={APP_MARK.cap.fill} d={APP_MARK.cap.d} />
+    </svg>
+  );
+}

@@ -1,5 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#292a26"/>
-  <rect x="26" y="26" width="460" height="460" rx="92" fill="none" stroke="#77705a" stroke-width="20"/>
-  <text x="256" y="354" text-anchor="middle" font-family="Georgia, serif" font-size="330" font-style="italic" font-weight="700" fill="#dec58e">m</text>
+  <rect width="512" height="512" rx="116" fill="#292a26"/>
+  <rect x="6" y="6" width="500" height="500" rx="110" fill="none" stroke="#4a4b44" stroke-width="12"/>
+  <g transform="translate(81.92 81.92) scale(0.90667) translate(-61 -56)">
+    <path d="M276 158C290 108 384 118 384 178C402 318 276 430 104 424C204 378 276 286 276 158Z" fill="#e24a3b"/>
+    <path d="M276 158C286 126 312 120 330 126C348 304 252 406 104 424C204 378 276 286 276 158Z" fill="#ff8266"/>
+    <path d="M332 132C334 102 354 86 386 78" fill="none" stroke="#3fae5a" stroke-width="28" stroke-linecap="round"/>
+    <path d="M260 172C274 100 388 100 400 190C366 152 306 148 260 172Z" fill="#2f9149"/>
+  </g>
 </svg>

@@ -77,7 +77,7 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 .window-titlebar { display: flex; align-items: center; min-width: 0; background: var(--bg-0); border-bottom: 1px solid var(--border-subtle); user-select: none; }
 .titlebar-identity { min-width: 0; height: 100%; flex: 1; display: flex; align-items: center; gap: 8px; padding-left: 12px; overflow: hidden; }
 /* The brand mark: the same serif italic m as the app icon (src-tauri/icons/icon.svg). */
-.titlebar-logo { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--r-m); background: var(--bg-3); color: var(--accent); font: italic 700 15px/1 Georgia, "Times New Roman", serif; padding-bottom: 2px; }
+.titlebar-logo { width: 22px; height: 22px; display: grid; flex: 0 0 auto; box-sizing: border-box; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--bg-3); }
 .titlebar-name { flex: 0 0 auto; color: var(--text); font-size: var(--fs-s); font-weight: 600; }
 .titlebar-dev { flex: 0 0 auto; padding: 1px 6px; border-radius: var(--r-s); background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .titlebar-file { min-width: 0; display: flex; align-items: center; gap: 4px; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--border-subtle); overflow: hidden; color: var(--muted); font-size: var(--fs-s); white-space: nowrap; }
@@ -285,8 +285,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .editor-area .monaco-editor .sticky-widget { display: none !important; }
 .welcome-screen { width: min(520px, 92%); min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; padding: 36px 20px; text-align: center; color: var(--muted); }
 /* createThemeWindowIcon in App.tsx draws the window and taskbar icon from this element's
-   computed style, so it has to stay the brand mark: tile, border, serif italic m. */
-.welcome-mark { width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 18px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 17px; background: var(--bg-3); color: var(--accent); box-shadow: 0 14px 38px var(--shadow); font: italic 700 35px/1 Georgia, "Times New Roman", serif; }
+   computed style, so it has to stay the brand tile: size, radius, border, padding, fill. */
+.welcome-mark { width: 58px; height: 58px; display: grid; box-sizing: border-box; margin-bottom: 18px; padding: 9px; border: 1px solid var(--border); border-radius: 17px; background: var(--bg-3); box-shadow: 0 14px 38px var(--shadow); }
 .welcome-screen h1 { order: 1; margin: 0 0 6px; color: var(--text); font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
 .welcome-screen .eyebrow { order: 2; margin: 0; color: var(--text-2); font-size: var(--fs-m); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .welcome-screen p:not(.eyebrow) { order: 3; margin: 4px 0 0; font-size: var(--fs-m); }

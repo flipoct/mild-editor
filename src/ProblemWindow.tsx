@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Icon } from "./icons";
+import { AppMark, Icon } from "./icons";
 import { isMac } from "./platform";
 
 /** What the backend reports about the embedded browser (`browser_status`, `browser-status`). */
@@ -164,7 +164,7 @@ export default function ProblemWindow() {
       {/* The app window's own title bar, so the two windows match: undecorated, drag region, same controls. */}
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
-          <span className="titlebar-logo" aria-hidden="true">m</span>
+          <span className="titlebar-logo"><AppMark /></span>
           <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
           <span className="titlebar-file" data-tauri-drag-region><span className="crumb">{t("name")}</span>{status.title && <><Icon name="chevronRight" size={10} /><span className="crumb current">{status.title}</span></>}</span>
         </div>
