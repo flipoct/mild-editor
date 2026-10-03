@@ -102,6 +102,14 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .select_all()
         .build()?;
 
+    let palette = MenuItemBuilder::with_id("view:command-palette", "Command Palette…")
+        .accelerator("CmdOrCtrl+Shift+P")
+        .build(app)?;
+    let go_to_file = MenuItemBuilder::with_id("view:go-to-file", "Go to File…")
+        .accelerator("CmdOrCtrl+P")
+        .build(app)?;
+    // Ctrl+` (Control, not Command) is handled in the webview, as the shell's keys are.
+    let terminal = MenuItemBuilder::with_id("view:terminal", "Terminal").build(app)?;
     let toggle_explorer = MenuItemBuilder::with_id("view:toggle-explorer", "Toggle File Explorer")
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
@@ -133,12 +141,16 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .build(app)?;
 
     let view = SubmenuBuilder::new(app, "View")
+        .item(&palette)
+        .item(&go_to_file)
+        .separator()
         .item(&toggle_explorer)
         .item(&toggle_tests)
         .separator()
         .item(&panel_tests)
         .item(&panel_interactive)
         .item(&panel_problem)
+        .item(&terminal)
         .item(&layout)
         .separator()
         .item(&zoom_in)

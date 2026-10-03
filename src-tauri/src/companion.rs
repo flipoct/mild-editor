@@ -316,15 +316,34 @@ mod tests {
     #[test]
     fn restarting_on_the_same_port_keeps_one_listener() {
         let state = CompanionState::default();
-        let first = start(&state, 0, |_| {}).expect("bind listener");
+        // Not port 0: an ephemeral port freed by stop() below can be handed straight to any
+        // other process binding port 0 — macOS gives them out in sequence — and the rebind
+        // then fails for a reason that has nothing to do with stop(). Ports under the
+        // ephemeral ranges (49152+ on macOS and Windows, 32768+ on Linux) are never handed
+        // out that way; the offset keeps parallel test runs off each other's.
+        let offset = (std::process::id() % 1000) as u16 * 7;
+        let first = (0..200u16)
+            .find_map(|step| start(&state, 20_000 + (offset + step) % 10_000, |_| {}).ok())
+            .expect("bind listener");
         // The React effect runs twice on mount, so a second start must not fail to rebind.
         let second = start(&state, first, |_| {}).expect("restart listener");
         assert_eq!(first, second);
         assert!(status(&state).listening);
 
         stop(&state);
-        // stop() joined the accept thread, so the port is free again straight away.
-        let rebound = start(&state, first, |_| {}).expect("rebind after stop");
+        // stop() joined the accept thread and closed the socket. Other tests in this binary
+        // start programs on other threads, though, and macOS has no SOCK_CLOEXEC: a spawn
+        // that lands between the socket's creation and its close-on-exec flag inherits it,
+        // and that child holds the port until it exits. So the rebind may wait a moment —
+        // for the child, never for stop().
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let rebound = loop {
+            match start(&state, first, |_| {}) {
+                Ok(port) => break port,
+                Err(error) if error.contains("in use") && std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                Err(error) => panic!("rebind after stop: {error}"),
+            }
+        };
         assert_eq!(rebound, first);
         stop(&state);
     }

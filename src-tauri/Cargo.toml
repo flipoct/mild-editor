@@ -1,6 +1,6 @@
 [package]
 name = "mild-editor"
-version = "1.14.0"
+version = "1.15.0"
 description = "A lightweight competitive programming editor"
 authors = ["mild editor"]
 edition = "2021"
@@ -24,6 +24,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 scraper = "0.24"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.11.0"
+# The built-in terminal: a shell on a pseudo-terminal (ConPTY on Windows).
+portable-pty = "0.9"
 
 # Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
 # builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.

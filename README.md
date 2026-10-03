@@ -31,7 +31,7 @@ On macOS the bundled app is started by launchd, which hands it only `/usr/bin:/b
 
 ## Workspace format and saving
 
-Create a workspace once, then create or import files inside it. File operations, test cases, language changes, and workspace metadata are saved automatically. Source-body edits remain marked as modified until you press `Save` / `Ctrl+S` or run the tests.
+Create a workspace once, then create or import files inside it. File operations, test cases, language changes, and workspace metadata are saved automatically. Source edits are saved a second after you stop typing. With **Settings → appearance → save edits automatically** turned off, they stay marked as modified until you press `Save` / `Ctrl+S` or run the tests.
 
 ```text
 contest-folder/
@@ -69,6 +69,18 @@ The listener is on by default and is confined to the loopback interface. Toggle 
 
 Each test reports a competitive-programming verdict: `AC`, `WA`, `TLE`, `RE`, or `CE`. A wrong answer shows a line-by-line comparison of expected versus actual output instead of a plain text box, with mismatched lines highlighted and whitespace-only differences called out separately. Press `raw output` to switch back to the unformatted stream.
 
+The panel heading counts passed tests out of all of them once any has a verdict — green only when every test passed, amber while some were added or edited since the run.
+
+### Checkers for problems with more than one answer
+
+"Print any valid order" cannot be judged by comparing outputs. Press **checker** above the test cases and the editor writes `<problem>_checker.cpp` (or `.py`) beside the problem and opens it. A checker is called the way testlib calls one:
+
+```text
+checker <input file> <output file> <answer file>
+```
+
+It exits 0 to accept the output and any other code to reject it; whatever it prints is shown with the verdict. Exit 3 (testlib's *fail*) means the checker itself could not decide and is reported as an error, not a wrong answer. The starter accepts the same tokens as the expected answer, so it runs before you change it; replace that with the problem's rule. A checker is found by its name alone, in either language — writing one is all it takes — and the **checker** chip turns it off and on for the problem without touching the file. The counterexample search uses it too, handing it the reference solution's output as the answer. Checkers are built with the Release flags whatever profile is selected, and given 10 seconds per test.
+
 ## Limits, profiles and judging
 
 The time and memory limits that Competitive Companion reports are saved with the file and used by the runner; the two fields above the test cases edit them, and an empty field means the default (2 s, no memory limit). Every test shows its running time and peak memory, and a run past the memory limit is an `MLE`. Peak memory is exact on Windows and sampled every 15 ms on Linux and macOS, so a run shorter than that shows none there.
@@ -83,7 +95,7 @@ When the expected output holds a decimal, an answer within an absolute or relati
 
 Both are ordinary files of the workspace. Each dropdown starts on the problem's own helper when it has been written — `B_Exit_Order.cpp` looks for `B_Exit_Order_generator.cpp` and `B_Exit_Order_bruteforce.cpp` beside it, in either language and whatever the case — and otherwise on **Create**, which names the file it would make. Nothing is written by opening the dialog: a role left on *Create* gets its file, from the same template a new file would use, when the button is pressed. The dialog then lists what it made, with one button that opens all of it for editing, since a bare template has nothing to compare yet — write them, and start the search on the next press. Either dropdown can point at any other file instead, and the button next to one opens that file to write it.
 
-Outputs are compared by the same rule the test cases use, float tolerance included. The search stops at the first input the two disagree on, or at the first one that makes a program crash or time out, and shows the input beside both answers; **Add as a test case** keeps it. The file under test runs from the editor's current text, unsaved edits included.
+Outputs are compared by the same rule the test cases use, float tolerance included — or by the problem's checker, when it has one. The search stops at the first input the two disagree on, or at the first one that makes a program crash or time out, and shows the input beside both answers; **Add as a test case** keeps it. The file under test runs from the editor's current text, unsaved edits included.
 
 ## Submitting
 
@@ -116,6 +128,20 @@ The full interface and Monaco Editor share the selected palette. Mild Editor inc
 
 Mild Editor includes lightweight C++ and Python completions. If `clangd` is installed, the app connects it to Monaco for C++ semantic completion, diagnostics, hover information, and signature help. The compiler path is passed as a query driver when available. Open the language-server settings from the status bar to configure a custom clangd path.
 
+## Command palette
+
+`Ctrl+Shift+P` (`⌘⇧P`) lists everything the editor can do — running and submitting, panels, the compile profile, the language of the file, themes, settings — with each command's shortcut beside it, so the shortcuts can be learnt from there. Type to narrow it down in English or Korean; a command that cannot run right now stays listed, greyed. It is the same box as **Go to file** (`Ctrl+P`): typing `>` there switches to commands, and deleting it switches back.
+
+## Terminal
+
+The side panel has a **Terminal** tab beside *Test cases* and *Interactive*: your own shell, running in the workspace folder, inside the editor. ``Ctrl+` `` (Control on macOS as well) shows and hides it, and the command palette and *View → Terminal* do too. It is a real terminal — colours, line editing, `vim`, a REPL all work — and it keeps running, scrollback and all, while another tab or another layout is showing.
+
+On macOS and Linux the shell is your `$SHELL`, started as a login shell so the PATH your profile sets up (Homebrew and the like) is there; on Windows it is PowerShell 7 when installed, then Windows PowerShell, then `cmd`. The **+** button starts a new shell in the workspace folder, ending the old one; after `exit`, Enter starts a new one.
+
+While the terminal has the keyboard, keys belong to the shell: `Ctrl+P`, `Ctrl+N`, `Ctrl+R`, `Ctrl+W` and Escape do what they do in a terminal, not the editor's commands. ``Ctrl+` `` and the command palette still work, and so does every `⌘` shortcut on macOS. On Windows and Linux, `Ctrl+C` copies when text is selected and interrupts when it is not, and `Ctrl+V` pastes.
+
+xterm.js, which draws it, is only loaded the first time the terminal is opened.
+
 ## macOS
 
 The macOS build uses the system window chrome: native traffic lights sit over the title bar, the green button enters real full screen, and the app installs a standard menu bar.
@@ -123,7 +149,8 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | Shortcut | Action |
 | --- | --- |
 | `⌘N` / `⌘O` / `⌘S` | New file / Open / Save |
-| `⌘P` | Go to file |
+| `⌘P` / `⌘⇧P` | Go to file / Command palette |
+| ``⌃` `` | Show or hide the terminal |
 | `⌘T` | Import problem |
 | `⌘⇧T` | Reopen the tab closed last |
 | `⌘W` | Close tab |
@@ -214,5 +241,7 @@ Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Act
 ## Credits
 
 The C++ and Python marks beside a filename come from [Devicon](https://devicon.dev), MIT licensed, Copyright (c) 2015 konpa, in the colours the two languages are known by rather than the theme's. Each is cropped to its own artwork so the pair line up with a filename and come out the same size — Devicon's Python is drawn with a drop shadow, which is dropped here, and the snakes would otherwise hang above centre. The marks remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
+
+The terminal is drawn by [xterm.js](https://xtermjs.org), MIT licensed, Copyright (c) 2017-2019 The xterm.js authors, (c) 2014-2016 SourceLair and (c) 2012-2013 Christopher Jeffrey, and runs on [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty) from WezTerm, MIT licensed, Copyright (c) 2018 Wez Furlong.
 
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.

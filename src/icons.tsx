@@ -32,6 +32,8 @@ const paths = {
   upload: <path d="M8 10.4v-8M4.6 5.6 8 2.2l3.4 3.4M2.8 13.2h10.4" />,
   braces: <path d="M6.4 2.4c-1.5 0-1.5 1.1-1.5 2.5s-.3 2.2-1.4 2.2v1.8c1.1 0 1.4.8 1.4 2.2s0 2.5 1.5 2.5M9.6 2.4c1.5 0 1.5 1.1 1.5 2.5s.3 2.2 1.4 2.2v1.8c-1.1 0-1.4.8-1.4 2.2s0 2.5-1.5 2.5" />,
   refresh: <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8M13.6 2.2v3.2h-3.2" />,
+  check: <path d="m3 8.4 3.2 3.2L13 4.6" />,
+  scale: <path d="M8 2.2v11.6M5 13.8h6M3 4.2h10M3 4.2 1.4 8.6a1.9 1.9 0 0 0 3.2 0ZM13 4.2l-1.6 4.4a1.9 1.9 0 0 0 3.2 0Z" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

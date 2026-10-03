@@ -6,10 +6,12 @@ pub mod browser;
 #[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
+mod checker;
 mod companion;
 mod interactive;
 mod memory;
 mod pch;
+mod terminal;
 mod updates;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -139,6 +141,10 @@ struct RunRequest {
     time_limit_ms: Option<u64>,
     #[serde(default)]
     memory_limit_mb: Option<u64>,
+    /// A special judge for the problem; without one the output is compared with the expected
+    /// one by the frontend.
+    #[serde(default)]
+    checker: Option<StressProgram>,
     #[serde(flatten)]
     build: BuildOptions,
 }
@@ -176,12 +182,15 @@ struct TestResultEvent {
     run_id: String,
     index: usize,
     result: RunResult,
+    /// The special judge's verdict, for a run that exited cleanly and has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checker: Option<checker::CheckerVerdict>,
 }
 
 #[derive(Deserialize)]
 struct TestInput {
     input: String,
-    #[allow(dead_code)]
+    /// Only a checker reads it; without one the frontend compares.
     expected: String,
 }
 
@@ -943,6 +952,12 @@ pub(crate) fn prepare_program(
 }
 
 fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBool>) -> Result<RunResponse, String> {
+    run_tests(&request, &cancelled, &|event| { let _ = app.emit("test-result", event); })
+}
+
+/// Builds the solution (and its checker, if it has one) and runs every test, reporting each
+/// result through `report` as it lands so the panel fills in while the rest still run.
+fn run_tests(request: &RunRequest, cancelled: &AtomicBool, report: &dyn Fn(TestResultEvent)) -> Result<RunResponse, String> {
     if !matches!(request.language.as_str(), "cpp" | "python") {
         return Err("Unsupported language.".into());
     }
@@ -973,11 +988,19 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
         PreparedProgram::Ready { command, args, warnings } => (command, args, warnings),
         PreparedProgram::CompileError(result) => {
             let results = request.tests.iter().enumerate().map(|(index, _)| {
-                let _ = app.emit("test-result", TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone() });
+                report(TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone(), checker: None });
                 result.clone()
             }).collect();
             return Ok(RunResponse { results, compile_warnings: String::new() });
         }
+    };
+    // After the solution, so a solution that does not compile is reported as such first.
+    let checker = match &request.checker {
+        Some(program) => match checker::prepare(program, request.atcoder_library_path.as_deref(), &cwd.join("checker"), &request.build)? {
+            Ok(checker) => Some(checker),
+            Err(message) => return Err(format!("The checker does not compile.\n{message}")),
+        },
+        None => None,
     };
 
     let time_limit = Duration::from_millis(request.time_limit_ms.unwrap_or(2000).clamp(100, 60_000));
@@ -985,9 +1008,12 @@ fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBoo
     let mut results = Vec::new();
     for (index, test) in request.tests.iter().enumerate() {
         if cancelled.load(Ordering::Relaxed) { break; }
-        let result = execute_with_cancel(&command, &args, cwd, &test.input, time_limit, Some(&cancelled), memory_limit_kb);
+        let result = execute_with_cancel(&command, &args, cwd, &test.input, time_limit, Some(cancelled), memory_limit_kb);
+        let verdict = checker.as_ref()
+            .filter(|_| result.verdict == Verdict::Ok)
+            .map(|checker| checker.check(&test.input, &result.stdout, &test.expected, Some(cancelled)));
         let stopped = cancelled.load(Ordering::Relaxed);
-        let _ = app.emit("test-result", TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone() });
+        report(TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone(), checker: verdict });
         results.push(result);
         if stopped { break; }
     }
@@ -1034,6 +1060,10 @@ struct StressRequest {
     /// 0 or less compares outputs exactly; otherwise decimals may differ by this much.
     #[serde(default)]
     float_tolerance: f64,
+    /// The problem's special judge, which then decides instead of comparing the two outputs:
+    /// the reference's answer is the one it is handed as the expected answer.
+    #[serde(default)]
+    checker: Option<StressProgram>,
     #[serde(flatten)]
     build: BuildOptions,
 }
@@ -1115,6 +1145,13 @@ fn stress_search(request: &StressRequest, cancelled: &AtomicBool, progress: &dyn
         }
     }
     let [generator, reference, solution] = <[_; 3]>::try_from(built).ok().ok_or("Could not prepare the programs.")?;
+    let checker = match &request.checker {
+        Some(program) => match checker::prepare(program, request.atcoder_library_path.as_deref(), &directory.path().join("checker"), &request.build)? {
+            Ok(checker) => Some(checker),
+            Err(message) => return Ok(StressOutcome::CompileError { program: "checker".into(), message }),
+        },
+        None => None,
+    };
 
     let time_limit = Duration::from_millis(request.time_limit_ms.unwrap_or(2000).clamp(100, 60_000));
     let rounds = request.rounds.clamp(1, 100_000);
@@ -1144,13 +1181,24 @@ fn stress_search(request: &StressRequest, cancelled: &AtomicBool, progress: &dyn
             // The solution falling over on this input is exactly what the search is for.
             return Ok(StressOutcome::Crashed { rounds: done, program: "solution".into(), input, message: crash_message(&actual) });
         }
-        if !outputs_match(&expected.stdout, &actual.stdout, request.float_tolerance) {
+        let reason = match &checker {
+            Some(checker) => {
+                let verdict = checker.check(&input, &actual.stdout, &expected.stdout, Some(cancelled));
+                if cancelled.load(Ordering::Relaxed) { return Ok(StressOutcome::Stopped { rounds: done }); }
+                if verdict.failed {
+                    return Ok(StressOutcome::Crashed { rounds: done, program: "checker".into(), input, message: verdict.message });
+                }
+                (!verdict.accepted).then_some(verdict.message)
+            }
+            None => (!outputs_match(&expected.stdout, &actual.stdout, request.float_tolerance)).then(String::new),
+        };
+        if let Some(reason) = reason {
             return Ok(StressOutcome::Mismatch {
                 rounds: done,
                 input,
                 expected: expected.stdout,
                 actual: actual.stdout,
-                reason: String::new(),
+                reason,
             });
         }
     }
@@ -2959,6 +3007,7 @@ pub fn run() {
         .manage(ClangdState::default())
         .manage(RunState::default())
         .manage(interactive::InteractiveState::default())
+        .manage(terminal::TerminalState::default())
         .manage(companion::CompanionState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
@@ -3034,6 +3083,10 @@ pub fn run() {
             start_clangd,
             send_clangd_message,
             stop_clangd,
+            terminal::terminal_start,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_stop,
             start_companion,
             stop_companion,
             companion_status,
@@ -3302,6 +3355,7 @@ mod tests {
             time_limit_ms: Some(10_000),
             atcoder_library_path: None,
             float_tolerance: 0.0,
+            checker: None,
             build: BuildOptions::default(),
         };
         let seen = std::sync::Mutex::new(Vec::new());
@@ -3347,6 +3401,78 @@ mod tests {
             other => panic!("expected a stop, got {}", serde_json::to_string(&other).expect("outcome")),
         }
         assert!(started.elapsed() < Duration::from_secs(20), "the stop was not acted on promptly");
+    }
+
+    /// Accepts any ordering of the expected numbers, the usual "print any valid answer".
+    const ANY_ORDER_CHECKER: &str = "import sys\n\
+        inp, out, ans = (open(path).read().split() for path in sys.argv[1:4])\n\
+        if sorted(out) != sorted(ans):\n    print('wrong set')\n    sys.exit(1)\n";
+
+    fn python_program(code: &str) -> StressProgram {
+        StressProgram { language: "python".into(), code: code.into() }
+    }
+
+    #[test]
+    fn a_checker_judges_the_tests_and_only_runs_on_a_clean_exit() {
+        if find_tool("python3").is_none() && find_tool("python").is_none() { return; }
+        let test = |input: &str, expected: &str| TestInput { input: input.into(), expected: expected.into() };
+        let request = RunRequest {
+            language: "python".into(),
+            // Prints the numbers back reversed, which only an any-order checker accepts, and
+            // fails outright on a negative one.
+            code: "a = input().split()\nassert not any(x.startswith('-') for x in a)\nprint(*reversed(a))\n".into(),
+            tests: vec![test("1 2 3", "1 2 3"), test("4 5", "4 6"), test("-1", "-1")],
+            run_id: "run".into(),
+            atcoder_library_path: None,
+            time_limit_ms: Some(10_000),
+            memory_limit_mb: None,
+            checker: Some(python_program(ANY_ORDER_CHECKER)),
+            build: BuildOptions::default(),
+        };
+        let events = std::sync::Mutex::new(Vec::new());
+        let response = run_tests(&request, &AtomicBool::new(false), &|event| events.lock().expect("events").push(event)).expect("runs");
+        assert_eq!(response.results.len(), 3);
+        let events = events.into_inner().expect("events");
+        let verdicts: Vec<_> = events.iter().map(|event| (event.index, event.result.verdict, event.checker.as_ref().map(|verdict| verdict.accepted))).collect();
+        assert_eq!(verdicts, vec![(0, Verdict::Ok, Some(true)), (1, Verdict::Ok, Some(false)), (2, Verdict::Re, None)]);
+        assert_eq!(events[1].checker.as_ref().map(|verdict| verdict.message.as_str()), Some("wrong set"));
+
+        // A checker that does not build stops the run with a message naming the checker, not
+        // the solution, and before any test has been reported.
+        let broken = RunRequest { checker: Some(python_program("def (:\n")), ..request };
+        let reported = std::sync::atomic::AtomicUsize::new(0);
+        let error = run_tests(&broken, &AtomicBool::new(false), &|_| { reported.fetch_add(1, Ordering::Relaxed); }).err().expect("an error");
+        assert!(error.starts_with("The checker does not compile."), "{error}");
+        assert_eq!(reported.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn the_counterexample_search_asks_the_checker_when_there_is_one() {
+        if find_tool("python3").is_none() && find_tool("python").is_none() { return; }
+        let request = StressRequest {
+            run_id: "test".into(),
+            generator: python_program("import random\nprint(*random.sample(range(1, 9), 3))\n"),
+            reference: python_program("print(*sorted(map(int, input().split())))\n"),
+            // Right in any order, so plain comparison calls it wrong and the checker does not.
+            solution: python_program("print(*sorted(map(int, input().split()), reverse=True))\n"),
+            rounds: 8,
+            time_limit_ms: Some(10_000),
+            atcoder_library_path: None,
+            float_tolerance: 0.0,
+            checker: None,
+            build: BuildOptions::default(),
+        };
+        assert!(matches!(stress_search(&request, &AtomicBool::new(false), &|_| {}), Ok(StressOutcome::Mismatch { .. })));
+        let judged = StressRequest { checker: Some(python_program(ANY_ORDER_CHECKER)), ..request };
+        assert!(matches!(stress_search(&judged, &AtomicBool::new(false), &|_| {}), Ok(StressOutcome::Passed { rounds: 8 })));
+
+        // A solution that really is wrong is caught, with the checker's reason attached.
+        let wrong = StressRequest { solution: python_program("print(*[1] * 3)\n"), ..judged };
+        match stress_search(&wrong, &AtomicBool::new(false), &|_| {}) {
+            Ok(StressOutcome::Mismatch { reason, .. }) => assert_eq!(reason, "wrong set"),
+            Ok(other) => panic!("expected a mismatch, got {}", serde_json::to_string(&other).expect("outcome")),
+            Err(error) => panic!("{error}"),
+        }
     }
 
     #[test]

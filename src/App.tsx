@@ -13,10 +13,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { ClangdClient, type ClangdInfo } from "./clangd";
 import { isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
-import { STRESS_SUFFIX, explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
+import { STRESS_SUFFIX, explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
 import { columnsFromOrder, completeLayout, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge, type PanelLayout } from "./panelLayout";
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
+import { BuiltinTerminal, terminalHost, terminalKeyIsEditors, typedInTerminal, useTerminalStatus, type TerminalStatus } from "./BuiltinTerminal";
+import { COMMAND_PREFIX, autoSaveEnabled, checkerStarter, checkerStatus, matchCommands, summarizeTests, type CheckerVerdict, type PaletteCommand } from "./workbench";
 import packageInfo from "../package.json";
 
 type Language = "cpp" | "python";
@@ -45,6 +47,8 @@ type TestCase = {
   open: boolean;
   timeMs?: number;
   memoryKb?: number;
+  /** What the problem's checker said about the last run, when it has one. */
+  checkerMessage?: string;
 };
 
 type NativeRunResult = {
@@ -57,7 +61,7 @@ type NativeRunResult = {
   verdict: Verdict;
 };
 
-type PanelMode = "tests" | "interactive";
+type PanelMode = "tests" | "interactive" | "terminal";
 /** The four workspace panels. Their left-to-right order is the user's to arrange. */
 type PanelId = "tests" | "editor" | "problem" | "explorer";
 const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
@@ -111,7 +115,7 @@ type ProblemBrowserMode = "panel" | "window";
 type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 type InteractiveOutputEvent = { sessionId: string; stream: "stdout" | "stderr"; text: string };
 type InteractiveExitEvent = { sessionId: string; code: number | null; timeMs: number; stopped: boolean };
-type TestResultEvent = { runId: string; index: number; result: NativeRunResult };
+type TestResultEvent = { runId: string; index: number; result: NativeRunResult; checker?: CheckerVerdict };
 
 type ProblemTab = {
   id: string;
@@ -289,12 +293,18 @@ const verdictLabels: Record<Status, string> = {
   idle: "", running: "…", ac: "AC", wa: "WA", tle: "TLE", mle: "MLE", re: "RE", ce: "CE", stopped: "—",
 };
 /** Turns one runner result into a verdict. Only a clean exit can still be judged against the expected output. */
-const judge = (result: NativeRunResult, expected: string, tolerance: number): Status => {
+const judge = (result: NativeRunResult, expected: string, tolerance: number, checker?: CheckerVerdict): Status => {
   if (result.verdict === "limit") return "re";
   if (result.verdict !== "ok") return result.verdict;
+  if (checker) return checkerStatus(checker);
   return outputsMatch(expected, result.stdout, tolerance) ? "ac" : "wa";
 };
 const finalVerdicts: Status[] = ["ac", "wa", "tle", "mle", "re", "ce", "stopped"];
+/** A shortcut spelled for the platform: `⌘⇧↵` on macOS, `Ctrl+Shift+Enter` elsewhere. */
+const shortcutLabel = (key: string, modifiers: { shift?: boolean; alt?: boolean } = {}) => isMac
+  ? `⌘${modifiers.shift ? "⇧" : ""}${modifiers.alt ? "⌥" : ""}${key === "Enter" ? "↵" : key}`
+  : `Ctrl+${modifiers.shift ? "Shift+" : ""}${modifiers.alt ? "Alt+" : ""}${key}`;
+const UI_THEMES: Array<[UiTheme, string]> = [["pastel", "Pastel Dusk"], ["midnight", "Catppuccin Mocha"], ["latte", "Rosé Pine Dawn"], ["sakura", "Dracula"], ["blossom", "Gruvbox Dark"], ["nord", "Nord"], ["tokyo", "Tokyo Night"]];
 const formatMemory = (kb: number) => kb >= 1024 * 1024 ? `${(kb / 1024 / 1024).toFixed(2)} GB` : kb >= 10 * 1024 ? `${Math.round(kb / 1024)} MB` : `${(kb / 1024).toFixed(1)} MB`;
 
 /** A timed practice or a live round: a countdown, and when each problem of the folder was solved. */
@@ -498,7 +508,8 @@ const STRESS_CREATE = "\u0000create";
 /** Per problem, not per workspace: each one has a generator and a reference of its own. */
 const stressChoiceKey = (workspace: string | null) => `mild-stress:${workspace ?? ""}`;
 type StressOutcome =
-  | { kind: "mismatch"; rounds: number; input: string; expected: string; actual: string }
+  /** `reason` is what the problem's checker said, when a checker decided. */
+  | { kind: "mismatch"; rounds: number; input: string; expected: string; actual: string; reason?: string }
   | { kind: "passed"; rounds: number }
   | { kind: "compileError"; program: string; message: string }
   | { kind: "crashed"; rounds: number; program: string; input: string; message: string }
@@ -563,6 +574,20 @@ const messages = {
     browserSettings: "Problem browser", browserExtensions: "Extensions", browserExtensionsHelp: "Paste a Chrome Web Store link or extension id. The extension is downloaded and unpacked into the app profile; a restart loads it.", browserExtensionSource: "Web store link or id", browserExtensionInstall: "Install", browserExtensionInstalling: "Installing…", browserExtensionRemove: "Remove", browserBuiltin: "Built-in", browserDefaultsTitle: "Included", browserDefaultsHelp: "Competitive Companion (with DOJ parsers) ships with the app. Carrot and Tampermonkey are installed from the Web Store on first start. AtCoder Better! is a Tampermonkey userscript: the button opens its install page in the panel, where one confirmation finishes it.", browserInstallAtCoderBetter: "Install AtCoder Better!", browserNeedsTampermonkey: "Tampermonkey is not loaded yet", browserExtensionsNone: "No extensions installed", browserRestartNeeded: "Restart to apply the changes", browserRestartNow: "Restart now", browserRestartDev: "Development build: quit and run npm run dev:cef again", browserPending: "After restart",
     chipTests: "Tests", chipEditor: "Code", chipProblem: "Problem", chipExplorer: "Files", chipHint: "Click to show or hide", layoutTitle: "Panel layout", layoutHint: "Drag a panel by the grip in its top-left corner and drop it against the edge of another: the left or right half gives it a column of its own, the top or bottom half stacks it there. The chips beside this button show and hide panels.", panelGrip: "Drag to move this panel", layoutReset: "Default layout", problemPanel: "Problem", problemPanelHint: "Open a file imported from a judge, or type a URL. Extensions installed in Settings → problem browser run here.", problemImportHint: "Import this problem or contest into the editor", problemImportWaiting: "Asking Competitive Companion…", problemImportNothing: "Competitive Companion found no problem on this page", problemImportUnsupported: "Install Competitive Companion (settings → problem browser) to import from this site", problemUnavailable: "The problem browser is not available:", problemBrowserPlacement: "Placement", problemBrowserInPanel: "Panel in the workspace", problemBrowserInWindow: "Separate window", problemBrowserPlacementHelp: "As a panel the browser shares the workspace with the editor. As a separate window it can go on another screen; the chip in the status bar and Ctrl+W show and hide it either way.",
     testCases: "Test cases", input: "Input", expected: "Expected", output: "Output", useOutput: "Use output", runToSee: "Run to see output",
+    unsavedChanges: "unsaved changes", tabNotSaved: "{name} is not saved", tabNotSavedBody: "Save the changes to this file before closing its tab?", appNotSaved: "Save before closing?", appNotSavedBody: "The open source file has unsaved code changes. Save them before closing Mild Editor?", closeWithoutSaving: "Close without saving", saveAndClose: "Save and close",
+    terminal: "Terminal", terminalRestart: "New terminal in the workspace folder", terminalClear: "Clear", terminalStop: "End the shell", terminalExitedWith: "exited with", terminalEnded: "ended", terminalAgain: "press Enter for a new shell", terminalIdle: "not running",
+    cmdTerminalShow: "Show the terminal", cmdTerminalHide: "Hide the terminal", cmdTerminalRestart: "New terminal in the workspace folder", cmdTerminalClear: "Clear the terminal", cmdTerminalStop: "End the terminal's shell",
+    menuImportTests: "Import test cases", menuOpenFileLocation: "Open file location", menuOpenFolderLocation: "Open folder location", menuDuplicate: "Duplicate", menuSetSource: "Set problem source", menuRename: "Rename", menuDelete: "Delete",
+    paletteTitle: "Command palette", palettePlaceholder: "Type a command", paletteEmpty: "No command matches", paletteHint: "↑↓ to choose · Enter to run · delete > to search files instead", quickOpenCommandsTip: "Type > for commands",
+    cmdRunAll: "Run all tests", cmdInteractive: "Start an interactive run", cmdStop: "Stop running", cmdSubmit: "Submit to the judge", cmdFoldTests: "Fold every test case", cmdUnfoldTests: "Unfold every test case",
+    cmdCheckerCreate: "Create a checker for this problem", cmdCheckerOpen: "Open this problem's checker", cmdCheckerOn: "Judge this problem with its checker", cmdCheckerOff: "Judge this problem without its checker",
+    cmdNewFile: "New file", cmdNewWorkspace: "New workspace", cmdNewFolder: "New folder", cmdImport: "Import a problem", cmdOpen: "Open a workspace", cmdGoToFile: "Go to file", cmdSave: "Save", cmdReopen: "Reopen the tab closed last", cmdCloseTab: "Close the tab", cmdRescan: "Rescan the workspace folder",
+    cmdExplorer: "Show or hide the explorer", cmdTestPanel: "Show or hide the test panel", cmdInteractivePanel: "Show the interactive panel", cmdProblem: "Show or hide the problem browser", cmdLayout: "Reset the panel layout", cmdZoomIn: "Zoom in", cmdZoomOut: "Zoom out", cmdZoomReset: "Reset the zoom",
+    cmdToCpp: "Change this file to C++", cmdToPython: "Change this file to Python", cmdRelease: "Compile with the Release profile", cmdDebug: "Compile with the Debug profile", cmdRefreshJudge: "Refresh submission results", cmdContest: "Open the contest board",
+    cmdAutoSaveOn: "Turn auto save on", cmdAutoSaveOff: "Turn auto save off", cmdTheme: "Theme: ", cmdLocale: "Interface language: ", cmdSettings: "Open settings", cmdUpdates: "Check for updates",
+    testsPassed: "passed",
+    checker: "checker", checkerOnHint: "Judged by this problem's checker. Click to compare outputs instead.", checkerOffHint: "The checker is off and outputs are compared. Click to judge with it.", checkerOpen: "Open the checker", checkerAddHint: "Add a checker, for a problem that accepts more than one answer", checkerCreated: "checker created — write the problem's rule, then run the tests", checkerSays: "checker", checkerRejected: "rejected by the checker", stressUsesChecker: "Judged by {name}: the reference's output is the answer it is handed.",
+    autoSave: "Save edits automatically", autoSaveHelp: "On by default: the file is saved a second after you stop typing. Off, an edit stays in the editor until you save or run the tests.",
     sort: "Sort", show: "Show", latestModified: "Latest modified", problemNumber: "Problem number", name: "Name", customOrder: "My order", noClosedTabs: "no closed tab to reopen", stress: "Find a counterexample", stressHint: "Runs a generator and a reference solution against this file on random inputs until their answers differ", stressHelp: "Nothing here comes from the judge. The generator is a file that prints one small random input; the reference is a slow solution that is obviously right. Both are files of this workspace, so write and debug them like any other.", stressGenerator: "Generator", stressReference: "Reference solution", stressRounds: "Rounds", stressStart: "Start", stressRunning: "Round", stressNeedFiles: "Save a generator and a reference solution in this workspace first.", stressPassed: "No difference found in", stressPassedRounds: "rounds", stressFoundTitle: "Counterexample found", stressFoundIn: "found in round", stressInput: "Input", stressExpected: "Reference says", stressActual: "This file says", stressAddTest: "Add as a test case", stressCrashed: "crashed", stressCompileError: "did not compile", stressSameFile: "Pick files other than the one being tested.", stressEdit: "Open this file to write it", stressCreateNew: "Create", stressCreate: "Create the files", stressMade: "Ready to be written", stressMadeNext: "Write them, then come back and start the search.", stressOpenMade: "Open them for editing", quickOpen: "Go to file", quickOpenPlaceholder: "Type part of a filename", quickOpenEmpty: "No file matches", quickOpenHint: "\u2191\u2193 to choose \u00b7 Enter to open \u00b7 Esc to close", customOrderSet: "sorted by my order now", explorerRefresh: "Rescan the folder", explorerRescanned: "folder rescanned", allSources: "All sources", noFiles: "No matching files", newFile: "New file", newFolder: "New folder",
     welcomeTagline: "Lightweight competitive programming editor", welcomeBody: "Code, test, save. Built for contest flow.",
     appearanceHelp: "Themes update the full interface and Monaco Editor. Add a local programming font if it is not detected.", editorFont: "Editor font", editorFontSize: "Code font size", addFont: "Add font file", remove: "Remove",
@@ -598,6 +623,20 @@ const messages = {
     browserSettings: "문제 브라우저", browserExtensions: "확장 프로그램", browserExtensionsHelp: "Chrome 웹스토어 링크나 확장 ID를 붙여넣으세요. 앱 프로필에 내려받아 풀고, 재시작하면 로드됩니다.", browserExtensionSource: "웹스토어 링크 또는 ID", browserExtensionInstall: "설치", browserExtensionInstalling: "설치 중…", browserExtensionRemove: "제거", browserBuiltin: "내장", browserDefaultsTitle: "기본 구성", browserDefaultsHelp: "Competitive Companion(DOJ 파서 포함)은 앱에 내장되어 있습니다. Carrot과 Tampermonkey는 처음 실행할 때 웹 스토어에서 설치됩니다. AtCoder Better!는 Tampermonkey 유저스크립트라서, 버튼을 누르면 패널에 설치 페이지가 열리고 거기서 한 번 확인하면 끝납니다.", browserInstallAtCoderBetter: "AtCoder Better! 설치", browserNeedsTampermonkey: "Tampermonkey가 아직 로드되지 않았습니다", browserExtensionsNone: "설치된 확장이 없습니다", browserRestartNeeded: "변경 사항은 재시작 후 적용됩니다", browserRestartNow: "지금 재시작", browserRestartDev: "개발 빌드: 종료 후 npm run dev:cef를 다시 실행하세요", browserPending: "재시작 후",
     chipTests: "테스트", chipEditor: "코드", chipProblem: "문제", chipExplorer: "파일", chipHint: "클릭: 접기/펴기", layoutTitle: "패널 배치", layoutHint: "패널 좌상단의 손잡이를 끌어 다른 패널의 가장자리에 놓으면 배치가 바뀝니다. 좌우 절반은 옆에 새 열로, 상하 절반은 그 열에 위아래로 쌓입니다. 상태바의 칩은 패널을 켜고 끕니다.", panelGrip: "끌어서 이 패널 옮기기", layoutReset: "기본 배치로", problemPanel: "문제", problemPanelHint: "저지에서 가져온 파일을 열거나 URL을 입력하세요. 설정 → 문제 브라우저에서 설치한 확장이 여기서 실행됩니다.", problemImportHint: "이 문제 또는 대회를 에디터로 가져오기", problemImportWaiting: "Competitive Companion에 요청 중…", problemImportNothing: "Competitive Companion이 이 페이지에서 문제를 찾지 못했어요", problemImportUnsupported: "이 사이트에서 가져오려면 설정 → 문제 브라우저에서 Competitive Companion을 설치하세요", problemUnavailable: "문제 브라우저를 사용할 수 없습니다:", problemBrowserPlacement: "위치", problemBrowserInPanel: "작업 공간의 패널", problemBrowserInWindow: "별도 창", problemBrowserPlacementHelp: "패널로 두면 에디터와 작업 공간을 나눠 씁니다. 별도 창으로 두면 다른 모니터에 놓을 수 있고, 상태바의 칩과 Ctrl+W로 똑같이 켜고 끕니다.",
     testCases: "테스트 케이스", input: "입력", expected: "예상 출력", output: "실행 결과", useOutput: "결과 사용", runToSee: "실행하면 결과가 표시됩니다",
+    unsavedChanges: "저장하지 않은 변경", tabNotSaved: "{name}을(를) 저장하지 않았습니다", tabNotSavedBody: "탭을 닫기 전에 이 파일의 변경 내용을 저장할까요?", appNotSaved: "닫기 전에 저장할까요?", appNotSavedBody: "열린 파일에 저장하지 않은 코드 변경이 있습니다. Mild Editor를 닫기 전에 저장할까요?", closeWithoutSaving: "저장하지 않고 닫기", saveAndClose: "저장하고 닫기",
+    terminal: "터미널", terminalRestart: "워크스페이스 폴더에서 새 터미널", terminalClear: "지우기", terminalStop: "셸 종료", terminalExitedWith: "종료 코드", terminalEnded: "종료됨", terminalAgain: "Enter를 누르면 새 셸을 시작합니다", terminalIdle: "실행 중 아님",
+    cmdTerminalShow: "터미널 보기", cmdTerminalHide: "터미널 숨기기", cmdTerminalRestart: "워크스페이스 폴더에서 새 터미널", cmdTerminalClear: "터미널 지우기", cmdTerminalStop: "터미널 셸 종료",
+    menuImportTests: "테스트 케이스 가져오기", menuOpenFileLocation: "파일 위치 열기", menuOpenFolderLocation: "폴더 위치 열기", menuDuplicate: "복제", menuSetSource: "문제 출처 지정", menuRename: "이름 바꾸기", menuDelete: "삭제",
+    paletteTitle: "명령 팔레트", palettePlaceholder: "명령을 입력하세요", paletteEmpty: "맞는 명령이 없습니다", paletteHint: "↑↓ 선택 · Enter 실행 · >를 지우면 파일 검색", quickOpenCommandsTip: "> 를 입력하면 명령",
+    cmdRunAll: "모든 테스트 실행", cmdInteractive: "인터랙티브 실행 시작", cmdStop: "실행 중지", cmdSubmit: "저지에 제출", cmdFoldTests: "테스트 케이스 모두 접기", cmdUnfoldTests: "테스트 케이스 모두 펼치기",
+    cmdCheckerCreate: "이 문제의 체커 만들기", cmdCheckerOpen: "이 문제의 체커 열기", cmdCheckerOn: "체커로 채점하기", cmdCheckerOff: "체커 없이 채점하기",
+    cmdNewFile: "새 파일", cmdNewWorkspace: "새 워크스페이스", cmdNewFolder: "새 폴더", cmdImport: "문제 가져오기", cmdOpen: "워크스페이스 열기", cmdGoToFile: "파일로 이동", cmdSave: "저장", cmdReopen: "마지막으로 닫은 탭 다시 열기", cmdCloseTab: "탭 닫기", cmdRescan: "워크스페이스 폴더 다시 읽기",
+    cmdExplorer: "파일 탐색기 보이기/숨기기", cmdTestPanel: "테스트 패널 보이기/숨기기", cmdInteractivePanel: "인터랙티브 패널 보기", cmdProblem: "문제 브라우저 보이기/숨기기", cmdLayout: "패널 배치 초기화", cmdZoomIn: "화면 확대", cmdZoomOut: "화면 축소", cmdZoomReset: "화면 배율 초기화",
+    cmdToCpp: "이 파일을 C++로 바꾸기", cmdToPython: "이 파일을 Python으로 바꾸기", cmdRelease: "Release 프로필로 컴파일", cmdDebug: "Debug 프로필로 컴파일", cmdRefreshJudge: "제출 결과 새로고침", cmdContest: "컨테스트 보드 열기",
+    cmdAutoSaveOn: "자동 저장 켜기", cmdAutoSaveOff: "자동 저장 끄기", cmdTheme: "테마: ", cmdLocale: "인터페이스 언어: ", cmdSettings: "설정 열기", cmdUpdates: "업데이트 확인",
+    testsPassed: "통과",
+    checker: "체커", checkerOnHint: "이 문제는 체커로 채점합니다. 누르면 출력 비교로 돌아갑니다.", checkerOffHint: "체커가 꺼져 있어 출력을 비교합니다. 누르면 체커로 채점합니다.", checkerOpen: "체커 열기", checkerAddHint: "답이 여러 개일 수 있는 문제를 위한 체커 추가", checkerCreated: "체커를 만들었습니다 — 문제의 판정 규칙을 쓰고 테스트를 실행하세요", checkerSays: "체커", checkerRejected: "체커가 거부함", stressUsesChecker: "{name}로 판정합니다. 기준 풀이의 출력이 체커에 정답으로 전달됩니다.",
+    autoSave: "편집 내용 자동 저장", autoSaveHelp: "기본값은 켜짐: 입력을 멈추고 1초 뒤 파일을 저장합니다. 끄면 저장하거나 테스트를 실행할 때까지 편집 내용은 에디터에만 있습니다.",
     sort: "정렬", show: "필터", latestModified: "최근 수정순", problemNumber: "문제 번호순", name: "이름순", customOrder: "직접 정한 순서", noClosedTabs: "다시 열 닫힌 탭이 없습니다", stress: "반례 찾기", stressHint: "생성기와 기준 풀이를 이 파일과 함께 무작위 입력으로 돌려, 답이 갈리는 입력을 찾습니다", stressHelp: "저지에서 가져오는 것은 없습니다. 생성기는 작은 무작위 입력 하나를 출력하는 파일이고, 기준 풀이는 느리지만 확실히 맞는 풀이입니다. 둘 다 이 워크스페이스의 파일이라 평소처럼 작성하고 디버깅하면 됩니다.", stressGenerator: "생성기", stressReference: "기준 풀이", stressRounds: "반복 횟수", stressStart: "시작", stressRunning: "라운드", stressNeedFiles: "먼저 생성기와 기준 풀이를 이 워크스페이스에 저장하세요.", stressPassed: "차이를 찾지 못했습니다 —", stressPassedRounds: "라운드", stressFoundTitle: "반례를 찾았습니다", stressFoundIn: "라운드에서 발견", stressInput: "입력", stressExpected: "기준 풀이의 답", stressActual: "이 파일의 답", stressAddTest: "테스트 케이스로 추가", stressCrashed: "실행 중 죽었습니다", stressCompileError: "컴파일되지 않았습니다", stressSameFile: "지금 검사 중인 파일이 아닌 다른 파일을 고르세요.", stressEdit: "이 파일을 열어서 작성하기", stressCreateNew: "새로 만들기", stressCreate: "파일 만들기", stressMade: "이제 작성하면 됩니다", stressMadeNext: "작성한 뒤 다시 들어와 탐색을 시작하세요.", stressOpenMade: "열어서 편집하기", quickOpen: "파일 열기", quickOpenPlaceholder: "파일 이름 일부를 입력하세요", quickOpenEmpty: "일치하는 파일이 없습니다", quickOpenHint: "\u2191\u2193 선택 \u00b7 Enter 열기 \u00b7 Esc 닫기", customOrderSet: "정렬을 직접 정한 순서로 바꿨습니다", explorerRefresh: "폴더 다시 읽기", explorerRescanned: "폴더를 다시 읽었습니다", allSources: "모든 사이트", noFiles: "조건에 맞는 파일이 없습니다", newFile: "새 파일", newFolder: "새 폴더",
     welcomeTagline: "가벼운 경쟁적 프로그래밍 에디터", welcomeBody: "작성하고, 테스트하고, 저장하세요. 대회 흐름에 맞춰 만들었습니다.",
     appearanceHelp: "테마는 전체 UI와 Monaco Editor에 함께 적용됩니다. 감지되지 않는 프로그래밍 폰트는 로컬 파일로 추가할 수 있습니다.", editorFont: "에디터 폰트", editorFontSize: "코드 글꼴 크기", addFont: "폰트 파일 추가", remove: "제거",
@@ -758,6 +797,7 @@ function App() {
   const runRef = useRef<() => void>(() => {});
   const interactiveRef = useRef<() => void>(() => {});
   const submitRef = useRef<() => void>(() => {});
+  const paletteRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const diagnosticDecorationsRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -783,6 +823,8 @@ function App() {
   // both the menu bar and the view, and the second arrival must not close a file too.
   const browserClosedAtRef = useRef(0);
   const [organizeImports, setOrganizeImports] = useState(() => localStorage.getItem("mild-organize-imports") === "1");
+  // On unless turned off: an edit reaches the disk a second after the typing stops.
+  const [autoSave, setAutoSave] = useState(() => autoSaveEnabled(localStorage.getItem("mild-auto-save")));
   // Off by default: a submission is only sent when the user has asked for the button to be pressed.
   const [submitPress, setSubmitPress] = useState(() => localStorage.getItem("mild-submit-press") === "1");
   const [companionEnabled, setCompanionEnabled] = useState(() => localStorage.getItem("mild-companion-enabled") !== "0");
@@ -802,6 +844,7 @@ function App() {
   const companionBatchRef = useRef<{ id: string; size: number; problems: ImportedAtCoderProblem[]; timer: number } | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
+  const testSummary = useMemo(() => summarizeTests(tests), [tests]);
   const t = (key: keyof typeof messages.en) => messages[uiLocale][key];
   const updateCollapsedDirectories = (update: (items: Set<string>) => Set<string>) => {
     setCollapsedDirectories((items) => {
@@ -882,7 +925,7 @@ function App() {
   }, [explorerFiles, workspaceDirectories]);
   /** The files a quick-open query matches, best first and capped so the list stays short. */
   const quickOpenMatches = useMemo(() => {
-    if (quickOpen === null) return [];
+    if (quickOpen === null || quickOpen.startsWith(COMMAND_PREFIX)) return [];
     const query = quickOpen.trim();
     return explorerFileSet
       .map((file) => ({ file, match: fuzzyMatch(file.filename, query) }))
@@ -895,7 +938,7 @@ function App() {
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles, ...tabs].map((file) => file.sourceUrl).filter(Boolean))].sort().join("|"), [savedFiles, tabs]);
   const reportedStatuses = ["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated",
     t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed"),
-    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported")];
+    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported"), t("checkerCreated")];
   const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ");
 
@@ -999,6 +1042,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mild-submit-press", submitPress ? "1" : "0");
   }, [submitPress]);
+
+  useEffect(() => {
+    localStorage.setItem("mild-auto-save", autoSave ? "1" : "0");
+  }, [autoSave]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1245,7 +1292,11 @@ function App() {
     setFileStatus(tab.dirty ? "modified" : workspacePath ? "saved" : "not saved");
   };
 
+  // When the code was last typed into, so a save that was already on its way can tell it
+  // did not catch the newest edit.
+  const lastEditAtRef = useRef(0);
   const markActiveDirty = () => {
+    lastEditAtRef.current = Date.now();
     setFileStatus("modified");
     setTabs((items) => items.map((tab) => tab.id === activeTabId ? { ...tab, dirty: true, modifiedAt: Date.now() } : tab));
   };
@@ -2156,6 +2207,7 @@ function App() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => submitRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => interactiveRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP, () => paletteRef.current());
     if (language === "cpp") void connectClangd(editor, monaco);
   };
 
@@ -2465,6 +2517,7 @@ function App() {
       }
       if (!folderPath || Array.isArray(folderPath)) return false;
       setFileStatus("saving…");
+      const startedAt = Date.now();
       const snapshot = tabs.map((tab) => tab.id === activeTabId ? { ...tab, language, codes, tests, dirty: false } : { ...tab, dirty: false });
       const saved = await invoke<LoadedWorkspace>("save_workspace", {
         request: {
@@ -2483,19 +2536,36 @@ function App() {
         },
       });
       setWorkspacePath(saved.folderPath);
-      setTabs(snapshot);
+      // Typing does not wait for the disk. A tab edited while this save was on its way keeps
+      // its newer text and stays marked modified, so nothing typed in that moment is
+      // mistaken for saved — which matters most with auto save writing every second.
+      const editedSince = lastEditAtRef.current > startedAt;
+      setTabs((current) => snapshot.map((tab) => {
+        const live = current.find((item) => item.id === tab.id);
+        return live && editedSince && tab.id === activeTabId ? { ...tab, codes: live.codes, dirty: true, modifiedAt: live.modifiedAt } : tab;
+      }));
       setSavedFiles((items) => {
         if (!items.length) return snapshot;
         const updated = new Map(snapshot.map((tab) => [fileKey(tab.filename), tab]));
         return [...items.map((tab) => updated.get(fileKey(tab.filename)) || tab), ...snapshot.filter((tab) => !items.some((item) => fileKey(item.filename) === fileKey(tab.filename)))];
       });
-      setFileStatus("saved");
+      setFileStatus(editedSince ? "modified" : "saved");
       return true;
     } catch (error) {
       setFileStatus(error instanceof Error ? error.message : String(error));
       return false;
     }
   };
+
+  // Auto save: a second after the typing stops, the same save Ctrl+S makes. Only inside a
+  // workspace — a save without one asks for a folder, which no timer should do — and not
+  // while tests run, which save first anyway.
+  const activeTabDirty = Boolean(activeTab?.dirty);
+  useEffect(() => {
+    if (!autoSave || !workspacePath || !activeTabDirty || running) return;
+    const timer = window.setTimeout(() => setAutoSaveRevision((revision) => revision + 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [autoSave, workspacePath, activeTabDirty, codes, running]);
 
   useEffect(() => {
     if (!autoSaveRevision) return;
@@ -2952,15 +3022,25 @@ function App() {
     runCancelledRef.current = false;
     const runId = crypto.randomUUID();
     const snapshot = tests;
-    setTests((items) => items.map((test, index) => ({ ...test, status: index === 0 ? "running" : "idle", output: "", error: "" })));
+    const checker = checkerProgram();
+    setTests((items) => items.map((test, index) => ({ ...test, status: index === 0 ? "running" : "idle", output: "", error: "", checkerMessage: undefined })));
     const unlisten = await listen<TestResultEvent>("test-result", (event) => {
       if (event.payload.runId !== runId) return;
-      const { index, result } = event.payload;
+      const { index, result, checker: checked } = event.payload;
       const hasEditorDiagnostics = showDiagnostics(result.stderr || "", result.verdict === "ce");
       const expected = snapshot[index]?.expected || "";
-      const verdict = judge(result, expected, floatTolerance);
+      const verdict = judge(result, expected, floatTolerance, checked);
       setTests((items) => items.map((test, itemIndex) => itemIndex === index
-        ? { ...test, output: hasEditorDiagnostics ? "" : result.stdout, error: hasEditorDiagnostics ? "" : result.stderr, timeMs: result.timeMs, memoryKb: result.memoryKb ?? undefined, status: verdict, open: verdict === "ac" ? false : test.open }
+        ? {
+          ...test,
+          output: hasEditorDiagnostics ? "" : result.stdout,
+          error: hasEditorDiagnostics ? "" : result.stderr,
+          timeMs: result.timeMs,
+          memoryKb: result.memoryKb ?? undefined,
+          status: verdict,
+          checkerMessage: checked ? checked.message || (checked.accepted ? "" : t("checkerRejected")) : undefined,
+          open: verdict === "ac" ? false : test.open,
+        }
         : itemIndex === index + 1 && !runCancelledRef.current ? { ...test, status: "running" } : test));
     });
 
@@ -2974,13 +3054,16 @@ function App() {
           atcoderLibraryPath: atcoderLibraryPath || null,
           timeLimitMs: (activeTab.limits?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS) * (language === "cpp" && compileProfile === "debug" ? DEBUG_TIME_FACTOR : 1),
           memoryLimitMb: activeTab.limits?.memoryLimitMb ?? null,
+          checker,
           ...buildOptions(),
         },
       });
       // Last, so the per-test results above cannot wipe them.
       showCompileWarnings(response.compileWarnings || "");
     } catch (error) {
-      setTests((items) => items.map((test) => ({ ...test, status: "re", error: error instanceof Error ? error.message : "Execution failed" })));
+      // Tauri rejects with the backend's message as a plain string.
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Execution failed";
+      setTests((items) => items.map((test) => ({ ...test, status: "re", error: message })));
     } finally {
       unlisten();
       setTests((items) => items.map((test) => test.status === "running" ? { ...test, status: "idle" } : test));
@@ -3376,8 +3459,9 @@ function App() {
     if (contestWasRunningRef.current && !contestRunning && contest) setContestOpen(true);
     contestWasRunningRef.current = contestRunning;
   }, [contestRunning]);
+  // Generators, brute forces and checkers sit beside the problems but are not problems.
   const problemsOfFolder = (folder: string) => (savedFiles.length ? savedFiles : tabs)
-    .filter((file) => fileKey(explorerParent(file.filename)) === fileKey(folder))
+    .filter((file) => fileKey(explorerParent(file.filename)) === fileKey(folder) && !isHelperFile(file.filename))
     .sort((left, right) => explorerBasename(left.filename).localeCompare(explorerBasename(right.filename), undefined, { numeric: true }));
   const contestProblems = useMemo(() => {
     if (!contest) return [];
@@ -3768,7 +3852,8 @@ function App() {
   }, [interactiveLog]);
 
   useEffect(() => {
-    if (!workspacePath) return;
+    // The terminal belongs to the window, not to a workspace, so it is not what one reopens on.
+    if (!workspacePath || panelMode === "terminal") return;
     void invoke("save_workspace_panel_mode", { request: { folderPath: workspacePath, panelMode } })
       .catch(() => undefined);
   }, [panelMode, workspacePath]);
@@ -3898,6 +3983,7 @@ function App() {
           timeLimitMs: (activeTab.limits?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS) * (language === "cpp" && compileProfile === "debug" ? DEBUG_TIME_FACTOR : 1),
           atcoderLibraryPath: atcoderLibraryPath || null,
           floatTolerance,
+          checker: checkerProgram(),
           ...buildOptions(),
         },
       });
@@ -3922,6 +4008,59 @@ function App() {
     setStressOpen(false);
   };
 
+  // ── The problem's checker ──
+  // A checker is a file beside the problem, `<problem>_checker.cpp` or `.py`, found the way
+  // the search helpers are: writing one is all it takes. Switching it off is remembered per
+  // workspace, without touching the file.
+  const checkerOffKey = `mild-checker-off:${workspacePath ?? ""}`;
+  const [checkerOffRevision, setCheckerOffRevision] = useState(0);
+  const checkersOff = useMemo(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(checkerOffKey) || "[]");
+      return new Set<string>(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []);
+    } catch { return new Set<string>(); }
+  }, [checkerOffKey, checkerOffRevision]);
+  const checkerApplies = Boolean(activeTab && workspacePath && !isHelperFile(activeTab.filename));
+  const activeChecker = checkerApplies && activeTab ? findStressCompanion(savedFiles, activeTab.filename, "checker") : undefined;
+  const checkerOn = Boolean(activeChecker && activeTab && !checkersOff.has(fileKey(activeTab.filename)));
+  /** The checker as the runner takes it: from its tab when open, which is never behind the file. */
+  const checkerProgram = () => {
+    if (!checkerOn || !activeChecker) return null;
+    const source = tabs.find((tab) => fileKey(tab.filename) === fileKey(activeChecker.filename)) ?? activeChecker;
+    return { language: source.language, code: source.codes[source.language] };
+  };
+  const toggleChecker = () => {
+    if (!activeTab) return;
+    const key = fileKey(activeTab.filename);
+    const next = new Set(checkersOff);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    localStorage.setItem(checkerOffKey, JSON.stringify([...next]));
+    setCheckerOffRevision((value) => value + 1);
+    setTests((items) => items.map((test) => finalVerdicts.includes(test.status) ? { ...test, status: "idle", checkerMessage: undefined } : test));
+  };
+  /** Writes a starter checker beside the problem and opens it, since writing it is the next step. */
+  const createChecker = async () => {
+    if (!activeTab || !workspacePath || !checkerApplies) return;
+    if (activeChecker) { openSavedFile(activeChecker); return; }
+    const filename = stressCompanionName(activeTab.filename, "checker", activeTab.language);
+    const title = explorerBasename(filename).replace(/\.[^.]+$/, "");
+    const code = checkerStarter(activeTab.language, explorerBasename(activeTab.filename).replace(/\.[^.]+$/, "").replace(/_/g, " "));
+    try {
+      await invoke<LoadedWorkspace>("save_workspace", {
+        request: {
+          folderPath: workspacePath,
+          problems: [{ filename, title, language: activeTab.language, code, tests: [], source: "other", sourceUrl: null, judgeStatus: null, limits: null, modifiedAt: Date.now() }],
+        },
+      });
+      const tab = makeTab({ filename, title, language: activeTab.language, code, tests: [], source: "other", modifiedAt: Date.now() });
+      await rescanWorkspaceFiles(false, true);
+      openSavedFile(tab);
+      setFileStatus(t("checkerCreated"));
+    } catch (error) {
+      setFileStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   // The counterexample search shares the runner's cancel flag, so one stop serves both.
   const stopRun = () => {
     if (!running && !stressBusy) return;
@@ -3930,7 +4069,7 @@ function App() {
   };
 
   // Refreshed every render so Monaco's bindings see the current panel state.
-  useEffect(() => { runRef.current = runActivePanel; interactiveRef.current = beginInteractiveRun; submitRef.current = () => void submitSolution(); });
+  useEffect(() => { runRef.current = runActivePanel; interactiveRef.current = beginInteractiveRun; submitRef.current = () => void submitSolution(); paletteRef.current = openCommandPalette; });
 
   // Subscriptions resolve asynchronously, so a cleanup that runs first (StrictMode
   // does this in development) has nothing to call yet; without the flag the first
@@ -3972,9 +4111,100 @@ function App() {
         case "run:interactive": beginInteractiveRun(); break;
         case "run:submit": void submitSolution(); break;
         case "run:stop": stopRun(); stopInteractive(); break;
+        case "view:command-palette": openCommandPalette(); break;
+        case "view:terminal": toggleTerminal(); break;
+        case "view:go-to-file": setQuickOpen((open) => open === null || open.startsWith(COMMAND_PREFIX) ? "" : null); setQuickOpenIndex(0); break;
       }
     };
   });
+
+  // ── The built-in terminal ──
+  const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>({ running: false, shell: "", exitCode: null, error: "" });
+  useTerminalStatus(setTerminalStatus);
+  useEffect(() => { terminalHost().setLabels({ exited: t("terminalExitedWith"), ended: t("terminalEnded"), again: t("terminalAgain") }); }, [uiLocale]);
+  const terminalShown = testPanelVisible && panelMode === "terminal";
+  /** Ctrl+`: shows the terminal, or puts the test cases back when it is already showing. */
+  const toggleTerminal = () => {
+    if (terminalShown) { setPanelMode("tests"); editorRef.current?.focus(); return; }
+    setTestPanelVisible(true);
+    setPanelMode("terminal");
+    window.setTimeout(() => terminalHost().focus(), 0);
+  };
+  /** A new shell in the workspace folder, ending the one running. */
+  const restartTerminal = () => {
+    setTestPanelVisible(true);
+    setPanelMode("terminal");
+    void terminalHost().start(workspacePath).then(() => terminalHost().focus());
+  };
+
+  // ── The command palette ──
+  // Everything the editor can do, findable by name in either language, with its shortcut
+  // beside it: quick open with a leading ">", as in VS Code.
+  const openCommandPalette = () => {
+    setQuickOpen((open) => open !== null && open.startsWith(COMMAND_PREFIX) ? null : COMMAND_PREFIX);
+    setQuickOpenIndex(0);
+  };
+  type PaletteEntry = PaletteCommand & { run: () => void };
+  const paletteCommands: PaletteEntry[] = (() => {
+    const noFile = !activeTab;
+    const entries: PaletteEntry[] = [
+      { id: "run.all", label: t("cmdRunAll"), keywords: "execute test 실행 테스트", shortcut: shortcutLabel("Enter"), disabled: noFile || running, run: () => { setTestPanelVisible(true); setPanelMode("tests"); void run(); } },
+      { id: "run.submit", label: t("cmdSubmit"), keywords: "submit judge 제출", shortcut: shortcutLabel("Enter", { shift: true }), disabled: !activeTab?.sourceUrl || submitting, run: () => void submitSolution() },
+      { id: "run.interactive", label: t("cmdInteractive"), keywords: "interactive 인터랙티브", shortcut: shortcutLabel("Enter", { alt: true }), disabled: noFile, run: beginInteractiveRun },
+      { id: "run.stop", label: t("cmdStop"), keywords: "stop kill 중지 정지", shortcut: shortcutLabel("."), disabled: !running && !stressBusy && !interactiveRunning, run: () => { stopRun(); stopInteractive(); } },
+      { id: "run.stress", label: t("stress"), keywords: "stress counterexample brute 반례 스트레스", disabled: noFile || !workspacePath, run: openStressDialog },
+      { id: "test.add", label: t("addTest"), keywords: "test case 테스트 추가", disabled: noFile, run: () => { setTestPanelVisible(true); setPanelMode("tests"); addTest(); } },
+      { id: "test.fold", label: t("cmdFoldTests"), keywords: "collapse 접기", disabled: !tests.some((test) => test.open), run: () => setTests((items) => items.map((test) => ({ ...test, open: false }))) },
+      { id: "test.unfold", label: t("cmdUnfoldTests"), keywords: "expand 펼치기", disabled: !tests.some((test) => !test.open), run: () => setTests((items) => items.map((test) => ({ ...test, open: true }))) },
+      ...(checkerApplies ? activeChecker ? [
+        { id: "checker.toggle", label: checkerOn ? t("cmdCheckerOff") : t("cmdCheckerOn"), keywords: "checker special judge spj 체커 스페셜 저지", run: toggleChecker },
+        { id: "checker.open", label: t("cmdCheckerOpen"), keywords: "checker 체커", run: () => openSavedFile(activeChecker) },
+      ] : [
+        { id: "checker.create", label: t("cmdCheckerCreate"), keywords: "checker special judge spj multiple answers 체커 스페셜 저지", run: () => void createChecker() },
+      ] : []),
+      { id: "file.goto", label: t("cmdGoToFile"), keywords: "quick open find 파일 찾기", shortcut: shortcutLabel("P"), run: () => { setQuickOpen(""); setQuickOpenIndex(0); } },
+      { id: "file.new", label: t("cmdNewFile"), keywords: "create file 만들기 파일", disabled: !workspacePath, run: () => beginBlankFile(explorerCreationParent()) },
+      { id: "workspace.new", label: t("cmdNewWorkspace"), keywords: "create project folder 프로젝트 폴더", shortcut: shortcutLabel("N"), run: newProblem },
+      { id: "file.folder", label: t("cmdNewFolder"), keywords: "directory 디렉터리", shortcut: shortcutLabel("N", { shift: true }), disabled: !workspacePath, run: () => beginFolderCreation(explorerCreationParent()) },
+      { id: "file.import", label: t("cmdImport"), keywords: "import url atcoder codeforces doj 가져오기", shortcut: shortcutLabel("T"), run: beginImport },
+      { id: "file.open", label: t("cmdOpen"), keywords: "open folder workspace 열기", shortcut: shortcutLabel("O"), run: () => void openProblem() },
+      { id: "file.save", label: t("cmdSave"), keywords: "save 저장", shortcut: shortcutLabel("S"), disabled: noFile, run: () => void saveProblem() },
+      { id: "file.reopen", label: t("cmdReopen"), keywords: "reopen undo close 복원", shortcut: shortcutLabel("T", { shift: true }), run: reopenClosedTab },
+      { id: "file.close", label: t("cmdCloseTab"), keywords: "close 닫기", shortcut: shortcutLabel("W"), disabled: noFile, run: () => closeWithShortcutRef.current() },
+      { id: "terminal.toggle", label: terminalShown ? t("cmdTerminalHide") : t("cmdTerminalShow"), keywords: "terminal shell console cli cmd powershell 터미널 콘솔 셸 명령줄", shortcut: isMac ? "⌃`" : "Ctrl+`", run: toggleTerminal },
+      { id: "terminal.restart", label: t("cmdTerminalRestart"), keywords: "terminal shell new restart 터미널 새 다시", run: restartTerminal },
+      { id: "terminal.clear", label: t("cmdTerminalClear"), keywords: "terminal clear 터미널 지우기", disabled: !terminalStatus.running, run: () => terminalHost().clear() },
+      { id: "terminal.stop", label: t("cmdTerminalStop"), keywords: "terminal kill stop 터미널 종료", disabled: !terminalStatus.running, run: () => terminalHost().stop() },
+      { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
+      { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
+      { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
+      { id: "view.interactive", label: t("cmdInteractivePanel"), keywords: "interactive 인터랙티브", shortcut: shortcutLabel("2", { alt: true }), run: () => { setTestPanelVisible(true); setPanelMode("interactive"); } },
+      { id: "view.problem", label: t("cmdProblem"), keywords: "browser statement problem 문제 브라우저 지문", shortcut: shortcutLabel("3", { alt: true }), run: () => setProblemPanelOpen((open) => !open) },
+      { id: "view.layout", label: t("cmdLayout"), keywords: "layout reset panels 배치", run: resetLayout },
+      { id: "view.zoom-in", label: t("cmdZoomIn"), keywords: "zoom bigger 확대", shortcut: shortcutLabel("="), run: () => adjustUiZoom(UI_ZOOM_STEP) },
+      { id: "view.zoom-out", label: t("cmdZoomOut"), keywords: "zoom smaller 축소", shortcut: shortcutLabel("-"), run: () => adjustUiZoom(-UI_ZOOM_STEP) },
+      { id: "view.zoom-reset", label: t("cmdZoomReset"), keywords: "zoom 100 배율", shortcut: shortcutLabel("0"), run: () => setUiZoom(100) },
+      { id: "lang.cpp", label: t("cmdToCpp"), keywords: "language c++ cpp 언어", disabled: noFile || language === "cpp", run: () => void changeActiveLanguage("cpp") },
+      { id: "lang.python", label: t("cmdToPython"), keywords: "language python py 언어 파이썬", disabled: noFile || language === "python", run: () => void changeActiveLanguage("python") },
+      { id: "profile.release", label: t("cmdRelease"), keywords: "compile O2 optimise 컴파일 프로필", disabled: compileProfile === "release", run: () => setCompileProfile("release") },
+      { id: "profile.debug", label: t("cmdDebug"), keywords: "compile sanitizer debug 컴파일 프로필 디버그", disabled: compileProfile === "debug", run: () => setCompileProfile("debug") },
+      { id: "judge.refresh", label: t("cmdRefreshJudge"), keywords: "verdict status submissions 채점 결과", disabled: refreshingJudge, run: () => void refreshSubmissionStatuses() },
+      { id: "contest.board", label: t("cmdContest"), keywords: "contest timer board 컨테스트 대회", run: () => setContestOpen(true) },
+      { id: "autosave", label: autoSave ? t("cmdAutoSaveOff") : t("cmdAutoSaveOn"), keywords: "auto save 자동 저장", run: () => setAutoSave((value) => !value) },
+      ...UI_THEMES.map(([theme, name]): PaletteEntry => ({ id: `theme.${theme}`, label: `${t("cmdTheme")}${name}`, keywords: "theme colour color 테마 색", disabled: uiTheme === theme, run: () => setUiTheme(theme) })),
+      { id: "locale", label: `${t("cmdLocale")}${uiLocale === "en" ? "한국어" : "English"}`, keywords: "language locale korean english 언어 한국어 영어", run: () => setUiLocale((locale) => locale === "en" ? "ko" : "en") },
+      { id: "settings", label: t("cmdSettings"), keywords: "preferences options 설정", shortcut: shortcutLabel(","), run: openSettings },
+      { id: "updates", label: t("cmdUpdates"), keywords: "update version 업데이트", disabled: !UPDATES_SUPPORTED, run: () => { openSettings(); setSettingsPage("updates"); void checkForUpdates(); } },
+    ];
+    return entries;
+  })();
+  const paletteMode = quickOpen !== null && quickOpen.startsWith(COMMAND_PREFIX);
+  const paletteMatches = paletteMode && quickOpen !== null ? matchCommands(paletteCommands, quickOpen.slice(COMMAND_PREFIX.length)) : [];
+  const runPaletteCommand = (command: PaletteEntry) => {
+    if (command.disabled) return;
+    setQuickOpen(null);
+    command.run();
+  };
 
   useEffect(() => {
     if (!isMac || !("__TAURI_INTERNALS__" in window)) return;
@@ -3987,11 +4217,13 @@ function App() {
 
   useEffect(() => {
     const handleRunShortcut = (event: KeyboardEvent) => {
+      // Typing in the terminal: Ctrl+P, Ctrl+W and the rest are the shell's keys there.
+      if (typedInTerminal(event) && !terminalKeyIsEditors(event)) return;
       // On macOS these accelerators live on the native menu bar, which fires first;
       // handling them here as well would run every command twice.
       if (isMac && "__TAURI_INTERNALS__" in window) {
         const key = event.key.toLowerCase();
-        if ((event.metaKey || event.ctrlKey) && !(event.shiftKey && key === "t") && ["enter", "s", "n", "t", "o", "w", "b", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
+        if ((event.metaKey || event.ctrlKey) && !(event.shiftKey && key === "t") && ["enter", "s", "n", "t", "o", "w", "b", "p", ",", ".", "=", "+", "-", "_", "0"].includes(key)) return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
@@ -4013,10 +4245,15 @@ function App() {
         if (event.shiftKey) reopenClosedTab();
         else beginImport();
       }
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p") {
+      // Ctrl+` shows and hides the terminal — Control on macOS too, as in VS Code. The
+      // physical key is matched, since a Korean layout types ₩ there.
+      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "Backquote") {
         event.preventDefault();
-        setQuickOpen((open) => open === null ? "" : null);
-        setQuickOpenIndex(0);
+        toggleTerminal();
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        menuHandlerRef.current(event.shiftKey ? "view:command-palette" : "view:go-to-file");
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault();
@@ -4073,6 +4310,8 @@ function App() {
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // Escape in the terminal is for the program running there (vim, less, a REPL).
+      if (typedInTerminal(event)) return;
       if (hasFileStatusError) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -4285,7 +4524,7 @@ function App() {
             </select>
             <button onClick={insertSnippet} disabled={!insertSnippetId}>{t("insert")}</button>
           </div>
-          <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : run} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
+          <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : () => void run()} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
             <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
           </button>
           <button className="submit-top" onClick={() => void submitSolution()} disabled={!activeTab?.sourceUrl || submitting} title={activeTab?.sourceUrl ? `${t("submitHint")} (${isMac ? "⌘⇧↵" : "Ctrl+Shift+Enter"})` : t("submitNoSource")}>
@@ -4361,13 +4600,21 @@ function App() {
               <div className="panel-modes">
                 <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
                 <button className={panelMode === "interactive" ? "active" : ""} aria-pressed={panelMode === "interactive"} onClick={() => setPanelMode("interactive")}>{t("interactive")}</button>
+                <button className={panelMode === "terminal" ? "active" : ""} aria-pressed={panelMode === "terminal"} onClick={() => setPanelMode("terminal")} title={`${t("terminal")} (${isMac ? "⌃`" : "Ctrl+`"})`}>{t("terminal")}</button>
               </div>
               {panelMode === "tests" ? <>
-                <span className="count">{tests.length}</span>
-                <button className="panel-run" onClick={run} disabled={running} aria-label="run all tests" title="run tests">
+                {testSummary.judged > 0
+                  ? <span className={`test-summary ${testSummary.tone}`} title={`${testSummary.passed}/${testSummary.total} ${t("testsPassed")}${testSummary.slowestMs !== null ? ` · max ${testSummary.slowestMs} ms` : ""}`}>{testSummary.passed}/{testSummary.total}</span>
+                  : <span className="count">{tests.length}</span>}
+                <button className="panel-run" onClick={() => void run()} disabled={running} aria-label="run all tests" title={`${t("cmdRunAll")} (${shortcutLabel("Enter")})`}>
                   {running ? <span className="spinner" /> : <Icon name="play" size={14} />}
                 </button>
                 {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running"><Icon name="stop" size={14} /></button>}
+              </> : panelMode === "terminal" ? <>
+                <span className="terminal-shell" title={terminalStatus.error || undefined}>{terminalStatus.running ? terminalStatus.shell : terminalStatus.error ? "!" : t("terminalIdle")}</span>
+                <button className="panel-tool" onClick={() => terminalHost().clear()} disabled={!terminalStatus.running} aria-label={t("terminalClear")} title={t("terminalClear")}><Icon name="close" size={13} /></button>
+                <button className="panel-run" onClick={restartTerminal} aria-label={t("terminalRestart")} title={t("terminalRestart")}><Icon name="plus" size={14} /></button>
+                {terminalStatus.running && <button className="panel-stop" onClick={() => terminalHost().stop()} aria-label={t("terminalStop")} title={t("terminalStop")}><Icon name="stop" size={14} /></button>}
               </> : <>
                 <button className="panel-run" onClick={() => void startInteractive()} disabled={interactiveStarting} aria-label="start interactive run" title={t("interactiveStart")}>
                   {interactiveStarting ? <span className="spinner" /> : <Icon name="play" size={14} />}
@@ -4379,6 +4626,12 @@ function App() {
             <div className="limits-bar">
               <label title={t("timeLimit")}><Icon name="clock" size={13} /><input type="number" min={100} max={60000} step={100} placeholder={String(DEFAULT_TIME_LIMIT_MS)} value={activeTab?.limits?.timeLimitMs ?? ""} onChange={(event) => updateLimits({ timeLimitMs: limitInput(event.target.value, 100, 60000) })} aria-label={t("timeLimit")} /><span>ms</span></label>
               <label title={t("memoryLimit")}><Icon name="chip" size={13} /><input type="number" min={1} max={16384} step={16} placeholder="—" value={activeTab?.limits?.memoryLimitMb ?? ""} onChange={(event) => updateLimits({ memoryLimitMb: limitInput(event.target.value, 1, 16384) })} aria-label={t("memoryLimit")} /><span>MB</span></label>
+              {checkerApplies && (activeChecker
+                ? <span className={`checker-chip ${checkerOn ? "on" : ""}`}>
+                    <button onClick={toggleChecker} aria-pressed={checkerOn} title={checkerOn ? t("checkerOnHint") : t("checkerOffHint")}><Icon name={checkerOn ? "check" : "scale"} size={12} />{t("checker")}</button>
+                    <button className="checker-open" onClick={() => openSavedFile(activeChecker)} aria-label={t("checkerOpen")} title={`${t("checkerOpen")}: ${explorerBasename(activeChecker.filename)}`}><Icon name="file" size={12} /></button>
+                  </span>
+                : <button className="checker-add" onClick={() => void createChecker()} title={t("checkerAddHint")}><Icon name="scale" size={12} />{t("checker")}</button>)}
               {language === "cpp" && compileProfile === "debug" && <span className="limits-note" title={t("debugTimeNote")}>Debug ×{DEBUG_TIME_FACTOR}</span>}
             </div>
             <div className="test-list">
@@ -4400,6 +4653,7 @@ function App() {
                       <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
                       <label>
                         <span className="field-label">{t("output")}{test.status === "wa" && <button className="accept-output" onClick={() => toggleRawOutput(test.id)}>{rawOutputTests.includes(test.id) ? t("showDiff") : t("showRaw")}</button>}</span>
+                        {test.checkerMessage !== undefined && test.checkerMessage !== "" && <pre className={`checker-message ${test.status}`}><b>{t("checkerSays")}</b> {test.checkerMessage}</pre>}
                         {test.status === "wa" && !rawOutputTests.includes(test.id)
                           ? <div className="test-diff">
                               <div className="diff-row diff-head"><span className="diff-line" /><span>{t("diffExpected")}</span><span>{t("diffActual")}</span></div>
@@ -4422,7 +4676,7 @@ function App() {
               <button className="add-test" onClick={addTest} aria-label="Add test case" title="add test case"><Icon name="plus" size={14} /><span>{t("addTest")}</span></button>
               <button className="add-test" onClick={openStressDialog} disabled={!activeTab || !workspacePath} title={t("stressHint")}><Icon name="flask" size={14} /><span>{t("stress")}</span></button>
             </div>
-            </> : <div className="interactive-panel">
+            </> : panelMode === "interactive" ? <div className="interactive-panel">
               <div className="interactive-log" ref={interactiveLogRef}>
                 {interactiveLog.length
                   ? interactiveLog.map((entry) => <pre className={`interactive-entry ${entry.kind}`} key={entry.id}>{entry.text}</pre>)
@@ -4454,7 +4708,11 @@ function App() {
                   <button className="subtle-button" onClick={() => void endInteractiveInput()} disabled={!interactiveRunning}>{t("interactiveEof")}</button>
                 </div>
               </div>
-            </div>}
+            </div> : null}
+            {/* Always mounted, hidden when another tab shows, so the shell and its scrollback stay. */}
+            <div className={`terminal-pane ${panelMode === "terminal" ? "" : "hidden"}`}>
+              <BuiltinTerminal visible={terminalShown} cwd={workspacePath} look={{ fontFamily: editorFontFamily, fontSize: editorFontSize }} themeKey={uiTheme} />
+            </div>
           </aside>}
           {id === "editor" && <section className="editor-area" style={panelStyle(id)}>
           {panelGrip(id)}
@@ -4583,21 +4841,21 @@ function App() {
           <button role="menuitem" onClick={() => beginBlankFile(explorerParent(explorerMenu.file!.filename))}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerParent(explorerMenu.file!.filename))}>{t("newFolder")}</button>
           <div className="explorer-menu-separator" />
-          <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file!); setExplorerMenu(null); }}>Import test cases</button>
-          <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>Open file location</button>
-          <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>Duplicate</button>
-          <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>Set problem source</button>
-          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>Rename</button>
+          <button role="menuitem" onClick={() => { beginTestcaseImport(explorerMenu.file!); setExplorerMenu(null); }}>{t("menuImportTests")}</button>
+          <button role="menuitem" onClick={() => { void openFileLocation(explorerMenu.file!); setExplorerMenu(null); }}>{t("menuOpenFileLocation")}</button>
+          <button role="menuitem" onClick={() => { void duplicateWorkspaceFile(explorerMenu.file!); setExplorerMenu(null); }}>{t("menuDuplicate")}</button>
+          <button role="menuitem" onClick={() => { beginSourceEdit(explorerMenu.file!); setExplorerMenu(null); }}>{t("menuSetSource")}</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "file", filename: explorerMenu.file!.filename })}>{t("menuRename")}</button>
           <button role="menuitem" onClick={() => { setMoveEntry({ kind: "file", filename: explorerMenu.file!.filename }); setExplorerMenu(null); }}>{t("moveTo")}</button>
-          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>Delete</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmFile(explorerMenu.file!); setExplorerMenu(null); }}>{t("menuDelete")}</button>
         </> : explorerMenu.directory ? <>
           <button role="menuitem" onClick={() => beginBlankFile(explorerMenu.directory!)}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation(explorerMenu.directory!)}>{t("newFolder")}</button>
           <div className="explorer-menu-separator" />
-          <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>Open folder location</button>
-          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>Rename</button>
+          <button role="menuitem" onClick={() => { void openFolderLocation(explorerMenu.directory!); setExplorerMenu(null); }}>{t("menuOpenFolderLocation")}</button>
+          <button role="menuitem" onClick={() => beginExplorerRename({ kind: "directory", path: explorerMenu.directory! })}>{t("menuRename")}</button>
           <button role="menuitem" onClick={() => { setMoveEntry({ kind: "directory", path: explorerMenu.directory! }); setExplorerMenu(null); }}>{t("moveTo")}</button>
-          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>Delete</button>
+          <button className="menu-danger" role="menuitem" onClick={() => { setDeleteConfirmDirectory(explorerMenu.directory!); setExplorerMenu(null); }}>{t("menuDelete")}</button>
         </> : <>
           <button role="menuitem" onClick={() => beginBlankFile()}>{t("newFile")}</button>
           <button role="menuitem" onClick={() => beginFolderCreation()}>{t("newFolder")}</button>
@@ -4608,20 +4866,20 @@ function App() {
         const tab = tabs.find((item) => item.id === closeConfirmTabId);
         return <div className="modal-backdrop close-confirm" role="presentation">
           <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title">
-            <span className="eyebrow">unsaved changes</span>
-            <h2 id="close-confirm-title">{tab?.filename || "file"} is not saved</h2>
-            <p>Close this tab and discard its code changes?</p>
-            <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setCloseConfirmTabId(null)}>{t("cancel")}</button><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>Close without saving</button></footer>
+            <span className="eyebrow">{t("unsavedChanges")}</span>
+            <h2 id="close-confirm-title">{t("tabNotSaved").replace("{name}", tab?.filename || "file")}</h2>
+            <p>{t("tabNotSavedBody")}</p>
+            <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setCloseConfirmTabId(null)}>{t("cancel")}</button><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>{t("closeWithoutSaving")}</button><button className="primary-button" autoFocus onClick={() => { const id = closeConfirmTabId; setCloseConfirmTabId(null); void saveProblem().then((saved) => { if (saved) closeProblem(id); }); }}>{t("saveAndClose")}</button></footer>
           </section>
         </div>;
       })()}
 
       {appCloseConfirm && <div className="modal-backdrop close-confirm" role="presentation">
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="app-close-confirm-title">
-          <span className="eyebrow">unsaved changes</span>
-          <h2 id="app-close-confirm-title">Save before closing?</h2>
-          <p>The open source file has unsaved code changes. Save them before closing Mild Editor?</p>
-          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setAppCloseConfirm(false)}>{t("cancel")}</button><button className="danger-button" onClick={closeApplication}>Close without saving</button><button className="primary-button" onClick={() => void saveAndCloseApplication()}>Save and close</button></footer>
+          <span className="eyebrow">{t("unsavedChanges")}</span>
+          <h2 id="app-close-confirm-title">{t("appNotSaved")}</h2>
+          <p>{t("appNotSavedBody")}</p>
+          <footer className="settings-footer"><span className="footer-spacer" /><button className="subtle-button" onClick={() => setAppCloseConfirm(false)}>{t("cancel")}</button><button className="danger-button" onClick={closeApplication}>{t("closeWithoutSaving")}</button><button className="primary-button" onClick={() => void saveAndCloseApplication()}>{t("saveAndClose")}</button></footer>
         </section>
       </div>}
 
@@ -4711,6 +4969,7 @@ function App() {
                 <label className="appearance-range"><span>{t("acrylicBlur")}</span><input type="range" min="0" max="32" value={acrylicBlur} onChange={(event) => setAcrylicBlur(Number(event.target.value))} /><output>{acrylicBlur}px</output></label>
               </div>
               <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><label>{t("editorFontSize")}<span className="editor-font-size"><input type="number" inputMode="numeric" min={EDITOR_FONT_SIZE_MIN} max={EDITOR_FONT_SIZE_MAX} step={1} value={editorFontSizeDraft} onChange={(event) => setEditorFontSizeDraft(event.target.value)} onBlur={commitEditorFontSize} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} aria-label={t("editorFontSize")} /><small>px</small></span></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: editorFontFamily, fontSize: editorFontSize }}>int main() {'{'} return 0; {'}'}</pre></div>
+              <div className="appearance-group"><label className="companion-toggle"><input type="checkbox" checked={autoSave} onChange={(event) => setAutoSave(event.target.checked)} />{t("autoSave")}</label><p className="settings-help">{t("autoSaveHelp")}</p></div>
             </div> : settingsPage === "template" ? <>
               <div className="template-tabs" role="tablist" aria-label="Template language">
                 <button className={templateLanguage === "cpp" ? "active" : ""} onClick={() => setTemplateLanguage("cpp")}>C++</button>
@@ -4895,6 +5154,7 @@ function App() {
                   <button className="subtle-button stress-open-made" disabled={!made.length} onClick={() => { openSavedFiles(made); setStressOpen(false); }}>{t("stressOpenMade")}</button>
                 </div>;
               })()}
+              {checkerOn && activeChecker && <p className="settings-help"><Icon name="check" size={12} /> {t("stressUsesChecker").replace("{name}", explorerBasename(activeChecker.filename))}</p>}
               {stressBusy && <p className="stress-progress">{t("stressRunning")} {stressRound}</p>}
               {stressOutcome?.kind === "passed" && <p className="stress-result ok">{t("stressPassed")} {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
               {stressOutcome?.kind === "stopped" && <p className="stress-result">{t("stop")} · {stressOutcome.rounds} {t("stressPassedRounds")}</p>}
@@ -4906,6 +5166,7 @@ function App() {
               </div>}
               {stressOutcome?.kind === "mismatch" && <div className="stress-result bad">
                 <strong>{t("stressFoundTitle")} · {stressOutcome.rounds} {t("stressFoundIn")}</strong>
+                {stressOutcome.reason && <pre className="checker-message wa"><b>{t("checkerSays")}</b> {stressOutcome.reason}</pre>}
                 <div className="stress-case-grid">
                   <div><small>{t("stressInput")}</small><pre className="stress-case">{stressOutcome.input}</pre></div>
                   <div><small>{t("stressExpected")}</small><pre className="stress-case">{stressOutcome.expected}</pre></div>
@@ -4926,23 +5187,29 @@ function App() {
       })()}
 
       {quickOpen !== null && <div className="modal-backdrop quick-open" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setQuickOpen(null); }}>
-        <section className="quick-open-dialog" role="dialog" aria-modal="true" aria-label={t("quickOpen")}>
+        <section className="quick-open-dialog" role="dialog" aria-modal="true" aria-label={paletteMode ? t("paletteTitle") : t("quickOpen")}>
           <input
             className="quick-open-field"
             autoFocus
             spellCheck={false}
             value={quickOpen}
-            placeholder={t("quickOpenPlaceholder")}
-            aria-label={t("quickOpen")}
+            placeholder={paletteMode ? t("palettePlaceholder") : `${t("quickOpenPlaceholder")} · ${t("quickOpenCommandsTip")}`}
+            aria-label={paletteMode ? t("paletteTitle") : t("quickOpen")}
             onChange={(event) => { setQuickOpen(event.target.value); setQuickOpenIndex(0); }}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              const count = paletteMode ? paletteMatches.length : quickOpenMatches.length;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 const step = event.key === "ArrowDown" ? 1 : -1;
-                setQuickOpenIndex((index) => quickOpenMatches.length ? (index + step + quickOpenMatches.length) % quickOpenMatches.length : 0);
+                setQuickOpenIndex((index) => count ? (index + step + count) % count : 0);
               } else if (event.key === "Enter") {
                 event.preventDefault();
+                if (paletteMode) {
+                  const chosen = paletteMatches[quickOpenIndex];
+                  if (chosen) runPaletteCommand(chosen.command);
+                  return;
+                }
                 const chosen = quickOpenMatches[quickOpenIndex];
                 if (!chosen) return;
                 setQuickOpen(null);
@@ -4950,7 +5217,25 @@ function App() {
               }
             }}
           />
-          <div className="quick-open-list" role="listbox">
+          {paletteMode ? <div className="quick-open-list" role="listbox">
+            {paletteMatches.length ? paletteMatches.map((row, index) => {
+              const marked = new Set(row.positions);
+              return <button
+                key={row.command.id}
+                role="option"
+                aria-selected={index === quickOpenIndex}
+                aria-disabled={row.command.disabled || undefined}
+                className={`quick-open-row palette-row ${index === quickOpenIndex ? "active" : ""} ${row.command.disabled ? "disabled" : ""}`}
+                onMouseMove={() => setQuickOpenIndex(index)}
+                onClick={() => runPaletteCommand(row.command)}
+              >
+                <span className="quick-open-name">{[...row.command.label].map((character, position) => marked.has(position)
+                  ? <b key={position}>{character}</b>
+                  : <span key={position}>{character}</span>)}</span>
+                {row.command.shortcut && <kbd>{row.command.shortcut}</kbd>}
+              </button>;
+            }) : <p className="quick-open-empty">{t("paletteEmpty")}</p>}
+          </div> : <div className="quick-open-list" role="listbox">
             {quickOpenMatches.length ? quickOpenMatches.map((row, index) => {
               const marked = new Set(row.match.positions);
               const parent = explorerParent(row.file.filename);
@@ -4970,8 +5255,8 @@ function App() {
                 {row.file.judgeStatus && <span className={`judge-badge ${isAccepted(row.file.judgeStatus) ? "accepted" : ""}`}>{row.file.judgeStatus}</span>}
               </button>;
             }) : <p className="quick-open-empty">{t("quickOpenEmpty")}</p>}
-          </div>
-          <footer className="quick-open-hint">{t("quickOpenHint")}</footer>
+          </div>}
+          <footer className="quick-open-hint">{paletteMode ? t("paletteHint") : t("quickOpenHint")}</footer>
         </section>
       </div>}
 
