@@ -200,6 +200,11 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .panel-run:hover:not(:disabled) { filter: brightness(1.15); }
 .panel-stop { background: var(--danger-soft); color: var(--danger); }
 .panel-stop:hover { background: color-mix(in srgb, var(--danger) 26%, var(--bg-2)); }
+/* After a run: passed out of judged, green when all passed. */
+.test-summary { --tone: var(--idle); min-width: 20px; flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--tone) 18%, transparent); color: var(--tone); font: 600 var(--fs-xs) var(--font-mono); line-height: 1.2; text-align: center; cursor: default; }
+.test-summary.pass { --tone: var(--success); }
+.test-summary.fail { --tone: var(--danger); }
+.test-summary.partial { --tone: var(--warning); }
 /* Segmented control: one recessed track, the active half raised out of it. */
 .panel-modes { min-width: 0; display: flex; margin-right: auto; padding: 2px; border-radius: var(--r-l); background: color-mix(in srgb, var(--text) 6%, var(--bg-0)); }
 .panel-modes button { min-width: 0; height: 24px; padding: 0 10px; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); font-size: var(--fs-s); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .14s, color .14s; }
@@ -217,6 +222,20 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .limits-bar input:focus { border-color: var(--accent); background: var(--field); }
 .limits-bar label + label { margin-left: 6px; }
 .limits-note { margin-left: auto; padding: 1px 6px; border-radius: var(--r-s); background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); font-weight: 600; cursor: help; }
+/* The problem's checker: a toggle when one exists, an offer to write one when not. */
+.checker-chip { display: inline-flex; align-items: center; margin-left: 6px; border: 1px solid var(--border-subtle); border-radius: var(--r-s); overflow: hidden; }
+.checker-chip button, .checker-add { height: 22px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; transition: background .12s, color .12s; }
+.checker-chip.on { border-color: color-mix(in srgb, var(--success) 45%, var(--border-subtle)); }
+.checker-chip.on button:first-child { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.checker-chip button:hover, .checker-add:hover { background: var(--hover); color: var(--text); }
+.checker-chip .checker-open { padding: 0 5px; border-left: 1px solid var(--border-subtle); }
+.checker-add { margin-left: 6px; border-radius: var(--r-s); opacity: .75; }
+.checker-add:hover { opacity: 1; }
+.checker-message { margin: 0 0 6px; padding: 6px 8px; border-radius: var(--r-s); background: var(--hover); color: var(--text-2); font: var(--fs-xs) var(--font-mono); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
+.checker-message b { margin-right: 4px; color: var(--muted); font-family: var(--font-ui); font-weight: 600; }
+.checker-message.ac { background: color-mix(in srgb, var(--success) 10%, transparent); }
+.checker-message.wa { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.checker-message.re { background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .test-list { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 8px; overflow: auto; }
 .test-card { flex: 0 0 auto; border: 1px solid var(--border-subtle); border-radius: var(--r-l); background: transparent; transition: background .12s, border-color .12s; }
 .test-card:hover { border-color: var(--border); }
@@ -266,6 +285,17 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .diff-row.whitespace .diff-cell { color: var(--warning); }
 
 .interactive-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+/* The built-in terminal: xterm.js fills the pane; its colours come from the theme's tokens. */
+.terminal-pane { min-height: 0; min-width: 0; flex: 1; display: flex; padding: 6px 2px 2px 8px; background: var(--bg-editor); }
+.terminal-pane.hidden { display: none; }
+.builtin-terminal { position: relative; min-height: 0; min-width: 0; flex: 1; }
+.builtin-terminal-surface { position: absolute; inset: 0; }
+.builtin-terminal .xterm { height: 100%; }
+.builtin-terminal .xterm-viewport { background: transparent !important; scrollbar-width: thin; }
+.terminal-shell { min-width: 0; flex: 0 1 auto; overflow: hidden; color: var(--muted); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.panel-tool { width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); transition: background .12s, color .12s; }
+.panel-tool:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.panel-tool:disabled { opacity: .4; }
 .interactive-log { min-height: 0; flex: 1; overflow: auto; padding: 10px 12px; }
 .interactive-hint { margin: 4px 0; color: var(--muted); font-size: var(--fs-s); line-height: 1.6; }
 .interactive-entry { margin: 0; padding: 1px 0; font: var(--fs-s)/1.55 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
@@ -416,6 +446,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .quick-open-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quick-open-name b { color: var(--accent); font-weight: 700; }
 .quick-open-row small { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.palette-row kbd { margin-left: auto; flex: 0 0 auto; padding: 1px 6px; border: 1px solid var(--border-subtle); border-radius: var(--r-s); color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.palette-row.disabled { opacity: .45; cursor: default; }
 .quick-open-row .judge-badge { flex: 0 0 auto; margin-left: auto; }
 .quick-open-empty { margin: 0; padding: 14px 10px; color: var(--muted); font-size: var(--fs-s); }
 .quick-open-hint { padding: 7px 12px; border-top: 1px solid var(--border-subtle); color: var(--muted); font-size: var(--fs-xs); }

@@ -1,14 +1,14 @@
 {
   "name": "mild-editor",
   "private": true,
-  "version": "1.14.0",
+  "version": "1.15.0",
   "type": "module",
   "scripts": {
     "dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "quick": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
-    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts",
+    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
@@ -23,6 +23,8 @@
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

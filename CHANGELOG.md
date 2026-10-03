@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.15.0
+
+- **Checkers.** A problem that accepts more than one answer can carry a checker, `<problem>_checker.cpp` or `.py`, called as `checker <input> <output> <answer>` the way testlib calls one: exit 0 accepts, anything else rejects, and what it prints is shown with the verdict. **checker** above the test cases writes a starter and opens it, then turns the checker off and on per problem. The counterexample search asks the checker too.
+- **Command palette.** `Ctrl+Shift+P` (`⌘⇧P`) finds any command by name, in English or Korean, with its shortcut beside it. `>` in *Go to file* switches to it. On macOS both are in the View menu.
+- **Terminal.** A built-in terminal in the side panel, beside *Test cases* and *Interactive*: your shell (a login `$SHELL` on macOS and Linux, PowerShell or `cmd` on Windows) on a real pseudo-terminal, in the workspace folder. ``Ctrl+` `` shows and hides it. While it has the keyboard, keys like `Ctrl+P` and `Ctrl+W` go to the shell. xterm.js is loaded only when the terminal is first opened.
+- **Edits are saved automatically**, a second after typing stops. **Settings → appearance** turns it off.
+- The test panel heading shows passed out of all tests, green only when every one passed.
+- An edit typed while a save was on its way stays marked modified. The save used to mark the tab saved with text it had not written.
+- A checker, generator or brute force no longer shows up on the contest board as a problem.
+- A run that fails before any test starts — a checker that does not compile, say — shows the editor's message on the tests instead of "Execution failed".
+- The explorer's context menu and the unsaved-changes prompts are in Korean when the interface is; closing a modified tab offers **Save and close**.
+
 ## 1.14.0
 
 - DOJ submissions go through the problem's IDE page (`/problems/<n>/ide`), where DOJ moved its submit form. The editor opens that page, waits for the IDE to load its files, picks the language (C++ keeps the standard already chosen, otherwise the newest; Python goes to PyPy), puts the solution in the entry file marked `main` and checks that exactly that source is what the form will send. A contest problem keeps its `?contest=` link, so it is submitted to the contest. The older dialog on the problem page is still filled if DOJ shows it.

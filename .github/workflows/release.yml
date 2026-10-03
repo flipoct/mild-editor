@@ -57,14 +57,15 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.14.0
+            ## What's changed in v1.15.0
 
-            - **A new mark.** The serif `m` gives way to a mild chili, on the same rounded tile in the theme's colours: in the title bar, on the welcome screen, and as the window, taskbar and installer icon.
-            - **DOJ submissions work again.** DOJ moved its submit form to an IDE page; the editor now opens that page, picks the language, puts the solution in the entry file and checks that exactly that source is what the form will send. A contest problem is still submitted to its contest.
-            - A logged-out DOJ visitor is told to log in, instead of that the submit button is missing.
-            - "Really submit" presses the judge's button at most once per page.
+            - **A built-in terminal.** A *Terminal* tab in the side panel runs your own shell in the workspace folder — a login `$SHELL` on macOS and Linux, PowerShell or `cmd` on Windows — on a real terminal, so colours, line editing and `vim` work. ``Ctrl+` `` shows and hides it; while it has the keyboard, `Ctrl+P`, `Ctrl+W` and the like go to the shell.
+            - **Checkers.** A problem that accepts more than one answer can carry `<problem>_checker.cpp` or `.py`, called as `checker <input> <output> <answer>` like testlib: exit 0 accepts, anything else rejects, and what it prints is shown with the verdict. **checker** above the test cases writes a starter. The counterexample search uses it too.
+            - **Command palette.** `Ctrl+Shift+P` (`⌘⇧P`) finds any command by name, in English or Korean, with its shortcut beside it.
+            - **Auto save.** Edits are saved a second after typing stops; **Settings → appearance** turns it off.
+            - The test panel shows passed out of all tests, the explorer menu and unsaved-changes prompts are in Korean when the interface is, and an edit typed during a save is no longer marked saved.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.14.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.15.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

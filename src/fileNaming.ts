@@ -157,6 +157,8 @@ export const importFolder = (
 
 /** Which of the two helpers a counterexample search needs. */
 export type StressRole = "generator" | "reference";
+/** Every file that belongs to a problem without being one: the two search helpers and its checker. */
+export type HelperRole = StressRole | "checker";
 
 /**
  * The two helpers are named after the problem they belong to, so they sit beside it in the
@@ -164,16 +166,19 @@ export type StressRole = "generator" | "reference";
  * `B_Exit_Order.cpp`. Opening the dialog on a helper resolves back to the problem's pair
  * rather than naming a helper after a helper.
  */
-export const STRESS_SUFFIX: Record<StressRole, string> = { generator: "_generator", reference: "_bruteforce" };
-export const stressStem = (filename: string) => explorerBasename(filename).replace(/\.[^.]+$/, "").replace(/_(generator|bruteforce)$/i, "");
-export const stressCompanionName = (solution: string, role: StressRole, language: SourceLanguage) => {
+export const STRESS_SUFFIX: Record<HelperRole, string> = { generator: "_generator", reference: "_bruteforce", checker: "_checker" };
+const HELPER_SUFFIX = /_(generator|bruteforce|checker)$/i;
+export const stressStem = (filename: string) => explorerBasename(filename).replace(/\.[^.]+$/, "").replace(HELPER_SUFFIX, "");
+/** A generator, brute force or checker: a file that serves a problem rather than solving one. */
+export const isHelperFile = (filename: string) => HELPER_SUFFIX.test(explorerBasename(filename).replace(/\.[^.]+$/, ""));
+export const stressCompanionName = (solution: string, role: HelperRole, language: SourceLanguage) => {
   const parent = explorerParent(solution);
   const leaf = `${stressStem(solution)}${STRESS_SUFFIX[role]}${language === "python" ? ".py" : ".cpp"}`;
   return parent ? `${parent}/${leaf}` : leaf;
 };
 
 /** An existing helper for this problem, whatever extension it was written in. */
-export const findStressCompanion = <T extends { filename: string }>(files: T[], solution: string, role: StressRole) => {
+export const findStressCompanion = <T extends { filename: string }>(files: T[], solution: string, role: HelperRole) => {
   const parent = fileKey(explorerParent(solution));
   const wanted = fileKey(`${stressStem(solution)}${STRESS_SUFFIX[role]}`);
   return files.find((file) => fileKey(explorerParent(file.filename)) === parent
