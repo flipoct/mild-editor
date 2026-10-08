@@ -217,7 +217,7 @@ pub fn terminal_start(app: AppHandle, state: tauri::State<'_, TerminalState>, re
     let mut guard = sessions.lock().map_err(|_| "The terminal is busy.")?;
     guard.take();
 
-    let installed = |program: &str| if Path::new(program).is_absolute() { Path::new(program).is_file() } else { crate::find_tool(program).is_some() };
+    let installed = |program: &str| if Path::new(program).is_absolute() { Path::new(program).is_file() } else { crate::tools::find_tool(program).is_some() };
     let shell_env = std::env::var("SHELL").ok();
     let (program, args) = shell_command(cfg!(windows), shell_env.as_deref(), &installed);
     let (master, writer, shell, reader) = open_session(&program, &args, &starting_folder(request.cwd.as_deref()), request.cols, request.rows)?;
