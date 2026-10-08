@@ -250,58 +250,6 @@ fn parse_codeforces_contest_urls(html: &str, base_url: &reqwest::Url) -> Vec<Str
     urls
 }
 
-fn parse_codeforces_markdown(markdown: &str) -> Option<(String, Vec<SavedTestCase>)> {
-    let title = markdown.lines().find_map(|line| line.strip_prefix("Title: ")).unwrap_or("Codeforces problem").trim().to_string();
-    let lines = markdown.lines().collect::<Vec<_>>();
-    let mut tests = Vec::new();
-    let mut cursor = lines.iter().position(|line| matches!(line.trim(), "Examples" | "Example")).unwrap_or(lines.len());
-    while cursor < lines.len() {
-        if lines[cursor].trim() != "Input" { cursor += 1; continue; }
-        cursor += 1;
-        while cursor < lines.len() && (lines[cursor].trim().is_empty() || lines[cursor].trim() == "Copy" || lines[cursor].trim() == "```") { cursor += 1; }
-        let mut input = Vec::new();
-        while cursor < lines.len() && lines[cursor].trim() != "Output" {
-            let line = lines[cursor].trim_end();
-            if !line.trim().is_empty() && line.trim() != "```" && line.trim() != "Copy" { input.push(line); }
-            cursor += 1;
-        }
-        if cursor >= lines.len() { break; }
-        cursor += 1;
-        while cursor < lines.len() && (lines[cursor].trim().is_empty() || lines[cursor].trim() == "Copy" || lines[cursor].trim() == "```") { cursor += 1; }
-        let mut output = Vec::new();
-        while cursor < lines.len() && !matches!(lines[cursor].trim(), "Input" | "Note" | "Tutorial" | "Codeforces") {
-            let line = lines[cursor].trim_end();
-            if !line.trim().is_empty() && line.trim() != "```" && line.trim() != "Copy" { output.push(line); }
-            cursor += 1;
-        }
-        if !input.is_empty() && !output.is_empty() {
-            tests.push(SavedTestCase { name: format!("test {}", tests.len() + 1), input: input.join("\n"), expected: output.join("\n") });
-        }
-    }
-    (!tests.is_empty()).then_some((title, tests))
-}
-
-fn parse_codeforces_targeted_block(markdown: &str, heading: &str) -> Option<String> {
-    let content = markdown.split_once("Markdown Content:").map(|(_, content)| content).unwrap_or(markdown);
-    let lines = content.lines()
-        .map(str::trim_end)
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && trimmed != heading && trimmed != "Copy" && trimmed != "```"
-        })
-        .collect::<Vec<_>>();
-    (!lines.is_empty()).then(|| lines.join("\n"))
-}
-
-fn fetch_codeforces_targeted_block(client: &reqwest::blocking::Client, reader_url: &str, selector: &str, heading: &str) -> Option<String> {
-    let body = client.get(reader_url)
-        .header("X-Target-Selector", selector)
-        .header("X-Wait-For-Selector", ".sample-test")
-        .header("X-No-Cache", "true")
-        .send().ok()?.error_for_status().ok()?.text().ok()?;
-    parse_codeforces_targeted_block(&body, heading)
-}
-
 fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Result<ImportedAtCoderProblem, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid Codeforces problem URL.".to_string())?;
     let segments = parsed.path_segments().map(|values| values.collect::<Vec<_>>()).unwrap_or_default();
@@ -321,44 +269,17 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
     let mut seen_direct_urls = std::collections::HashSet::new();
     for direct_url in direct_urls {
         if !seen_direct_urls.insert(direct_url.clone()) { continue; }
-        // A challenge ends the import here. The reader service below renders pages in a
-        // browser of its own, and sending it in after Cloudflare asked for a check would be
-        // going around the check; the user's own browser session is the way through.
+        // A challenge ends the import here: the check is not this client's to get past, and
+        // the user's own browser session is the way through.
         if let Some(html) = fetch_unless_challenged(client, &direct_url, "Codeforces")? {
             if let Some((title, tests)) = parse_codeforces_html(&html) {
                 return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
             }
         }
     }
-    let reader_urls = [
-        format!("https://r.jina.ai/https://codeforces.com/contest/{contest}/problem/{letter}?locale=en"),
-        format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
-        format!("https://r.jina.ai/http://codeforces.com/problemset/problem/{contest}/{letter}?locale=en"),
-        format!("https://r.jina.ai/https://codeforces.com/problemset/problem/{contest}/{letter}"),
-    ];
-    let mut last_error = "Codeforces did not return a readable problem statement.".to_string();
-    let mut fallback_title = "Codeforces problem".to_string();
-    for reader_url in &reader_urls {
-        match client.get(reader_url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
-            Ok(body) => {
-                if let Some(title) = body.lines().find_map(|line| line.strip_prefix("Title: ")) { fallback_title = title.trim().to_string(); }
-                if let Some((title, tests)) = parse_codeforces_markdown(&body) {
-                    return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
-                }
-                last_error = "Codeforces returned a statement without readable sample test cases.".into();
-            }
-            Err(error) => last_error = format!("Could not fetch Codeforces: {error}"),
-        }
-    }
-    for reader_url in &reader_urls {
-        let input = fetch_codeforces_targeted_block(client, reader_url, ".sample-test .input", "Input");
-        let expected = fetch_codeforces_targeted_block(client, reader_url, ".sample-test .output", "Output");
-        if let (Some(input), Some(expected)) = (input, expected) {
-            let tests = vec![SavedTestCase { name: "test 1".into(), input, expected }];
-            return Ok(ImportedAtCoderProblem { title: fallback_title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
-        }
-    }
-    Err(last_error)
+    // Nothing readable and no challenge: a problem only a participant may see, or a page
+    // Codeforces has changed. Either way the user's own browser is what can still read it.
+    Err(format!("{NEEDS_BROWSER}Codeforces did not return a readable problem statement. Open the page in the problem browser and import it from there."))
 }
 
 /// What a DOJ problem page says: the problem's number in the archive, its name, its samples.
@@ -543,15 +464,6 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
         }
     }
 
-    if urls.is_empty() {
-        let reader_url = format!("https://r.jina.ai/https://codeforces.com/contest/{contest}?locale=en");
-        let markdown = client.get(reader_url).send().map_err(|error| format!("Could not fetch Codeforces contest: {error}"))?
-            .error_for_status().map_err(|error| format!("Codeforces response error: {error}"))?.text().map_err(|error| error.to_string())?;
-        for part in markdown.split(&prefix).skip(1) {
-            let letter = part.chars().take_while(|character| character.is_ascii_alphanumeric()).collect::<String>();
-            if !letter.is_empty() && seen.insert(letter.to_ascii_uppercase()) { urls.push(format!("{prefix}{letter}")); }
-        }
-    }
     if urls.is_empty() { return Err("No problems found in the Codeforces contest.".into()); }
     urls.sort();
     let mut problems = Vec::new();
@@ -881,53 +793,5 @@ mod tests {
         let html = r#"<table class="problems"><tbody><tr><td><a href="/contest/9999/problem/A">A</a></td></tr><tr><td><a href="/contest/9999/problem/B2">B2</a></td></tr></tbody></table>"#;
         let base = reqwest::Url::parse("https://codeforces.com/contest/9999?locale=en").unwrap();
         assert_eq!(parse_codeforces_contest_urls(html, &base), vec!["https://codeforces.com/contest/9999/problem/A".to_string(), "https://codeforces.com/contest/9999/problem/B2".to_string()]);
-    }
-
-    #[test]
-    fn parses_codeforces_markdown_copy_blocks() {
-        let markdown = r#"Title: Problem - 1117B - Codeforces
-
-Markdown Content:
-Examples
-
-Input
-
-Copy
-
-6 9 2
-1 3 3 7 4 2
-
-Output
-
-Copy
-
-54
-
-Input
-
-Copy
-
-3 1000000000 1
-1000000000 987654321 1000000000
-
-Output
-
-Copy
-
-1000000000000000000
-
-Note
-"#;
-        let (_, tests) = parse_codeforces_markdown(markdown).expect("parse Codeforces markdown samples");
-        assert_eq!(tests.len(), 2);
-        assert_eq!(tests[0].input, "6 9 2\n1 3 3 7 4 2");
-        assert_eq!(tests[0].expected, "54");
-        assert_eq!(tests[1].expected, "1000000000000000000");
-    }
-
-    #[test]
-    fn parses_codeforces_targeted_copy_block() {
-        let markdown = "Title: Problem - B - Codeforces\n\nMarkdown Content:\nInput\n\nCopy\n\n6\n\n1 1\n\n7 5\n";
-        assert_eq!(parse_codeforces_targeted_block(markdown, "Input").as_deref(), Some("6\n1 1\n7 5"));
     }
 }
