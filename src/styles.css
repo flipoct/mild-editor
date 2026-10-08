@@ -51,7 +51,6 @@ button:disabled { opacity: .45; cursor: default; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 kbd { font-family: var(--font-ui); }
 .icon { display: block; flex: 0 0 auto; }
-.close-icon { display: block; width: 12px; height: 12px; fill: currentColor; }
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
 
 input, select, textarea { border: 1px solid var(--border); border-radius: var(--r-m); background: var(--field); color: var(--text); outline: none; transition: border-color .12s, box-shadow .12s; }
@@ -211,7 +210,6 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .panel-modes button:hover:not(.active) { color: var(--text); }
 .panel-modes button.active { background: var(--bg-3); color: var(--text); box-shadow: 0 1px 2px var(--shadow); }
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; border-radius: 50%; animation: spin .7s linear infinite; }
-.play-icon { display: block; width: 14px; height: 14px; fill: currentColor; }
 
 /* The problem's limits, editable in place; an empty field means the default. */
 .limits-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 6px 10px 0; color: var(--muted); font-size: var(--fs-xs); }
@@ -351,8 +349,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-folder { height: 40px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text); font-size: var(--fs-s); font-weight: 600; }
 .explorer-folder-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-header-actions { display: flex; gap: 2px; }
-.explorer-header-actions button, .explorer-create-actions button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); transition: background .12s, color .12s; }
-.explorer-header-actions button:hover, .explorer-create-actions button:hover { background: var(--hover); color: var(--text); }
+.explorer-header-actions button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); transition: background .12s, color .12s; }
+.explorer-header-actions button:hover { background: var(--hover); color: var(--text); }
 .explorer-controls { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding: 8px; }
 .explorer-controls label { min-width: 0; display: block; }
 .explorer-controls label > span { display: none; }

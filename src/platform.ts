@@ -1,3 +1,6 @@
+/** False in the plain browser preview (`npm run dev:web`), where there is no backend to call. */
+export const IS_TAURI = "__TAURI_INTERNALS__" in window;
+
 const platformHint = (): string => {
   const data = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
   return data?.platform || navigator.platform || navigator.userAgent;
@@ -13,3 +16,6 @@ export const modLabel = isMac ? "⌘" : "Ctrl+";
 
 /** `accel("N")` renders as `⌘N` on macOS and `Ctrl+N` elsewhere. */
 export const accel = (key: string) => `${modLabel}${key}`;
+
+/** What a failed backend call or a thrown value has to say, as text for the status line. */
+export const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);

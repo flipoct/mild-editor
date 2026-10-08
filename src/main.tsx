@@ -6,12 +6,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
 import ProblemWindow from "./ProblemWindow";
+import { IS_TAURI } from "./platform";
 
 // The same bundle serves the separate problem window (see src-tauri/src/browser.rs); the
 // window's label picks the page. `?window=problem` does the same in a plain browser.
 const isProblemWindow = (() => {
   try {
-    if ("__TAURI_INTERNALS__" in window) return getCurrentWindow().label === "problem";
+    if (IS_TAURI) return getCurrentWindow().label === "problem";
   } catch { /* not a Tauri window */ }
   return new URLSearchParams(window.location.search).get("window") === "problem";
 })();
