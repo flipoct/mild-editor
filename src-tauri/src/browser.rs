@@ -1702,6 +1702,8 @@ const BRIDGE_BACKGROUND_PREFIX: &str = "mild-bridge-background";
 const BRIDGE_PATCH: &str = "mild-bridge-patch.js";
 const BRIDGE_CONTENT: &str = "mild-bridge-content.js";
 const BRIDGE_META: &str = "mild-bridge.json";
+/// Competitive Companion's own service worker, in the bundled build and the Web Store's alike.
+const COMPANION_WORKER: &str = "js/background.js";
 
 const BRIDGE_PATCH_JS: &str = r#"// Added by Mild Editor. Its problem panel has no browser toolbar, so the extension's
 // button does not exist there. The editor's own import button posts a message that
@@ -1802,6 +1804,20 @@ fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
     } else {
         current
     };
+    // Builds before 1.10 knew the wrapper by one fixed name and took any other worker for the
+    // extension's own. Run once against a profile a newer build had patched, such a build
+    // recorded the wrapper itself as the original — and from then on the wrapper imported
+    // itself, the extension never started, and no restart cured it. A recorded original that
+    // is one of ours is therefore not believed.
+    let repaired = original.starts_with(BRIDGE_BACKGROUND_PREFIX);
+    let original = if repaired {
+        dir.join(COMPANION_WORKER).is_file().then(|| COMPANION_WORKER.to_string()).ok_or("the recorded background worker is the bridge itself, and the extension's own was not found")?
+    } else {
+        original
+    };
+    // Chromium keeps a service worker for as long as the extension's version stands, so a
+    // repaired wrapper has to come with a version the broken one never had.
+    let repairs = meta.as_ref().and_then(|meta| meta.get("repairs")?.as_u64()).unwrap_or(0) + u64::from(repaired);
     let nonce = meta
         .as_ref()
         .and_then(|meta| meta.get("nonce")?.as_str().map(str::to_owned))
@@ -1816,7 +1832,7 @@ fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
         .or_else(|| root.get("version").and_then(|value| value.as_str()).map(str::to_owned))
         .ok_or("manifest.json has no version")?;
     let base_version = base_version.split('.').take(3).collect::<Vec<_>>().join(".");
-    root["version"] = serde_json::json!(format!("{base_version}.{}", bridge_revision()));
+    root["version"] = serde_json::json!(format!("{base_version}.{}", (u64::from(bridge_revision()) + repairs) % 65535));
 
     let write = |name: &str, contents: String| std::fs::write(dir.join(name), contents).map_err(|error| format!("{name}: {error}"));
     write(BRIDGE_PATCH, BRIDGE_PATCH_JS.to_string())?;
@@ -1830,7 +1846,7 @@ fn shim_competitive_companion(dir: &std::path::Path) -> Result<(), String> {
     }
     write(&background_name, format!("// Added by Mild Editor; see {BRIDGE_PATCH}.\nimport \"./{BRIDGE_PATCH}\";\nimport \"./{original}\";\n"))?;
     write(BRIDGE_CONTENT, BRIDGE_CONTENT_JS.replace("__NONCE__", &serde_json::to_string(&nonce).expect("string json")))?;
-    write(BRIDGE_META, serde_json::to_string_pretty(&serde_json::json!({ "background": original, "nonce": nonce, "version": base_version })).expect("meta json"))?;
+    write(BRIDGE_META, serde_json::to_string_pretty(&serde_json::json!({ "background": original, "nonce": nonce, "version": base_version, "repairs": repairs })).expect("meta json"))?;
     std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).expect("manifest json")).map_err(|error| format!("manifest.json: {error}"))
 }
 
@@ -2008,6 +2024,48 @@ mod extension_tests {
 
         assert!(crx_payload(b"<html>nope").is_err());
         assert!(crx_payload(b"Cr24\x03\x00\x00\x00\xff\xff\x00\x00").is_err(), "header longer than the file");
+    }
+
+    fn patched_companion() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("js")).expect("js dir");
+        std::fs::write(dir.path().join(COMPANION_WORKER), "// the extension\n").expect("worker");
+        std::fs::write(dir.path().join("manifest.json"), r#"{ "name": "Competitive Companion", "version": "2.64.0", "background": { "service_worker": "js/background.js" } }"#).expect("manifest");
+        shim_competitive_companion(dir.path()).expect("first patch");
+        dir
+    }
+
+    fn manifest_of(dir: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).expect("manifest")).expect("manifest json")
+    }
+
+    #[test]
+    fn patching_twice_keeps_the_extensions_own_worker_and_the_version() {
+        let dir = patched_companion();
+        let first = manifest_of(dir.path());
+        shim_competitive_companion(dir.path()).expect("second patch");
+        assert_eq!(manifest_of(dir.path()), first);
+        let wrapper = first["background"]["service_worker"].as_str().expect("wrapper name").to_string();
+        assert!(std::fs::read_to_string(dir.path().join(&wrapper)).expect("wrapper").contains(&format!("import \"./{COMPANION_WORKER}\";")));
+    }
+
+    #[test]
+    fn a_record_that_names_the_wrapper_as_the_original_is_repaired_under_a_new_version() {
+        let dir = patched_companion();
+        let before = manifest_of(dir.path());
+        let wrapper = before["background"]["service_worker"].as_str().expect("wrapper name").to_string();
+        // What a build from before 1.10 leaves behind when it meets this profile.
+        let mut meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join(BRIDGE_META)).expect("meta")).expect("meta json");
+        meta["background"] = serde_json::json!(wrapper);
+        std::fs::write(dir.path().join(BRIDGE_META), meta.to_string()).expect("meta");
+
+        shim_competitive_companion(dir.path()).expect("repair");
+        let after = manifest_of(dir.path());
+        assert!(std::fs::read_to_string(dir.path().join(&wrapper)).expect("wrapper").contains(&format!("import \"./{COMPANION_WORKER}\";")));
+        assert_ne!(after["version"], before["version"], "the cached worker has to be dropped");
+        // Once repaired, it stays put.
+        shim_competitive_companion(dir.path()).expect("after repair");
+        assert_eq!(manifest_of(dir.path()), after);
     }
 
     /// Needs the network: fetches Competitive Companion from the Web Store and unpacks it.
