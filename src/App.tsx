@@ -28,10 +28,10 @@ import { messages, updateStatusLine } from "./i18n";
 import { createThemeWindowIcon } from "./themeIcon";
 import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
-import { blankTest, combinedRunOutput, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isPendingVerdict, judge, languageFromFilename, loadContest, makeTab, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
+import { blankTest, combinedRunOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isPendingVerdict, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
 import { alwaysInstalledFontIds, APP_VERSION, DEFAULT_WEIGHT, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
-import { useLatest, useStableCallback } from "./hooks";
+import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
@@ -1268,7 +1268,7 @@ function App() {
     localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
   }, [activeTab?.filename, tabs, workspacePath]);
 
-  const addImportedProblems = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1) => {
+  const addImportedProblemsNow = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1) => {
     const existingFiles = [...savedFiles, ...tabs].filter((file, index, files) => files.findIndex((item) => fileKey(item.filename) === fileKey(file.filename)) === index);
     const existingProblemIds = new Set(existingFiles.map((file) => problemIdentity(file.source, file.sourceUrl)).filter(Boolean));
     const incomingProblemIds = new Set<string>();
@@ -1338,6 +1338,21 @@ function App() {
     setAtCoderUrl("");
     setFileStatus("saved");
   };
+  /**
+   * Imports run one at a time. Each works from the tabs and files as it finds them — which
+   * names are taken, which tabs exist — and writes the whole list back, so two that overlap
+   * (Competitive Companion posts problems as they are parsed) picked the same filename and
+   * one dropped the other's tab; a workspace with one name twice then refused every save.
+   * The next import starts only once this one's result has been rendered.
+   */
+  const addImportedNowRef = useLatest(addImportedProblemsNow);
+  const importQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const nextRender = useNextRender();
+  const addImportedProblems = (...args: Parameters<typeof addImportedProblemsNow>) => {
+    const run = importQueueRef.current.then(() => addImportedNowRef.current(...args));
+    importQueueRef.current = run.catch(() => undefined).then(nextRender);
+    return run;
+  };
 
   const importAtCoderProblem = async () => {
     if (!atCoderUrl.trim() || importInFlightRef.current) return;
@@ -1366,12 +1381,26 @@ function App() {
       }
       await addImportedProblems(imported, false, isContestImportUrl(atCoderUrl.trim()));
     } catch (error) {
-      setFileStatus(errorMessage(error));
+      const message = errorMessage(error);
+      if (!message.startsWith(NEEDS_BROWSER)) setFileStatus(message);
+      // Test cases for a file that exists go into that file, which a page import cannot aim at.
+      else if (testcaseImportTarget) setFileStatus(t("importNeedsBrowserTests"));
+      else {
+        const url = atCoderUrl.trim();
+        // The dialog is over the browser, and its work is done either way.
+        setAtCoderOpen(false);
+        setNewFileImportPending(false);
+        setAtCoderUrl("");
+        void importThroughBrowser(url);
+      }
     } finally {
       importInFlightRef.current = false;
       setImportingAtCoder(false);
     }
   };
+
+  /** An import error as the status line shows it; the backend's marker for "only a browser can" is not for reading. */
+  const importErrorText = (error: unknown) => errorMessage(error).startsWith(NEEDS_BROWSER) ? t("importNeedsBrowser") : errorMessage(error);
 
   const importCompanionProblems = async (problems: ImportedAtCoderProblem[]) => {
     if (!problems.length) return;
@@ -1416,9 +1445,12 @@ function App() {
   // Kept in a ref so the single event subscription always sees the current tab and workspace state.
   const companionHandlerRef = useRef<(problem: CompanionProblem) => void>(() => {});
   const companionWaitRef = useRef(0);
+  // Counts what the extension has sent, for a caller waiting to see whether its request was answered.
+  const companionArrivalsRef = useRef(0);
   useEffect(() => {
     companionHandlerRef.current = (problem) => {
       window.clearTimeout(companionWaitRef.current);
+      companionArrivalsRef.current += 1;
       queueCompanionProblem(companionToImported(problem), problem.batch);
     };
   });
@@ -1432,24 +1464,36 @@ function App() {
 
   // The panel's import button. Competitive Companion, when installed, parses the page it
   // is looking at (a contest page yields every problem); without it the built-in importer
-  // handles the judges it knows.
+  // handles the judges it knows. Resolves to whether the extension was asked: its answer,
+  // if it has one, arrives later as a `companion-problem` event.
   const importFromProblemPage = async () => {
-    const url = browserStatus.url;
-    if (!url || importInFlightRef.current) return;
-    try {
-      if (await invoke<boolean>("browser_import_page", { port: companionPort })) {
-        setFileStatus(t("problemImportWaiting"));
-        window.clearTimeout(companionWaitRef.current);
-        companionWaitRef.current = window.setTimeout(() => setFileStatus(t("problemImportNothing")), 8000);
-        return;
+    const url = browserStatusRef.current.url;
+    if (!url || importInFlightRef.current) return false;
+    if (!companionCannotParse(url)) {
+      try {
+        if (await invoke<boolean>("browser_import_page", { port: companionPort })) {
+          setFileStatus(t("problemImportWaiting"));
+          window.clearTimeout(companionWaitRef.current);
+          // A page that has only just loaded may not have its statement on screen yet (the
+          // judges that render in the browser), and the extension says nothing when it finds
+          // no problem. So the request is made once more before giving up — an answer comes
+          // within a second when there is one, and its arrival cancels all of this.
+          const arrivals = companionArrivalsRef.current;
+          companionWaitRef.current = window.setTimeout(() => {
+            if (companionArrivalsRef.current !== arrivals) return;
+            void invoke("browser_import_page", { port: companionPort }).catch(() => undefined);
+            companionWaitRef.current = window.setTimeout(() => setFileStatus(t("problemImportNothing")), 5000);
+          }, 3000);
+          return true;
+        }
+      } catch (error) {
+        setFileStatus(errorMessage(error));
+        return false;
       }
-    } catch (error) {
-      setFileStatus(errorMessage(error));
-      return;
     }
     if (!editorCanImport(url)) {
       setFileStatus(t("problemImportUnsupported"));
-      return;
+      return false;
     }
     importInFlightRef.current = true;
     setImportingAtCoder(true);
@@ -1457,11 +1501,12 @@ function App() {
       const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url });
       await addImportedProblems(imported, false, isContestImportUrl(url));
     } catch (error) {
-      setFileStatus(errorMessage(error));
+      setFileStatus(importErrorText(error));
     } finally {
       importInFlightRef.current = false;
       setImportingAtCoder(false);
     }
+    return false;
   };
   const importFromProblemPageRef = useLatest(importFromProblemPage);
 
@@ -1920,6 +1965,77 @@ function App() {
   const submitHoldRef = useRef(false);
   // `<nonce>:<result>` from the last press script, taken off the page title as it arrives.
   const submitMarkerRef = useRef<string | null>(null);
+  const waitFor = async (ready: () => boolean, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (ready()) return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    }
+    return false;
+  };
+  const pathOf = (value: string) => { try { return new URL(value).pathname.replace(/\/+$/, ""); } catch { return ""; } };
+  /** Brings `url` up in the problem browser, opening the panel or the window if it is closed. Returns once a browser is there; the page may still be loading. */
+  const showInProblemBrowser = async (url: string) => {
+    if (!browserStatusRef.current.available) throw new Error(`${t("problemUnavailable")} ${browserStatusRef.current.error || ""}`.trim());
+    const alreadyThere = browserStatusRef.current.open && pathOf(browserStatusRef.current.url) === pathOf(url);
+    if (problemBrowserMode === "window") {
+      // The window hosts the browser: it opens (or comes forward) on the page it is handed.
+      if (!problemPanelOpen) setProblemPanelOpen(true);
+      await invoke("problem_window_open", { url: alreadyThere ? "" : url, focus: true });
+    } else {
+      if (!problemPanelOpen) {
+        setProblemPanelOpen(true);
+        // The panel's host element has to be on screen before a browser can be placed over it.
+        await waitFor(() => Boolean(problemHostRef.current), 3000);
+      }
+      if (!alreadyThere) {
+        if (browserStatusRef.current.open) await invoke("browser_navigate", { url });
+        else openProblemUrl(url);
+      }
+    }
+    if (!(await waitFor(() => browserStatusRef.current.open, 8000))) throw new Error(t("submitNoBrowser"));
+  };
+
+  // What the URL importer hands over when a judge will only answer a browser: Cloudflare's
+  // check in front of Codeforces, a DOJ contest problem that wants the login. The page opens
+  // in the problem browser — which passes the check the way any browser does, being one, and
+  // carries the user's own session — and Competitive Companion reads it there, as if the
+  // user had opened the page and pressed import. Nothing is done to the check itself.
+  const importThroughBrowser = async (url: string) => {
+    // "Follow the active file" must not put another page back meanwhile.
+    submitHoldRef.current = true;
+    setFileStatus(t("importOpeningBrowser"));
+    try {
+      await showInProblemBrowser(url);
+      const deadline = Date.now() + 45_000;
+      let askedOn: string | null = null;
+      while (Date.now() < deadline) {
+        const status = browserStatusRef.current;
+        // Cloudflare's interstitial sits at the address of the page it stands in for and gives
+        // way to it under a new title, so each title that settles there is asked once. Its
+        // wording follows the browser's language, which is why it is not matched by name.
+        if (status.open && !status.loading && isSamePage(status.url, url) && status.title !== askedOn) {
+          askedOn = status.title;
+          // The extension's content script arrives with the page, a moment after it.
+          await new Promise((resolve) => window.setTimeout(resolve, 600));
+          const arrivals = companionArrivalsRef.current;
+          // Not asked: the extension is missing, and what was done instead has said how it went.
+          if (!(await importFromProblemPageRef.current())) return;
+          if (await waitFor(() => companionArrivalsRef.current !== arrivals, 6000)) return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+      // Never arrived (a login page, a check that wants a click) or nothing to parse: the
+      // page is in front of the user now, and the rest is theirs.
+      window.clearTimeout(companionWaitRef.current);
+      setFileStatus(t("importNeedsBrowser"));
+    } catch (error) {
+      setFileStatus(errorMessage(error));
+    } finally {
+      window.setTimeout(() => { submitHoldRef.current = false; }, 1500);
+    }
+  };
+
   const submitSolution = async () => {
     if (submitting) return;
     if (!activeTab?.sourceUrl) { setFileStatus(t("submitNoSource")); return; }
@@ -1929,37 +2045,11 @@ function App() {
     try { await navigator.clipboard.writeText(code); } catch { /* the form is filled below where possible */ }
     const target = submitTarget(activeTab.sourceUrl);
     const url = target?.url ?? activeTab.sourceUrl;
-    const waitFor = async (ready: () => boolean, timeoutMs: number) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (ready()) return true;
-        await new Promise((resolve) => window.setTimeout(resolve, 200));
-      }
-      return false;
-    };
-    const pathOf = (value: string) => { try { return new URL(value).pathname.replace(/\/+$/, ""); } catch { return ""; } };
     setSubmitting(true);
     submitHoldRef.current = true;
     setFileStatus(t("submitOpening"));
     try {
-      if (!browserStatusRef.current.available) throw new Error(`${t("problemUnavailable")} ${browserStatusRef.current.error || ""}`.trim());
-      const alreadyThere = browserStatusRef.current.open && pathOf(browserStatusRef.current.url) === pathOf(url);
-      if (problemBrowserMode === "window") {
-        // The window hosts the browser: it opens (or comes forward) on the page it is handed.
-        if (!problemPanelOpen) setProblemPanelOpen(true);
-        await invoke("problem_window_open", { url: alreadyThere ? "" : url, focus: true });
-      } else {
-        if (!problemPanelOpen) {
-          setProblemPanelOpen(true);
-          // The panel's host element has to be on screen before a browser can be placed over it.
-          await waitFor(() => Boolean(problemHostRef.current), 3000);
-        }
-        if (!alreadyThere) {
-          if (browserStatusRef.current.open) await invoke("browser_navigate", { url });
-          else openProblemUrl(url);
-        }
-      }
-      if (!(await waitFor(() => browserStatusRef.current.open, 8000))) throw new Error(t("submitNoBrowser"));
+      await showInProblemBrowser(url);
       if (!target) { setFileStatus(t("submitCopied")); return; }
       const arrived = await waitFor(() => !browserStatusRef.current.loading && pathOf(browserStatusRef.current.url) === pathOf(target.url), 20000);
       if (!arrived) {

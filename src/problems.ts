@@ -84,9 +84,38 @@ export const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatM
 export const isContestImportUrl = (rawUrl: string) => {
   try {
     const url = new URL(rawUrl);
-    return url.hostname.endsWith("atcoder.jp")
-      ? url.pathname.includes("/contests/") && !url.pathname.includes("/tasks/")
-      : url.hostname.endsWith("codeforces.com") && url.pathname.includes("/contest/") && !url.pathname.includes("/problem/");
+    if (url.hostname.endsWith("atcoder.jp")) return url.pathname.includes("/contests/") && !url.pathname.includes("/tasks/");
+    // A DOJ contest problem is `/problems/<id>?contest=<key>`: the contest is in the query, not the path.
+    if (url.hostname.endsWith("doj.kr")) return url.pathname.includes("/contests/");
+    return url.hostname.endsWith("codeforces.com") && url.pathname.includes("/contest/") && !url.pathname.includes("/problem/");
+  } catch { return false; }
+};
+
+/**
+ * Leads the error of an import the backend could not make without a browser (see
+ * `NEEDS_BROWSER` in import.rs): Cloudflare's check in front of Codeforces, or a page shown
+ * to a logged-in participant only. What follows it is the reason, in English.
+ */
+export const NEEDS_BROWSER = "needs-browser: ";
+
+/**
+ * Pages the bundled Competitive Companion has no parser for although the built-in importer
+ * reads them: a DOJ contest (the extension's DOJ parser knows a problem page only). Asking
+ * the extension there ends in "found no problem" and nothing imported.
+ */
+export const companionCannotParse = (rawUrl: string) => {
+  try {
+    const url = new URL(rawUrl);
+    return url.hostname.replace(/^www\./, "") === "doj.kr" && /\/contests\/[^/]+\/?$/.test(url.pathname);
+  } catch { return false; }
+};
+
+/** Whether the problem browser is on the page that was asked for; a judge may add or drop the query on the way. */
+export const isSamePage = (left: string, right: string) => {
+  try {
+    const [a, b] = [new URL(left), new URL(right)];
+    const path = (url: URL) => url.pathname.replace(/\/+$/, "");
+    return a.hostname.replace(/^www\./, "") === b.hostname.replace(/^www\./, "") && path(a) === path(b);
   } catch { return false; }
 };
 

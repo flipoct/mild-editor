@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, time::Duration};
 
+use crate::import::is_cloudflare_challenge;
 use crate::workspace::{workspace_metadata_path, write_workspace_metadata, SubmissionRecord, WorkspaceMetadata};
 use crate::HTTP_CONNECT_TIMEOUT;
 
@@ -15,6 +16,17 @@ pub(crate) struct SubmissionStatusRequest {
     atcoder_handle: String,
     codeforces_handle: String,
     doj_handle: String,
+    /// Pages only the logged-in user can read, fetched through the problem browser's session
+    /// and handed in by the frontend, since the client here has no login. Each one answers a
+    /// `session_url` of an earlier poll.
+    #[serde(default)]
+    session_pages: Vec<SessionPage>,
+}
+
+#[derive(Deserialize)]
+struct SessionPage {
+    url: String,
+    html: String,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +48,10 @@ pub(crate) struct SubmissionStatus {
     /// Everything known about this problem's submissions, oldest first.
     #[serde(default)]
     submissions: Vec<SubmissionRecord>,
+    /// Where this problem's verdict is when no public page has it: a page of the judge that
+    /// only the logged-in user is shown. The poll wants it back as a `session_pages` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_url: Option<String>,
 }
 
 pub(crate) fn codeforces_problem_key(url: &str) -> Option<(i64, String)> {
@@ -56,9 +72,82 @@ fn atcoder_problem_key(url: &str) -> Option<(String, String)> {
     Some((contest, task))
 }
 
+/// The problem's number in DOJ's archive, from `/<locale>/problems/<number>`. A slug in that
+/// place is no use: the status page filters by number, and given anything else it drops the
+/// filter and lists every submission of the user — the newest of which is not this problem's.
 fn doj_problem_id(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
-    parsed.path_segments()?.filter(|part| !part.is_empty()).next_back().map(str::to_string)
+    let parts = parsed.path_segments()?.collect::<Vec<_>>();
+    let id = parts.get(parts.iter().position(|part| *part == "problems")? + 1)?;
+    (!id.is_empty() && id.chars().all(|character| character.is_ascii_digit())).then(|| id.to_string())
+}
+
+/// The page that lists the user's submissions to the contest a DOJ problem was opened from
+/// (`?contest=<key>` on its URL). While the contest runs they are nowhere else: the site-wide
+/// status page leaves them out until it is over. DOJ shows the page to a logged-in
+/// participant only and sends anyone else to the login.
+fn doj_contest_submissions_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let key = parsed.query_pairs().find(|(name, value)| name == "contest" && !value.is_empty())?.1.into_owned();
+    let parts = parsed.path_segments()?.collect::<Vec<_>>();
+    let locale = parts.iter().position(|part| *part == "problems").filter(|at| *at > 0).map(|at| parts[at - 1]).unwrap_or("ko");
+    let mut page = parsed.join(&format!("/{locale}/contests/")).ok()?;
+    page.path_segments_mut().ok()?.pop_if_empty().push(&key).push("submissions");
+    page.set_query(None);
+    Some(page.to_string())
+}
+
+/// One row of a DOJ submissions table; the page lists the newest first.
+#[derive(Debug, PartialEq)]
+struct DojSubmission {
+    problem: String,
+    user: Option<String>,
+    /// `100/100`, or empty while it is being judged.
+    score: String,
+}
+
+fn parse_doj_submissions(html: &str) -> Vec<DojSubmission> {
+    let document = scraper::Html::parse_document(html);
+    let row_selector = scraper::Selector::parse("table tbody tr").unwrap();
+    let problem_selector = scraper::Selector::parse("a[href*=\"/problems/\"]").unwrap();
+    let user_selector = scraper::Selector::parse("a[href*=\"/user/\"]").unwrap();
+    let score_selector = scraper::Selector::parse(".doj-score-bar-label").unwrap();
+    document.select(&row_selector).filter_map(|row| {
+        let href = row.select(&problem_selector).next()?.value().attr("href")?;
+        let problem = href.split(['?', '#']).next()?.trim_end_matches('/').rsplit('/').next()?.to_string();
+        let score = row.select(&score_selector).next()?.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join("");
+        let user = row.select(&user_selector).next().map(|link| link.text().collect::<String>().trim().to_string());
+        Some(DojSubmission { problem, user, score })
+    }).collect()
+}
+
+/// The verdict of the user's newest submission to one problem on a DOJ submissions page.
+/// The rows are checked rather than trusted to be what the URL asked for.
+fn doj_verdict(html: &str, problem_id: &str, handle: &str) -> Option<String> {
+    let row = parse_doj_submissions(html).into_iter().find(|row| row.problem == problem_id && row.user.as_deref().is_none_or(|user| user.eq_ignore_ascii_case(handle)))?;
+    let values = row.score.split('/').collect::<Vec<_>>();
+    Some(if values.len() == 2 && values[0] == values[1] { "AC".into() } else if row.score.is_empty() { "JUDGING".into() } else { format!("SCORE {}", row.score) })
+}
+
+/// The user's latest submissions from the official API, newest first. The API is not behind
+/// the browser check that guards the site's pages; should that change, the answer says so
+/// instead of failing as JSON that would not parse.
+fn fetch_codeforces_submissions(client: &reqwest::blocking::Client, handle: &str) -> Result<Vec<serde_json::Value>, String> {
+    let mut url = reqwest::Url::parse("https://codeforces.com/api/user.status").unwrap();
+    url.query_pairs_mut().append_pair("handle", handle).append_pair("from", "1").append_pair("count", "100");
+    let response = client.get(url).send().map_err(|error| format!("Could not refresh Codeforces submissions: {error}"))?;
+    let status = response.status();
+    let mitigated = response.headers().get("cf-mitigated").and_then(|value| value.to_str().ok()).map(str::to_string);
+    let body = response.text().map_err(|error| format!("Could not refresh Codeforces submissions: {error}"))?;
+    if is_cloudflare_challenge(status.as_u16(), mitigated.as_deref(), &body) {
+        return Err("Codeforces answered with Cloudflare's browser check, so its verdicts cannot be read for now.".into());
+    }
+    // An error of the API's own (an unknown handle, a rate limit) comes as JSON with a comment.
+    let value = serde_json::from_str::<serde_json::Value>(&body).map_err(|_| format!("Could not refresh Codeforces submissions: HTTP {status}"))?;
+    if value.get("status").and_then(|status| status.as_str()) != Some("OK") {
+        return Err(format!("Could not refresh Codeforces submissions: {}", value.get("comment").and_then(|comment| comment.as_str()).unwrap_or("the API reported a failure")));
+    }
+    Ok(value.get("result").and_then(|result| result.as_array()).cloned().unwrap_or_default())
 }
 
 fn fetch_atcoder_submissions(
@@ -136,13 +225,16 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
     let mut statuses = Vec::new();
     let folder_path = request.folder_path.clone();
 
+    // Codeforces failing must not cost the other judges their poll, so its error waits until
+    // they have been asked.
+    let mut codeforces_error = None;
     let codeforces_submissions = if request.codeforces_handle.trim().is_empty() {
         Vec::new()
     } else {
-        let mut url = reqwest::Url::parse("https://codeforces.com/api/user.status").unwrap();
-        url.query_pairs_mut().append_pair("handle", request.codeforces_handle.trim()).append_pair("from", "1").append_pair("count", "100");
-        let value: serde_json::Value = client.get(url).send().and_then(|response| response.error_for_status()).map_err(|error| format!("Could not refresh Codeforces submissions: {error}"))?.json().map_err(|error| error.to_string())?;
-        value.get("result").and_then(|result| result.as_array()).cloned().unwrap_or_default()
+        fetch_codeforces_submissions(&client, request.codeforces_handle.trim()).unwrap_or_else(|error| {
+            codeforces_error = Some(error);
+            Vec::new()
+        })
     };
     let atcoder_recent_submissions = if request.atcoder_handle.trim().is_empty() {
         Vec::new()
@@ -158,6 +250,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
         let mut status = None;
         let mut submission_url = None;
         let mut submitted_at = 0u64;
+        let mut session_url = None;
         match problem.source.as_str() {
             "codeforces" if !request.codeforces_handle.trim().is_empty() => {
                 if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
@@ -202,24 +295,33 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
             }
             "doj" if !request.doj_handle.trim().is_empty() => {
                 if let Some(problem_id) = doj_problem_id(&problem.source_url) {
+                    let handle = request.doj_handle.trim();
                     let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
-                    url.query_pairs_mut().append_pair("user", request.doj_handle.trim()).append_pair("problem", &problem_id);
+                    url.query_pairs_mut().append_pair("user", handle).append_pair("problem", &problem_id);
                     if let Ok(html) = client.get(url.clone()).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
-                        let document = scraper::Html::parse_document(&html);
-                        let row_selector = scraper::Selector::parse("table tbody tr").unwrap();
-                        let score_selector = scraper::Selector::parse(".doj-score-bar-label").unwrap();
-                        if let Some(score) = document.select(&row_selector).next().and_then(|row| row.select(&score_selector).next()) {
-                            let score = score.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join("");
-                            let values = score.split('/').collect::<Vec<_>>();
-                            status = Some(if values.len() == 2 && values[0] == values[1] { "AC".into() } else if score.is_empty() { "JUDGING".into() } else { format!("SCORE {score}") });
+                        if let Some(verdict) = doj_verdict(&html, &problem_id, handle) {
+                            status = Some(verdict);
                             submission_url = Some(url.to_string());
+                        }
+                    }
+                    // Nothing public: for a contest problem that is how a running contest
+                    // looks, and its submissions are on a page the login alone opens. The
+                    // public page still goes first, because once the contest is over it has
+                    // the later submissions as well and this one stops at the contest's.
+                    if status.is_none() {
+                        if let Some(contest_url) = doj_contest_submissions_url(&problem.source_url) {
+                            if let Some(verdict) = request.session_pages.iter().find(|page| page.url == contest_url).and_then(|page| doj_verdict(&page.html, &problem_id, handle)) {
+                                status = Some(verdict);
+                                submission_url = Some(contest_url.clone());
+                            }
+                            session_url = Some(contest_url);
                         }
                     }
                 }
             }
             _ => {}
         }
-        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new() });
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new(), session_url });
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
@@ -240,7 +342,9 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                     if let Some(url) = effective_url {
                         if let Some(index) = statuses.iter().position(|result| result.source_url == url.as_str()) {
                             problem.source_url = Some(url);
-                            problem.judge_status = statuses[index].status.clone();
+                            // A poll that learned nothing (a judge out of reach, a contest
+                            // page not handed in) is no reason to forget the verdict on file.
+                            if statuses[index].status.is_some() { problem.judge_status = statuses[index].status.clone(); }
                             record_submission(&mut problem.submissions, &statuses[index]);
                             statuses[index].submissions = problem.submissions.clone();
                         }
@@ -250,7 +354,11 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
             }
         }
     }
-    Ok(statuses)
+    // With verdicts from elsewhere the poll is still worth its result; with none, the reason is.
+    match codeforces_error {
+        Some(error) if statuses.iter().all(|status| status.status.is_none()) => Err(error),
+        _ => Ok(statuses),
+    }
 }
 
 #[tauri::command]
@@ -262,6 +370,74 @@ pub(crate) async fn refresh_submission_statuses(request: SubmissionStatusRequest
 mod tests {
     use super::*;
 
+    /// A row of doj.kr/ko/status as the site renders it, comments between the numbers included.
+    fn doj_row(user: &str, problem: &str, slug: &str, bar: &str, score: &str) -> String {
+        format!(r#"<tr style="--row-index:0"><td><a class="doj-submission-participant-link" title="{user}" href="/ko/user/{user}">{user}</a></td><td><div class="doj-status-problem-anchor" tabindex="0"><a class="doj-status-problem-link" href="/ko/problems/{problem}">{slug}</a></div></td><td><div class="doj-score-anchor" tabindex="0"><div class="doj-score-bar {bar}"><div class="doj-problem-score-fill" style="width:100%"></div><span class="doj-score-bar-label">{score}</span></div></div></td><td class="doj-status-language">C++20</td><td><span class="doj-status-time-label">3일 전</span></td><td></td></tr>"#)
+    }
+
+    #[test]
+    fn doj_verdict_is_the_newest_row_of_that_problem_and_user() {
+        let table = |rows: &[String]| format!("<table><thead><tr><th>제출자</th><th>문제</th><th>점수</th></tr></thead><tbody>{}</tbody></table>", rows.concat());
+        let html = table(&[
+            doj_row("woohyunjng", "632", "mountaingame", "is-solved is-full", "100<!-- --> / <!-- -->100"),
+            doj_row("woohyunjng", "632", "mountaingame", "is-partial", "26<!-- --> / <!-- -->100"),
+        ]);
+        assert_eq!(parse_doj_submissions(&html)[1], DojSubmission { problem: "632".into(), user: Some("woohyunjng".into()), score: "26/100".into() });
+        assert_eq!(doj_verdict(&html, "632", "woohyunjng").as_deref(), Some("AC"));
+        assert_eq!(doj_verdict(&table(&[doj_row("a", "632", "mountaingame", "is-partial", "26<!-- --> / <!-- -->100")]), "632", "A").as_deref(), Some("SCORE 26/100"));
+        assert_eq!(doj_verdict(&table(&[doj_row("a", "632", "mountaingame", "is-idle", "")]), "632", "a").as_deref(), Some("JUDGING"));
+
+        // A filter the site did not understand lists everything the user sent: the newest
+        // row is another problem's, and must not be taken for this one's verdict.
+        let unfiltered = table(&[doj_row("a", "738", "hey-lulu-eat-saga", "is-solved is-full", "100<!-- --> / <!-- -->100"), doj_row("a", "634", "bracketstring", "is-partial", "0<!-- --> / <!-- -->100")]);
+        assert_eq!(doj_verdict(&unfiltered, "634", "a").as_deref(), Some("SCORE 0/100"));
+        assert_eq!(doj_verdict(&unfiltered, "286", "a"), None);
+        assert_eq!(doj_verdict(&unfiltered, "738", "someone-else"), None);
+        // A contest's own page links its problems with the contest key still on them.
+        let keyed = table(&[doj_row("a", "286?contest=cmtimve8l0e0wokcqksb6wqez", "49", "is-solved is-full", "100<!-- --> / <!-- -->100")]);
+        assert_eq!(doj_verdict(&keyed, "286", "a").as_deref(), Some("AC"));
+    }
+
+    #[test]
+    fn doj_problem_urls_give_the_number_and_the_contests_own_page() {
+        assert_eq!(doj_problem_id("https://doj.kr/ko/problems/286").as_deref(), Some("286"));
+        assert_eq!(doj_problem_id("https://doj.kr/en/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").as_deref(), Some("286"));
+        assert_eq!(doj_problem_id("https://doj.kr/ko/problems/286/ide").as_deref(), Some("286"));
+        // The status page cannot filter by slug, so a slug is no problem id at all.
+        assert_eq!(doj_problem_id("https://doj.kr/ko/problems/bracketstring"), None);
+        assert_eq!(doj_problem_id("https://doj.kr/ko/contests/bcd7"), None);
+
+        assert_eq!(doj_contest_submissions_url("https://doj.kr/en/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").as_deref(), Some("https://doj.kr/en/contests/cmtimve8l0e0wokcqksb6wqez/submissions"));
+        assert_eq!(doj_contest_submissions_url("https://doj.kr/ko/problems/286"), None);
+        assert_eq!(doj_contest_submissions_url("https://doj.kr/ko/problems/286?contest="), None);
+    }
+
+    #[test]
+    #[ignore = "requires access to doj.kr and the public submissions of one of its users"]
+    fn reads_doj_verdicts_from_the_live_status_page() {
+        let client = reqwest::blocking::Client::builder().user_agent("MildEditor/test").timeout(Duration::from_secs(30)).build().unwrap();
+        let page = |query: &str| client.get(format!("https://doj.kr/ko/status?{query}")).send().unwrap().error_for_status().unwrap().text().unwrap();
+        assert_eq!(doj_verdict(&page("user=woohyunjng&problem=286"), "286", "woohyunjng").as_deref(), Some("AC"));
+        // By slug the filter is dropped: twenty rows of everything, none of them to be mistaken for #634.
+        let unfiltered = parse_doj_submissions(&page("user=woohyunjng&problem=bracketstring"));
+        assert!(unfiltered.len() > 1 && unfiltered.iter().any(|row| row.problem != unfiltered[0].problem), "{unfiltered:?}");
+        // The contest's own page exists under the key a problem link carries, and is the login's alone.
+        let contest_url = doj_contest_submissions_url("https://doj.kr/ko/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").unwrap();
+        let contest_page = client.get(&contest_url).send().unwrap().error_for_status().unwrap().text().unwrap();
+        assert!(contest_page.contains("NEXT_REDIRECT;replace;/ko/login"), "the contest submissions page no longer sends a visitor to the login");
+        assert!(parse_doj_submissions(&contest_page).is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires access to the Codeforces API"]
+    fn codeforces_api_answers_a_plain_client_and_names_its_own_errors() {
+        let client = reqwest::blocking::Client::builder().user_agent("MildEditor/test").timeout(Duration::from_secs(30)).build().unwrap();
+        let submissions = fetch_codeforces_submissions(&client, "tourist").unwrap();
+        assert!(submissions.iter().any(|submission| submission.pointer("/problem/contestId").is_some() && submission.get("verdict").is_some()));
+        let unknown = fetch_codeforces_submissions(&client, "zz-no-such-user-zz").unwrap_err();
+        assert!(unknown.contains("not found"), "{unknown}");
+    }
+
     #[test]
     fn submission_history_follows_one_verdict_and_appends_the_next() {
         let status = |verdict: &str, url: Option<&str>, at: u64| SubmissionStatus {
@@ -270,6 +446,7 @@ mod tests {
             submission_url: url.map(str::to_string),
             submitted_at: at,
             submissions: Vec::new(),
+            session_url: None,
         };
         let mut history = Vec::new();
 
@@ -294,7 +471,7 @@ mod tests {
 
         // Nothing to report leaves the history alone, and it never grows without bound.
         let mut empty = Vec::new();
-        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new() });
+        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new(), session_url: None });
         assert!(empty.is_empty());
         let mut long = Vec::new();
         for index in 0..60 {
