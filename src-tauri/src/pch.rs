@@ -6,6 +6,12 @@
 //! it takes. A header compiled with other flags is rejected by GCC and the real one is used,
 //! so a stale cache costs time, never correctness. One directory is kept per compiler,
 //! standard and flag set.
+//!
+//! The one header GCC does not quietly skip is one it cannot map back into memory: it has to
+//! land at the address it was built at, and when that address is taken — 32-bit MinGW on a
+//! current Windows, most of all — the compiler stops with an internal error instead. The
+//! address is chosen when the header is built, so the caller builds it afresh and only goes
+//! without when that does not help either ([`failed_to_load`], [`rebuild`], [`give_up`]).
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -16,7 +22,8 @@ use std::{
     time::Duration,
 };
 
-use crate::{execute, tool_search_path, CommandExtHidden};
+use crate::runner::execute;
+use crate::tools::{tool_search_path, CommandExtHidden};
 
 const HEADER: &str = "bits/stdc++.h";
 /// Left behind when the header could not be built (Clang, a missing header, an unknown
@@ -41,6 +48,24 @@ pub(crate) fn ensure(compiler: &Path, standard: &str, flags: &[String]) -> Optio
     let _ = fs::remove_file(&header);
     let _ = fs::write(directory.join(UNSUPPORTED_MARKER), "");
     None
+}
+
+/// Whether a failed compile was GCC failing to load the precompiled header, not the program.
+pub(crate) fn failed_to_load(stderr: &str) -> bool {
+    stderr.contains("gt_pch_use_address") || stderr.contains("had to relocate PCH")
+}
+
+/// Throws the header away and builds it again.
+pub(crate) fn rebuild(compiler: &Path, standard: &str, flags: &[String]) -> Option<PathBuf> {
+    let _ = fs::remove_file(cache_directory(compiler, standard, flags).join(format!("{HEADER}.gch")));
+    ensure(compiler, standard, flags)
+}
+
+/// Drops a header that could not be loaded and marks its directory, so later runs compile
+/// without one instead of failing the same way first.
+pub(crate) fn give_up(directory: &Path) {
+    let _ = fs::remove_file(directory.join(format!("{HEADER}.gch")));
+    let _ = fs::write(directory.join(UNSUPPORTED_MARKER), "");
 }
 
 fn build(compiler: &Path, standard: &str, flags: &[String], directory: &Path, header: &Path) -> bool {
@@ -85,6 +110,13 @@ fn cache_directory(compiler: &Path, standard: &str, flags: &[String]) -> PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_header_that_cannot_be_mapped_back_is_told_from_a_compile_error() {
+        assert!(failed_to_load("internal error in mingw32_gt_pch_use_address, at config/i386/host-mingw32.c:190: MapViewOfFileEx: ..."));
+        assert!(failed_to_load("fatal error: had to relocate PCH"));
+        assert!(!failed_to_load("main.cpp:3:5: error: 'x' was not declared in this scope"));
+    }
 
     #[test]
     fn every_flag_set_gets_a_directory_of_its_own() {

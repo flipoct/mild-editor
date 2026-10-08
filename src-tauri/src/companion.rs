@@ -17,6 +17,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use tauri::Emitter;
 
 /// The port cph listens on, and the one Competitive Companion tries first.
 pub const DEFAULT_PORT: u16 = 10043;
@@ -226,6 +227,24 @@ pub fn status(state: &CompanionState) -> CompanionStatus {
         .ok()
         .and_then(|guard| guard.as_ref().map(|listener| listener.port));
     CompanionStatus { listening: port.is_some(), port }
+}
+
+#[tauri::command]
+pub fn start_companion(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, CompanionState>,
+    port: Option<u16>,
+) -> Result<CompanionStatus, String> {
+    start(&state, port.unwrap_or(DEFAULT_PORT), move |problem| {
+        let _ = app.emit("companion-problem", problem);
+    })?;
+    Ok(status(&state))
+}
+
+#[tauri::command]
+pub fn stop_companion(state: tauri::State<'_, CompanionState>) -> CompanionStatus {
+    stop(&state);
+    status(&state)
 }
 
 #[cfg(test)]

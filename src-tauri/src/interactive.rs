@@ -12,9 +12,9 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
-use crate::{prepare_program, tool_search_path, BuildOptions, CommandExtHidden, PreparedProgram};
+use crate::runner::{prepare_program, BuildOptions, PreparedProgram, MAX_CODE};
+use crate::tools::{tool_search_path, CommandExtHidden};
 
-const MAX_CODE: usize = 100_000;
 const MAX_STREAM_OUTPUT: usize = 1_000_000;
 const MAX_SEND: usize = 100_000;
 

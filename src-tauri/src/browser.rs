@@ -1200,17 +1200,6 @@ pub fn browser_go(window: Window, state: tauri::State<'_, BrowserState>, action:
     })
 }
 
-#[tauri::command]
-pub fn browser_close(window: Window, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let shared = state.0.clone();
-    on_main(&window, move || {
-        if let Some(host) = shared.browser.lock().expect("browser").as_ref().and_then(|browser| browser.host()) {
-            CLOSING_BY_APP.store(true, Ordering::SeqCst);
-            host.close_browser(1);
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------------------
 // Extensions. CEF has no Web Store UI and loads extensions only from unpacked directories
 // named on the command line at start-up, so installing means: fetch the .crx Google serves

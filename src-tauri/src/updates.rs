@@ -43,15 +43,20 @@ fn describe(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-#[tauri::command]
-pub async fn check_update(app: tauri::AppHandle) -> Result<Option<AvailableUpdate>, String> {
+/// Asks the release host for a newer version, with each connection attempt capped.
+async fn check(app: &tauri::AppHandle) -> Result<Option<Update>, String> {
     let updater = app
         .updater_builder()
         .timeout(CHECK_TIMEOUT)
         .configure_client(|client| client.connect_timeout(CONNECT_TIMEOUT))
         .build()
         .map_err(describe)?;
-    let update = updater.check().await.map_err(describe)?;
+    updater.check().await.map_err(describe)
+}
+
+#[tauri::command]
+pub async fn check_update(app: tauri::AppHandle) -> Result<Option<AvailableUpdate>, String> {
+    let update = check(&app).await?;
 
     let found = update.as_ref().map(|update| AvailableUpdate {
         version: update.version.clone(),
@@ -73,7 +78,7 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     let update = match pending {
         Some(update) => update,
         // The check either never ran or found nothing; ask again rather than fail.
-        None => check_pending(&app).await?,
+        None => check(&app).await?.ok_or_else(|| "There is no update to install.".to_string())?,
     };
 
     let handle = app.clone();
@@ -93,19 +98,4 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(describe)?;
     Ok(())
-}
-
-/// Re-runs the check and returns the update, erroring when there is nothing to install.
-async fn check_pending(app: &tauri::AppHandle) -> Result<Update, String> {
-    let updater = app
-        .updater_builder()
-        .timeout(CHECK_TIMEOUT)
-        .configure_client(|client| client.connect_timeout(CONNECT_TIMEOUT))
-        .build()
-        .map_err(describe)?;
-    updater
-        .check()
-        .await
-        .map_err(describe)?
-        .ok_or_else(|| "There is no update to install.".to_string())
 }

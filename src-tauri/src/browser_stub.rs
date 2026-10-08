@@ -43,7 +43,6 @@ fn status() -> PanelStatus {
 
 pub fn exit_if_subprocess() {}
 
-
 pub fn prepare(app: &AppHandle) {
     let _ = app.emit(STATUS_EVENT, status());
 }
@@ -110,11 +109,6 @@ pub fn browser_go(_window: Window, _state: tauri::State<'_, BrowserState>, _acti
     Ok(())
 }
 
-#[tauri::command]
-pub fn browser_close(_window: Window, _state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    Ok(())
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInfo {
@@ -138,7 +132,7 @@ pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _
 
 #[tauri::command]
 pub fn browser_install_userscript(_window: Window, _state: tauri::State<'_, BrowserState>, _url: String, _bounds: Option<PanelBounds>) -> Result<(), String> {
-    Err("The problem browser is not available on this platform yet.".into())
+    Err(REASON.into())
 }
 
 #[tauri::command]
