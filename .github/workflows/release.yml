@@ -57,15 +57,16 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.15.0
+            ## What's changed in v1.16.0
 
-            - **A built-in terminal.** A *Terminal* tab in the side panel runs your own shell in the workspace folder — a login `$SHELL` on macOS and Linux, PowerShell or `cmd` on Windows — on a real terminal, so colours, line editing and `vim` work. ``Ctrl+` `` shows and hides it; while it has the keyboard, `Ctrl+P`, `Ctrl+W` and the like go to the shell.
-            - **Checkers.** A problem that accepts more than one answer can carry `<problem>_checker.cpp` or `.py`, called as `checker <input> <output> <answer>` like testlib: exit 0 accepts, anything else rejects, and what it prints is shown with the verdict. **checker** above the test cases writes a starter. The counterexample search uses it too.
-            - **Command palette.** `Ctrl+Shift+P` (`⌘⇧P`) finds any command by name, in English or Korean, with its shortcut beside it.
-            - **Auto save.** Edits are saved a second after typing stops; **Settings → appearance** turns it off.
-            - The test panel shows passed out of all tests, the explorer menu and unsaved-changes prompts are in Korean when the interface is, and an edit typed during a save is no longer marked saved.
+            - **DOJ contests through your own session.** With the problem browser open and logged in, verdicts are read from *my submissions* and a running contest, category or virtual contest imports as a whole — the pages DOJ shows only to the participant.
+            - **Contest mode on import** (Settings → online judges, off by default): importing a running contest starts contest mode with the contest's own clock, and its first problem opens as soon as it lands.
+            - **Scores** show as AC, WA or **PAC 94/100**, in full.
+            - **Imports fixed**: AtCoder titles without *Editorial*; Codeforces through the problem browser when Cloudflare asks for a check, with every example; DOJ contest links; no more "Duplicate filename" after overlapping imports.
+            - Competitive Companion in the problem browser repairs itself after an old build has touched the profile; the contest board no longer hides a problem page docked at the left; on Windows a precompiled header MinGW cannot load no longer fails the compile.
+            - Typing is lighter: the explorer no longer re-sorts, and the window no longer redraws twice, on every keystroke.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.15.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.16.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.16.0
+
+- **DOJ contests through your own session.** A running DOJ contest shows its problems and its submissions only to the participant who is logged in. With the problem browser open and logged in, the editor now reads them there: verdicts come from *my submissions* (one request per poll), and a contest, a category or a virtual contest imports as a whole, in the page's order and with its letters. Logged out, or with the browser closed, it reads the public pages as before.
+- **Contest mode on import** (**Settings → online judges**, off by default). Importing a running contest into its own folder starts contest mode on that folder with the contest's own clock and opens the board. A contest that is over, has not begun or has no known schedule is left alone, with the reason in the status bar.
+- **The first problem first.** A contest arrives a problem at a time: the first opens as soon as it lands and the rest are added behind it.
+- **Scores.** A full score shows as AC, zero as WA, anything between as **PAC 94/100**, in full wherever a verdict is shown. A full score counts as solved.
+- AtCoder titles no longer pick up the *Editorial* button of a finished contest, which also ended up in the filename.
+- Codeforces: when Cloudflare asks for a browser check, the import goes to the problem browser, where your own session passes it, instead of to a third-party reader. Every example of a problem is imported, not only the first.
+- DOJ problems reached through a contest link import, and are named by problem number.
+- Two imports that overlapped could give two files one name, after which every save failed with "Duplicate filename". Imports now run one at a time.
+- Competitive Companion in the problem browser repairs itself after a build older than 1.10 has run against the same profile. It used to stop answering for good.
+- The contest board opens beside a problem page docked at the left instead of hiding it, and scrolls its tiles on a long contest.
+- Windows: a precompiled `bits/stdc++.h` that 32-bit MinGW cannot load back is rebuilt, or dropped, instead of failing the compile; and a compiler message in the system's own language is readable.
+- Open files follow the order arranged by hand in the explorer.
+- Under the hood: the editor's two largest source files were split up, and typing no longer makes the explorer re-sort or the whole window redraw twice.
+
 ## 1.15.0
 
 - **Checkers.** A problem that accepts more than one answer can carry a checker, `<problem>_checker.cpp` or `.py`, called as `checker <input> <output> <answer>` the way testlib calls one: exit 0 accepts, anything else rejects, and what it prints is shown with the verdict. **checker** above the test cases writes a starter and opens it, then turns the checker off and on per problem. The counterexample search asks the checker too.

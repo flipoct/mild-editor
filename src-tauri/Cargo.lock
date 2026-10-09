@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor"
-version = "1.15.0"
+version = "1.16.0"
 dependencies = [
  "cef",
  "libc",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor-cef-helper"
-version = "1.15.0"
+version = "1.16.0"
 dependencies = [
  "cef",
 ]
