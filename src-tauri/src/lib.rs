@@ -18,6 +18,7 @@ mod memory;
 mod pch;
 mod runner;
 mod stress;
+mod schedule;
 mod submissions;
 mod terminal;
 mod tools;
@@ -161,6 +162,7 @@ pub fn run() {
             runner::run_code,
             runner::stop_run,
             stress::stress_test,
+            schedule::contest_schedule,
             updates::check_update,
             updates::install_update,
             interactive::start_interactive,

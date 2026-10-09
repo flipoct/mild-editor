@@ -351,6 +351,7 @@ function JudgePage({ t, companionStatus, companionError, refreshingJudge, refres
   const [companionPort, setCompanionPort] = useSetting("companionPort");
   const [defaultLanguage, setDefaultLanguage] = useSetting("defaultLanguage");
   const [organizeImports, setOrganizeImports] = useSetting("organizeImports");
+  const [autoContest, setAutoContest] = useSetting("autoContest");
   const [submitPress, setSubmitPress] = useSetting("submitPress");
   const [atcoderHandle, setAtcoderHandle] = useSetting("atcoderHandle");
   const [codeforcesHandle, setCodeforcesHandle] = useSetting("codeforcesHandle");
@@ -373,6 +374,8 @@ function JudgePage({ t, companionStatus, companionError, refreshingJudge, refres
     <p className="settings-help">{t("defaultLanguageHelp")}</p>
     <label className="companion-toggle"><input type="checkbox" checked={organizeImports} onChange={(event) => setOrganizeImports(event.target.checked)} />{t("organizeImports")}</label>
     <p className="settings-help">{t("organizeImportsHelp")}</p>
+    <label className="companion-toggle"><input type="checkbox" checked={autoContest} onChange={(event) => setAutoContest(event.target.checked)} />{t("autoContest")}</label>
+    <p className="settings-help">{t("autoContestHelp")}</p>
     <label className="companion-toggle"><input type="checkbox" checked={submitPress} onChange={(event) => setSubmitPress(event.target.checked)} />{t("submitPress")}</label>
     <p className="settings-help">{t("submitPressHelp")}</p>
     <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
