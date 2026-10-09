@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::{execute_with_cancel, prepare_program, BuildOptions, PreparedProgram, StressProgram, Verdict};
+use crate::runner::{execute, execute_with_cancel, prepare_program, BuildOptions, PreparedProgram, Verdict, MAX_CODE};
+use crate::stress::StressProgram;
 
 /// A checker is not the program under test, so it is not held to the problem's time limit,
 /// only to one that stops a checker stuck in a loop.
@@ -52,7 +53,7 @@ pub(crate) fn prepare(
     if !matches!(program.language.as_str(), "cpp" | "python") {
         return Err("Unsupported checker language.".into());
     }
-    if program.code.len() > crate::MAX_CODE {
+    if program.code.len() > MAX_CODE {
         return Err("The checker's source code is too large.".into());
     }
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
@@ -65,7 +66,7 @@ pub(crate) fn prepare(
             // would read as a wrong answer on every test. Compiling it first says what it is.
             if program.language == "python" {
                 let source = directory.join("main.py").to_string_lossy().into_owned();
-                let compiled = crate::execute(&command, &["-m".into(), "py_compile".into(), source], directory, "", Duration::from_secs(10));
+                let compiled = execute(&command, &["-m".into(), "py_compile".into(), source], directory, "", Duration::from_secs(10));
                 if !compiled.ok {
                     return Ok(Err([compiled.stdout.trim(), compiled.stderr.trim()].join("\n").trim().to_string()));
                 }
@@ -116,9 +117,10 @@ fn truncate(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::find_tool;
 
     fn python_available() -> bool {
-        crate::find_tool("python3").is_some() || crate::find_tool("python").is_some()
+        find_tool("python3").is_some() || find_tool("python").is_some()
     }
 
     fn python(code: &str) -> StressProgram {
@@ -176,7 +178,7 @@ mod tests {
 
     #[test]
     fn a_checker_that_does_not_compile_says_so() {
-        if crate::find_tool("g++").is_none() { return; }
+        if find_tool("g++").is_none() { return; }
         let directory = tempfile::tempdir().expect("temp dir");
         let broken = StressProgram { language: "cpp".into(), code: "int main( { return 0; }\n".into() };
         let outcome = prepare(&broken, None, &directory.path().join("checker"), &BuildOptions::default()).expect("prepared");

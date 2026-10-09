@@ -43,7 +43,6 @@ fn status() -> PanelStatus {
 
 pub fn exit_if_subprocess() {}
 
-
 pub fn prepare(app: &AppHandle) {
     let _ = app.emit(STATUS_EVENT, status());
 }
@@ -110,11 +109,6 @@ pub fn browser_go(_window: Window, _state: tauri::State<'_, BrowserState>, _acti
     Ok(())
 }
 
-#[tauri::command]
-pub fn browser_close(_window: Window, _state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    Ok(())
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInfo {
@@ -138,7 +132,7 @@ pub async fn browser_extension_install(_state: tauri::State<'_, BrowserState>, _
 
 #[tauri::command]
 pub fn browser_install_userscript(_window: Window, _state: tauri::State<'_, BrowserState>, _url: String, _bounds: Option<PanelBounds>) -> Result<(), String> {
-    Err("The problem browser is not available on this platform yet.".into())
+    Err(REASON.into())
 }
 
 #[tauri::command]
@@ -148,6 +142,25 @@ pub fn browser_import_page(_window: Window, _state: tauri::State<'_, BrowserStat
 
 #[tauri::command]
 pub fn browser_fill_submission(_window: Window, _state: tauri::State<'_, BrowserState>, _script: String) -> Result<(), String> {
+    Err(REASON.into())
+}
+
+/// A page read with the problem browser's cookies; never made here.
+pub struct SessionPage {
+    pub url: String,
+    pub body: String,
+}
+
+pub fn session_ready() -> bool {
+    false
+}
+
+pub fn session_fetch(_app: &AppHandle, _url: &str) -> Result<SessionPage, String> {
+    Err(REASON.into())
+}
+
+#[tauri::command]
+pub async fn browser_fetch_text(_app: AppHandle, _url: String) -> Result<String, String> {
     Err(REASON.into())
 }
 

@@ -51,7 +51,6 @@ button:disabled { opacity: .45; cursor: default; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 kbd { font-family: var(--font-ui); }
 .icon { display: block; flex: 0 0 auto; }
-.close-icon { display: block; width: 12px; height: 12px; fill: currentColor; }
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
 
 input, select, textarea { border: 1px solid var(--border); border-radius: var(--r-m); background: var(--field); color: var(--text); outline: none; transition: border-color .12s, box-shadow .12s; }
@@ -211,7 +210,6 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .panel-modes button:hover:not(.active) { color: var(--text); }
 .panel-modes button.active { background: var(--bg-3); color: var(--text); box-shadow: 0 1px 2px var(--shadow); }
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; border-radius: 50%; animation: spin .7s linear infinite; }
-.play-icon { display: block; width: 14px; height: 14px; fill: currentColor; }
 
 /* The problem's limits, editable in place; an empty field means the default. */
 .limits-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 6px 10px 0; color: var(--muted); font-size: var(--fs-xs); }
@@ -351,8 +349,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-folder { height: 40px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text); font-size: var(--fs-s); font-weight: 600; }
 .explorer-folder-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-header-actions { display: flex; gap: 2px; }
-.explorer-header-actions button, .explorer-create-actions button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); transition: background .12s, color .12s; }
-.explorer-header-actions button:hover, .explorer-create-actions button:hover { background: var(--hover); color: var(--text); }
+.explorer-header-actions button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-m); background: transparent; color: var(--muted); transition: background .12s, color .12s; }
+.explorer-header-actions button:hover { background: var(--hover); color: var(--text); }
 .explorer-controls { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding: 8px; }
 .explorer-controls label { min-width: 0; display: block; }
 .explorer-controls label > span { display: none; }
@@ -386,8 +384,10 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-metadata { padding-left: 14px; opacity: .55; font-size: var(--fs-xs); }
 .explorer-rename-row { min-width: 0; flex: 1; color: var(--text); }
 .explorer-rename-input { min-width: 0; flex: 1; height: 22px; padding: 0 6px; border-color: var(--accent); border-radius: var(--r-s); font-size: var(--fs-s); }
-.judge-badge { --tone: var(--danger); max-width: 72px; flex: 0 0 auto; overflow: hidden; padding: 2px 5px; border-radius: var(--r-s); background: color-mix(in srgb, var(--tone) 16%, transparent); color: var(--tone); font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.judge-badge { --tone: var(--danger); flex: 0 0 auto; padding: 2px 5px; border-radius: var(--r-s); background: color-mix(in srgb, var(--tone) 16%, transparent); color: var(--tone); font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .judge-badge.accepted { --tone: var(--success); }
+.judge-badge.partial { --tone: var(--warning); }
+.judge-badge.pending { --tone: var(--idle); }
 
 /* Menus and floating notices */
 .explorer-context-menu { position: fixed; z-index: 1100; width: 196px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-l); background: var(--bg-2); box-shadow: var(--elevation); }
@@ -642,11 +642,15 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .contest-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 1s linear; }
 .contest-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
 .contest-board .settings-help { grid-column: 1 / -1; margin: 0; }
+/* A contest with many problems scrolls its tiles, not the board: the clock above and the score
+   below stay in view however long the list is. */
+.contest-popover > .contest-board { min-height: 0; max-height: min(56vh, 460px); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; scrollbar-width: thin; }
 .contest-problem { --tone: var(--idle); min-width: 0; display: grid; gap: 2px; padding: 8px 6px; border: 1px solid var(--border-subtle); border-radius: var(--r-l); background: var(--bg-1); color: var(--text); text-align: center; transition: border-color .12s, background .12s; }
 .contest-problem:hover { border-color: var(--border); background: var(--bg-3); }
 .contest-problem.current { border-color: var(--accent); }
 .contest-problem strong { overflow: hidden; font-size: var(--fs-m); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.contest-problem span { overflow: hidden; color: var(--tone); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+/* The verdict wraps rather than being cut: a partial score is the number that matters. */
+.contest-problem span { color: var(--tone); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
 .contest-problem.solved { --tone: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border-subtle)); background: color-mix(in srgb, var(--success) 10%, var(--bg-1)); }
 .contest-problem.failed { --tone: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-subtle)); background: color-mix(in srgb, var(--danger) 8%, var(--bg-1)); }
 .contest-problem.ready { --tone: var(--accent); }
@@ -675,6 +679,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .verdict-notices { position: absolute; z-index: 30; top: 10px; right: 18px; width: min(280px, calc(100% - 36px)); display: grid; gap: 8px; pointer-events: none; }
 .verdict-notice { --tone: var(--danger); display: flex; align-items: stretch; overflow: hidden; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-left: 3px solid var(--tone); border-radius: var(--r-l); background: color-mix(in srgb, var(--tone) 10%, var(--bg-2)); color: var(--text); box-shadow: var(--elevation); pointer-events: auto; animation: dialog-in .16s ease-out; }
 .verdict-notice.accepted { --tone: var(--success); }
+.verdict-notice.partial { --tone: var(--warning); }
 .verdict-notice-body { min-width: 0; flex: 1; display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 8px; row-gap: 1px; padding: 9px 4px 9px 11px; border: 0; background: transparent; color: inherit; text-align: left; }
 .verdict-notice-body small { grid-column: 1 / -1; color: var(--muted); font-size: var(--fs-xs); }
 .verdict-notice-body strong { color: var(--tone); font-size: var(--fs-l); font-weight: 700; }

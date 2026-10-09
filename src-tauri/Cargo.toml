@@ -41,18 +41,16 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Chromium derives an unpacked extension's id from the SHA-256 of its path.
 sha2 = "0.10"
 
-# Peak memory of the program under test (src/memory.rs).
+# Peak memory of the program under test (src/memory.rs), and the native window calls of
+# the problem panel (src/browser.rs) and the start-up resize border fix (src/lib.rs).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_ProcessStatus"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_System_ProcessStatus", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 [[bin]]
 name = "mild-editor"
