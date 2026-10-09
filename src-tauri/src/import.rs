@@ -310,7 +310,34 @@ fn parse_doj_problem(html: &str) -> DojProblemPage {
     }
 }
 
-fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<ImportedAtCoderProblem, String> {
+/// A judge's page as the user logged in to the problem browser is served it: the address the
+/// request ended at and the body, or why there is none (no browser on this platform, the
+/// browser not opened in this run, the judge out of reach). See `browser::session_fetch`.
+pub(crate) type SessionGet<'a> = &'a dyn Fn(&str) -> Result<(String, String), String>;
+
+/// The [`SessionGet`] of the running app.
+pub(crate) fn session_get(app: &tauri::AppHandle) -> impl Fn(&str) -> Result<(String, String), String> + '_ {
+    move |url| crate::browser::session_fetch(app, url).map(|page| (page.url, page.body))
+}
+
+/// Whether DOJ answered a session fetch with its login instead of the page: the session in
+/// the problem browser is not logged in. DOJ does not redirect in HTTP — it sends 200 and a
+/// page whose stream tells the browser to go (`NEXT_REDIRECT;replace;/ko/login;307;`) — so
+/// the body is what says so; the address covers the day it does redirect.
+pub(crate) fn doj_wants_login(url: &str, html: &str) -> bool {
+    let at_login = reqwest::Url::parse(url).is_ok_and(|parsed| parsed.path().trim_end_matches('/').ends_with("/login"));
+    at_login || html.match_indices("NEXT_REDIRECT;").any(|(at, _)| html[at..].split(';').nth(2).is_some_and(|to| to.trim_end_matches('/').ends_with("/login")))
+}
+
+/// A DOJ page through the session, or `None` when there is no session to read it with:
+/// no browser, a failed request, or a user who is not logged in.
+fn doj_session_page(session: SessionGet, url: &str) -> Option<String> {
+    let (final_url, html) = session(url).ok()?;
+    (!doj_wants_login(&final_url, &html)).then_some(html)
+}
+
+/// A DOJ problem and whether its statement had to come through the session.
+fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<(ImportedAtCoderProblem, bool), String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid DOJ problem URL.".to_string())?;
     // `/<locale>/problems/<number or slug>`, or the same with `/ide` after it: the page the
     // editor submits from is as likely to be the one in front of the user.
@@ -321,19 +348,29 @@ fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<Im
     // logged in DOJ answers that with HTTP 200 and a page that holds no statement, only a
     // redirect to the plain problem for the browser to follow (`NEXT_REDIRECT` in the stream),
     // so the plain page is the one to ask for. The key stays in the saved URL: it is what
-    // makes a submission from the editor count for the contest.
-    let in_contest = parsed.query_pairs().any(|(name, _)| name == "contest");
+    // makes a submission from the editor count for the contest. A virtual contest's links
+    // carry `?category=<path>&virtual=<key>` the same way.
+    let participant = parsed.query_pairs().any(|(name, _)| name == "contest" || name == "virtual");
     let mut page_url = parsed.clone();
     page_url.set_path(&format!("/{}", parts[..=at].join("/")));
-    page_url.set_query(None);
     page_url.set_fragment(None);
+    let keyed_url = page_url.clone();
+    page_url.set_query(None);
     let html = client.get(page_url).send().map_err(|error| format!("Could not fetch DOJ: {error}"))?
         .error_for_status().map_err(|error| format!("DOJ response error: {error}"))?.text().map_err(|error| error.to_string())?;
-    let page = parse_doj_problem(&html);
-    if page.tests.is_empty() {
+    let mut page = parse_doj_problem(&html);
+    let mut from_session = false;
+    if page.tests.is_empty() && participant {
         // While its contest runs a problem is there for participants only, and to anyone else
-        // its page is as empty as that of a problem that does not exist.
-        return Err(if in_contest {
+        // its page is as empty as that of a problem that does not exist. The participant is
+        // the user in the problem browser, and with the key the page is theirs to read.
+        if let Some(seen) = doj_session_page(session, keyed_url.as_str()).map(|html| parse_doj_problem(&html)).filter(|seen| !seen.tests.is_empty()) {
+            page = seen;
+            from_session = true;
+        }
+    }
+    if page.tests.is_empty() {
+        return Err(if participant {
             format!("{NEEDS_BROWSER}DOJ shows this contest problem only to a participant who is logged in. Open it in the problem browser and import it from there.")
         } else {
             "No sample test cases found on DOJ.".into()
@@ -350,28 +387,79 @@ fn fetch_doj_problem(client: &reqwest::blocking::Client, url: &str) -> Result<Im
     // The name alone is the title, as it is from Competitive Companion: the number is the
     // file's name already, and "#286 49" would make the file `286_286_49.cpp`.
     let title = page.name.unwrap_or_else(|| format!("DOJ #{number}"));
-    Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{number}.cpp"), tests: page.tests, source: "doj".into(), source_url: source_url.to_string(), contest: None })
+    Ok((ImportedAtCoderProblem { title, suggested_filename: format!("{number}.cpp"), tests: page.tests, source: "doj".into(), source_url: source_url.to_string(), contest: None }, from_session))
 }
 
-/// The problems a DOJ contest page links to, in the order the contest lists them. Each link
-/// is `/<locale>/problems/<id>?contest=<key>`; the key only matters to a logged-in participant
-/// while the contest runs, so the plain problem page is what gets imported.
-fn doj_contest_problem_urls(html: &str, base: &reqwest::Url) -> Vec<String> {
+fn fetch_doj_problem(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<ImportedAtCoderProblem, String> {
+    fetch_doj_problem_from(client, session, url).map(|(problem, _)| problem)
+}
+
+/// Whether a DOJ address is a list of problems to import as a whole: a contest
+/// (`/<locale>/contests/<slug>`) or a category (`/<locale>/categories/<path…>`), which is
+/// what a virtual contest runs on, as `…/categories/<path…>?virtual=<key>`.
+fn is_doj_listing(url: &reqwest::Url) -> bool {
+    let parts = url.path_segments().map(|parts| parts.collect::<Vec<_>>()).unwrap_or_default();
+    !parts.contains(&"problems") && parts.iter().any(|part| *part == "contests" || *part == "categories")
+}
+
+/// One problem of a DOJ contest or category page.
+#[derive(Debug, PartialEq)]
+struct DojListedProblem {
+    /// The index the page gives it (`A`, `B`, …), where its table has one.
+    letter: Option<String>,
+    /// `/<locale>/problems/<number>`, nothing after it.
+    url: String,
+    /// The same with what makes the problem the contest's: `?contest=<key>` from a contest
+    /// page, `?category=<path>&virtual=<key>` from the category page of a virtual contest.
+    participant_url: Option<String>,
+}
+
+/// The problems a DOJ contest or category page lists, in the page's order — which is the
+/// contest's: the numbers in the archive are neither consecutive nor sorted (… 555, 557,
+/// 556, 559, 698 …). Each row is `<td>A</td><td><a href="/<locale>/problems/<number>?…">`,
+/// the link carrying `contest=<key>` on a contest page and `category=<path>` on a category
+/// page. The key of a virtual contest is on the page's own address, and on its links only
+/// for the participant; taken from the address, it is kept either way.
+fn doj_listed_problems(html: &str, base: &reqwest::Url) -> Vec<DojListedProblem> {
     let document = scraper::Html::parse_document(html);
     let link_selector = scraper::Selector::parse("a[href]").unwrap();
+    let cell_selector = scraper::Selector::parse("td").unwrap();
+    let virtual_key = base.query_pairs().find(|(name, value)| name == "virtual" && !value.is_empty()).map(|(_, value)| value.into_owned());
     let mut seen = std::collections::HashSet::new();
-    let mut urls = Vec::new();
+    let mut problems = Vec::new();
     for link in document.select(&link_selector) {
         let Some(href) = link.value().attr("href") else { continue };
-        if !href.contains("/problems/") || !href.contains("contest=") { continue; }
+        if !href.contains("/problems/") { continue; }
         let Ok(mut url) = base.join(href) else { continue };
         let is_problem = url.path_segments().and_then(|mut parts| parts.next_back()).is_some_and(|id| !id.is_empty() && id.chars().all(|character| character.is_ascii_digit()));
-        if !is_problem { continue; }
+        let listed = url.query_pairs().filter(|(name, value)| (name == "contest" || name == "category") && !value.is_empty()).map(|(name, value)| (name.into_owned(), value.into_owned())).collect::<Vec<_>>();
+        // A link with neither is the site's own to some other problem, not a row of the list.
+        if !is_problem || listed.is_empty() { continue; }
         url.set_query(None);
         url.set_fragment(None);
-        if seen.insert(url.to_string()) { urls.push(url.to_string()); }
+        if !seen.insert(url.to_string()) { continue; }
+        let in_contest = listed.iter().any(|(name, _)| name == "contest");
+        let participant_url = (in_contest || virtual_key.is_some()).then(|| {
+            let mut keyed = url.clone();
+            keyed.query_pairs_mut().extend_pairs(&listed).extend_pairs(virtual_key.iter().filter(|_| !in_contest).map(|key| ("virtual", key.as_str())));
+            keyed.to_string()
+        });
+        let row = link.ancestors().filter_map(scraper::ElementRef::wrap).find(|element| element.value().name() == "tr");
+        let letter = row.and_then(|row| row.select(&cell_selector).next()).map(|cell| cell.text().collect::<String>().trim().to_string())
+            .filter(|text| (1..=3).contains(&text.len()) && text.starts_with(|first: char| first.is_ascii_uppercase()) && text.chars().all(|character| character.is_ascii_alphanumeric()));
+        problems.push(DojListedProblem { letter, url: url.to_string(), participant_url });
     }
-    urls
+    problems
+}
+
+/// The name of a DOJ contest or category: the page's heading. The `<title>` of a category
+/// is made from its address (`Sjupc2026 | DOJ` for "SJUPC 2026"), so it only stands in.
+fn doj_listing_name(html: &str) -> Option<String> {
+    let document = scraper::Html::parse_document(html);
+    ["h1.page-title", "h1", "title"].iter().find_map(|selector| {
+        let text = document.select(&scraper::Selector::parse(selector).unwrap()).next()?.text().collect::<String>();
+        Some(text.replace(" | DOJ", "").split_whitespace().collect::<Vec<_>>().join(" ")).filter(|name| !name.is_empty())
+    })
 }
 
 /// `A`, `B`, … `Z`, then `A1`, `B1`, …: the index a contest gives its problems.
@@ -380,24 +468,40 @@ fn contest_letter(index: usize) -> String {
     if index < 26 { letter.to_string() } else { format!("{letter}{}", index / 26) }
 }
 
-fn fetch_doj_contest(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
+/// A DOJ contest, or the category a virtual contest runs on, as a whole. What anyone may
+/// read is read plainly; the session of the problem browser comes in where the page is the
+/// participant's alone — the problem list and the statements of a contest that is running.
+fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid DOJ contest URL.".to_string())?;
-    let html = client.get(parsed.clone()).send().map_err(|error| format!("Could not fetch DOJ: {error}"))?
-        .error_for_status().map_err(|error| format!("DOJ response error: {error}"))?.text().map_err(|error| error.to_string())?;
-    let problem_urls = doj_contest_problem_urls(&html, &parsed);
-    if problem_urls.is_empty() {
+    let public = client.get(parsed.clone()).send().and_then(|response| response.error_for_status()).and_then(|response| response.text());
+    let mut page = public.as_ref().ok().map(|html| (doj_listed_problems(html, &parsed), doj_listing_name(html))).filter(|(listed, _)| !listed.is_empty());
+    if page.is_none() {
         // DOJ shows a running contest's problems only to a participant who is logged in.
-        return Err("This DOJ contest does not list its problems publicly. While a contest is running, open each problem in the problem browser and import it from there.".into());
+        let Some(html) = doj_session_page(session, parsed.as_str()) else {
+            return Err(format!("{NEEDS_BROWSER}DOJ does not list this contest's problems publicly. Open the contest in the problem browser, logged in, and import it from there."));
+        };
+        page = Some((doj_listed_problems(&html, &parsed), doj_listing_name(&html))).filter(|(listed, _)| !listed.is_empty());
     }
-    let title_selector = scraper::Selector::parse("title").unwrap();
-    let contest = scraper::Html::parse_document(&html).select(&title_selector).next()
-        .map(|element| element.text().collect::<String>().replace(" | DOJ", "").trim().to_string())
-        .filter(|title| !title.is_empty());
+    let Some((listed, contest)) = page else {
+        return Err(match public {
+            Err(error) => format!("Could not fetch DOJ: {error}"),
+            Ok(_) => "No problems are listed on this DOJ page.".into(),
+        });
+    };
     let mut problems = Vec::new();
-    for (index, problem_url) in problem_urls.into_iter().take(30).enumerate() {
-        let mut problem = fetch_doj_problem(client, &problem_url)?;
+    for (index, entry) in listed.into_iter().take(30).enumerate() {
+        let (mut problem, from_session) = fetch_doj_problem_from(client, session, entry.participant_url.as_deref().unwrap_or(&entry.url))?;
+        // A virtual contest's key stays, for it is what a submission must carry. A contest's
+        // stays while only the participant can read the problem; once the contest is over the
+        // plain address is the problem's, and its verdicts are on the public status page.
+        if !from_session && !problem.source_url.contains("virtual=") {
+            if let Ok(mut plain) = reqwest::Url::parse(&problem.source_url) {
+                plain.set_query(None);
+                problem.source_url = plain.to_string();
+            }
+        }
         // In a contest the letter names the problem, not its number in the archive.
-        problem.suggested_filename = format!("{}.cpp", contest_letter(index));
+        problem.suggested_filename = format!("{}.cpp", entry.letter.unwrap_or_else(|| contest_letter(index)));
         problem.contest = contest.clone();
         problems.push(problem);
     }
@@ -484,8 +588,10 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 }
 
 #[tauri::command]
-pub(crate) async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
+pub(crate) async fn import_problem(app: tauri::AppHandle, url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Blocks until the main thread has answered: fine here, off it.
+        let session = session_get(&app);
         let client = reqwest::blocking::Client::builder()
             .user_agent(format!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 MildEditor/{}", env!("CARGO_PKG_VERSION")))
             .default_headers({
@@ -507,10 +613,10 @@ pub(crate) async fn import_problem(url: String) -> Result<Vec<ImportedAtCoderPro
             return fetch_codeforces_contest(&client, &url);
         }
         if matches!(parsed.host_str(), Some("doj.kr") | Some("www.doj.kr")) {
-            if parsed.path_segments().is_some_and(|mut parts| parts.any(|part| part == "contests")) {
-                return fetch_doj_contest(&client, &url);
+            if is_doj_listing(&parsed) {
+                return fetch_doj_contest(&client, &session, &url);
             }
-            return fetch_doj_problem(&client, &url).map(|problem| vec![problem]);
+            return fetch_doj_problem(&client, &session, &url).map(|problem| vec![problem]);
         }
         if parsed.host_str() != Some("atcoder.jp") {
             return Err("Problem not found. Enter a valid AtCoder, Codeforces, or DOJ URL.".into());
@@ -571,13 +677,68 @@ mod tests {
     #[test]
     fn doj_contest_page_yields_its_problems_in_order() {
         let base = reqwest::Url::parse("https://doj.kr/ko/contests/bcd7").unwrap();
-        let html = r#"<a href="/ko/problems">all</a>
+        let html = r#"<a href="/ko/problems">all</a><a href="/ko/problems/1">elsewhere</a>
             <a href="/ko/problems/286?contest=key">A</a><a href="/ko/problems/362?contest=key">B</a>
             <a href="/ko/problems/286?contest=key">A again</a><a href="/ko/problems/286/editorial?contest=key">editorial</a>
             <a href="/ko/contests/bcd7/standings">standings</a>"#;
-        assert_eq!(doj_contest_problem_urls(html, &base), vec!["https://doj.kr/ko/problems/286", "https://doj.kr/ko/problems/362"]);
-        assert!(doj_contest_problem_urls("<a href=\"/ko/login\">login</a>", &base).is_empty());
+        let listed = doj_listed_problems(html, &base);
+        assert_eq!(listed.iter().map(|problem| problem.url.as_str()).collect::<Vec<_>>(), vec!["https://doj.kr/ko/problems/286", "https://doj.kr/ko/problems/362"]);
+        assert_eq!(listed[1], DojListedProblem { letter: None, url: "https://doj.kr/ko/problems/362".into(), participant_url: Some("https://doj.kr/ko/problems/362?contest=key".into()) });
+        assert!(doj_listed_problems("<a href=\"/ko/login\">login</a>", &base).is_empty());
         assert_eq!([contest_letter(0), contest_letter(8), contest_letter(25), contest_letter(26)], ["A", "I", "Z", "A1"]);
+
+        // The participant's view of a contest: `# | 제목 | 내 점수`, one row a problem.
+        let table = r#"<h1 class="page-title">Spring  Open</h1><table><thead><tr><th>#</th><th>제목</th><th>내 점수</th></tr></thead><tbody>
+            <tr><td>A</td><td><a href="/ko/problems/550?contest=key">고기만두</a></td><td>−</td></tr>
+            <tr><td>B2</td><td><a href="/ko/problems/548?contest=key">만두 2</a></td><td>−</td></tr></tbody></table>"#;
+        assert_eq!(doj_listed_problems(table, &base).iter().map(|problem| (problem.letter.as_deref(), problem.participant_url.as_deref())).collect::<Vec<_>>(),
+            vec![(Some("A"), Some("https://doj.kr/ko/problems/550?contest=key")), (Some("B2"), Some("https://doj.kr/ko/problems/548?contest=key"))]);
+        assert_eq!(doj_listing_name(table).as_deref(), Some("Spring Open"));
+    }
+
+    #[test]
+    fn doj_category_page_is_a_virtual_contest_in_table_order() {
+        // The shape of doj.kr/ko/categories/<path>: the archive numbers are not in the
+        // contest's order, and only the participant's page has the key on its links.
+        let row = |letter: &str, id: u32, query: &str| format!(r#"<tr><td><span class="doj-id-link">{letter}</span></td><td><a class="doj-table-link doj-problem-cell" href="/ko/problems/{id}?{query}"><span class="doj-problem-compact-line"><strong>이름 {letter}</strong><span class="doj-problem-sub">name-{id}</span></span></a></td><td>Gold IV</td><td>29%</td><td>22</td><td>미시도</td></tr>"#);
+        let page = |query: &str| format!(r#"<html><head><title>Open2026 | DOJ</title></head><body><a href="/ko/contests/open2026">연결된 본대회 보기</a><a href="/ko/problems/7">other</a>
+            <h1 class="page-title">OPEN 2026</h1><table><thead><tr><th>#</th><th>문제</th><th>난이도</th><th>정답률</th><th>해결</th><th>상태</th></tr></thead><tbody>{}{}{}</tbody></table></body></html>"#,
+            row("A", 557, query), row("B", 556, query), row("C", 698, query));
+        let keyed = |id: u32| format!("https://doj.kr/ko/problems/{id}?category=school%2Fopen%2Fopen2026&virtual=vkey");
+
+        let running = reqwest::Url::parse("https://doj.kr/ko/categories/school/open/open2026?virtual=vkey").unwrap();
+        for html in [page("category=school%2Fopen%2Fopen2026&amp;virtual=vkey"), page("category=school%2Fopen%2Fopen2026")] {
+            let listed = doj_listed_problems(&html, &running);
+            assert_eq!(listed.iter().map(|problem| (problem.letter.as_deref(), problem.url.as_str())).collect::<Vec<_>>(),
+                vec![(Some("A"), "https://doj.kr/ko/problems/557"), (Some("B"), "https://doj.kr/ko/problems/556"), (Some("C"), "https://doj.kr/ko/problems/698")]);
+            assert_eq!(listed.iter().map(|problem| problem.participant_url.clone().unwrap()).collect::<Vec<_>>(), vec![keyed(557), keyed(556), keyed(698)]);
+            assert_eq!(doj_listing_name(&html).as_deref(), Some("OPEN 2026"));
+        }
+        // Without a virtual contest the category is the archive: plain problems.
+        let archive = reqwest::Url::parse("https://doj.kr/ko/categories/school/open/open2026").unwrap();
+        assert!(doj_listed_problems(&page("category=school%2Fopen%2Fopen2026"), &archive).iter().all(|problem| problem.participant_url.is_none() && problem.letter.is_some()));
+        assert_eq!(doj_listing_name("<html><head><title>Open2026 | DOJ</title></head></html>").as_deref(), Some("Open2026"));
+
+        let listing = |url: &str| is_doj_listing(&reqwest::Url::parse(url).unwrap());
+        assert!(listing("https://doj.kr/ko/categories/school/open/open2026?virtual=vkey") && listing("https://doj.kr/ko/contests/bcd7"));
+        assert!(!listing("https://doj.kr/ko/problems/557?category=school%2Fopen%2Fopen2026&virtual=vkey") && !listing("https://doj.kr/ko/problems/286?contest=key"));
+    }
+
+    #[test]
+    fn doj_login_answer_is_told_from_a_page() {
+        // What a visitor gets for a page of the login's: HTTP 200, and the way out in the stream.
+        let logged_out = r#"<html><head><title>내 제출 | DOJ</title></head><body><script>self.__next_f.push([1,"19:E{\"digest\":\"NEXT_REDIRECT;replace;/ko/login;307;\"}"])</script></body></html>"#;
+        assert!(doj_wants_login("https://doj.kr/ko/submissions", logged_out));
+        assert!(doj_wants_login("https://doj.kr/en/login?next=%2Fen%2Fsubmissions", "<html></html>"));
+        // A contest problem sends a visitor on to the plain problem, which is no login.
+        let elsewhere = r#"<script>self.__next_f.push([1,"19:E{\"digest\":\"NEXT_REDIRECT;replace;/ko/problems/286;307;\"}"])</script>"#;
+        assert!(!doj_wants_login("https://doj.kr/ko/problems/286?contest=key", elsewhere));
+        assert!(!doj_wants_login("https://doj.kr/ko/submissions", "<table><tbody><tr><td colspan=\"8\" class=\"muted\">표시할 제출이 아직 없습니다.</td></tr></tbody></table><a href=\"/ko/login\">로그인</a>"));
+
+        let no_session: SessionGet = &|_| Err("no browser".into());
+        assert_eq!(doj_session_page(no_session, "https://doj.kr/ko/submissions"), None);
+        assert_eq!(doj_session_page(&|url| Ok((url.to_string(), logged_out.to_string())), "https://doj.kr/ko/submissions"), None);
+        assert_eq!(doj_session_page(&|url| Ok((url.to_string(), "<table></table>".to_string())), "https://doj.kr/ko/submissions").as_deref(), Some("<table></table>"));
     }
 
     #[test]
@@ -609,23 +770,32 @@ mod tests {
     #[ignore = "requires access to doj.kr"]
     fn fetches_current_doj_problem_and_contest() {
         let client = reqwest::blocking::Client::builder().user_agent("MildEditor/test").timeout(Duration::from_secs(30)).build().unwrap();
-        let plain = fetch_doj_problem(&client, "https://doj.kr/ko/problems/286").unwrap();
+        let session: SessionGet = &|_| Err("no browser in a test".into());
+        let plain = fetch_doj_problem(&client, session, "https://doj.kr/ko/problems/286").unwrap();
         assert_eq!((plain.title.as_str(), plain.suggested_filename.as_str(), plain.tests.len()), ("49", "286.cpp", 1));
         // The link a contest page gives: the statement comes from the plain page, the key is kept.
         let keyed = "https://doj.kr/ko/problems/286?contest=cmtimve8l0e0wokcqksb6wqez";
-        let from_contest = fetch_doj_problem(&client, keyed).unwrap();
+        let from_contest = fetch_doj_problem(&client, session, keyed).unwrap();
         assert_eq!((from_contest.suggested_filename.as_str(), from_contest.tests.len(), from_contest.source_url.as_str()), ("286.cpp", 1, keyed));
         // The site's own canonical link is by slug; the file and the saved URL go by number.
-        let by_slug = fetch_doj_problem(&client, "https://doj.kr/ko/problems/bracketstring").unwrap();
+        let by_slug = fetch_doj_problem(&client, session, "https://doj.kr/ko/problems/bracketstring").unwrap();
         assert_eq!((by_slug.suggested_filename.as_str(), by_slug.source_url.as_str()), ("634.cpp", "https://doj.kr/ko/problems/634"));
         assert_eq!(by_slug.tests.len(), 2);
-        let missing = fetch_doj_problem(&client, "https://doj.kr/ko/problems/99999").err().expect("no such problem");
+        let missing = fetch_doj_problem(&client, session, "https://doj.kr/ko/problems/99999").err().expect("no such problem");
         assert!(!missing.starts_with(NEEDS_BROWSER), "{missing}");
 
-        let contest = fetch_doj_contest(&client, "https://doj.kr/ko/contests/bcd7").unwrap();
+        let contest = fetch_doj_contest(&client, session, "https://doj.kr/ko/contests/bcd7").unwrap();
         assert_eq!(contest.len(), 9);
         assert_eq!((contest[0].title.as_str(), contest[0].suggested_filename.as_str(), contest[0].contest.as_deref()), ("49", "A.cpp", Some("DOJ Beginner Contest 7")));
         assert_eq!(contest[8].suggested_filename, "I.cpp");
+
+        // A virtual contest runs on the category page of a past contest, which anyone may read;
+        // the letters are the table's, and the key on the address is kept for the submit page.
+        let in_virtual = fetch_doj_contest(&client, session, "https://doj.kr/ko/categories/school/sju/sjupc2026?virtual=key").unwrap();
+        assert_eq!(in_virtual.len(), 12);
+        assert_eq!((in_virtual[6].suggested_filename.as_str(), in_virtual[6].contest.as_deref()), ("G.cpp", Some("SJUPC 2026")));
+        assert_eq!(in_virtual[6].source_url, "https://doj.kr/ko/problems/557?category=school%2Fsju%2Fsjupc2026&virtual=key");
+        assert!(in_virtual.iter().all(|problem| !problem.tests.is_empty()));
     }
 
     #[test]

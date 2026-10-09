@@ -1960,6 +1960,174 @@ pub fn browser_fill_submission(window: Window, state: tauri::State<'_, BrowserSt
     })
 }
 
+// ---------------------------------------------------------------------------------------
+// Session fetch: a judge's page as the logged-in user is served it. The backend's own HTTP
+// client has no login; the profile here has the user's, so a plain GET is made with its
+// cookies through a CEF URL request. No page has to be open on the judge for it, and
+// nothing is shown or navigated.
+
+/// A page read with the problem browser's cookies.
+pub struct SessionPage {
+    /// Where the request ended after any redirect.
+    pub url: String,
+    pub body: String,
+}
+
+/// A judge's page is a few hundred kilobytes; anything far beyond that is not one.
+const SESSION_FETCH_LIMIT: usize = 4 * 1024 * 1024;
+const SESSION_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+/// `cef_urlrequest_flags_t` bits. Without `ALLOW_STORED_CREDENTIALS` a URL request sends no
+/// cookies at all, which is the whole point of this one; `SKIP_CACHE` because a verdict
+/// read from Chromium's HTTP cache would be the one from the poll before.
+const UR_FLAG_SKIP_CACHE: i32 = 1 << 0;
+const UR_FLAG_ALLOW_STORED_CREDENTIALS: i32 = 1 << 3;
+
+/// The address a session fetch may go to, normalised: https on a judge host and nothing
+/// else. The cookies of the profile go with the request, so it never leaves those hosts.
+fn session_fetch_target(url: &str) -> Result<reqwest::Url, String> {
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "Not a valid URL.".to_string())?;
+    let on_judge = parsed.host_str().is_some_and(|host| SUBMIT_HOSTS.iter().any(|site| host == *site || host.ends_with(&format!(".{site}"))));
+    if parsed.scheme() != "https" || !on_judge || !parsed.username().is_empty() || parsed.password().is_some() || parsed.port().is_some() {
+        return Err("Only https pages of AtCoder, Codeforces and DOJ can be read through the problem browser.".into());
+    }
+    Ok(parsed)
+}
+
+struct SessionFetch {
+    asked: String,
+    body: Vec<u8>,
+    overflow: bool,
+    /// Kept until the request completes: nothing else holds it, and a timeout cancels it.
+    request: Option<Urlrequest>,
+    done: Option<std::sync::mpsc::Sender<Result<SessionPage, String>>>,
+}
+
+wrap_urlrequest_client! {
+    struct SessionFetchClient {
+        state: Arc<Mutex<SessionFetch>>,
+    }
+
+    impl UrlrequestClient {
+        fn on_download_data(&self, request: Option<&mut Urlrequest>, data: *const u8, data_length: usize) {
+            {
+                let mut state = self.state.lock().expect("session fetch");
+                if state.body.len() + data_length <= SESSION_FETCH_LIMIT {
+                    if !data.is_null() && data_length > 0 {
+                        state.body.extend_from_slice(unsafe { std::slice::from_raw_parts(data, data_length) });
+                    }
+                    return;
+                }
+                state.overflow = true;
+            }
+            // Outside the lock: cancelling may complete the request on the spot.
+            if let Some(request) = request {
+                request.cancel();
+            }
+        }
+
+        fn on_request_complete(&self, request: Option<&mut Urlrequest>) {
+            let mut state = self.state.lock().expect("session fetch");
+            // The request holds this client, and the state held the request.
+            state.request = None;
+            let Some(done) = state.done.take() else { return };
+            let body = std::mem::take(&mut state.body);
+            let result = (|| {
+                if state.overflow {
+                    return Err("The page is larger than a judge's page should be.".to_string());
+                }
+                let request = request.ok_or("The request was lost.")?;
+                if request.request_status() != UrlrequestStatus::SUCCESS {
+                    return Err(format!("The request failed (network error {}).", request.request_error().get_raw()));
+                }
+                let response = request.response().ok_or("The judge sent no response.")?;
+                if !(200..300).contains(&response.status()) {
+                    return Err(format!("The judge answered HTTP {}.", response.status()));
+                }
+                let url = CefString::from(&response.url()).to_string();
+                Ok(SessionPage { url: if url.is_empty() { state.asked.clone() } else { url }, body: String::from_utf8_lossy(&body).into_owned() })
+            })();
+            let _ = done.send(result);
+        }
+    }
+}
+
+/// Whether a session fetch can be made at all: Chromium runs once the problem browser has
+/// been opened, and is never started for a fetch — a poll must not cost a browser.
+pub fn session_ready() -> bool {
+    INITIALIZED.load(Ordering::SeqCst) && !SHUTTING_DOWN.load(Ordering::SeqCst)
+}
+
+/// GETs `url` with the problem browser's cookies and waits for the body. Only a GET, only
+/// https on a judge host (see [`session_fetch_target`]), bounded in size and time.
+///
+/// Blocks, and the answer arrives on the main thread: never call it from there. The
+/// request is created on the main thread, which is CEF's UI thread here, and its callbacks
+/// come back on it from the message pump.
+pub fn session_fetch(app: &AppHandle, url: &str) -> Result<SessionPage, String> {
+    let target = session_fetch_target(url)?;
+    if !session_ready() {
+        return Err("The problem browser has not been opened yet.".into());
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let state = Arc::new(Mutex::new(SessionFetch { asked: target.to_string(), body: Vec::new(), overflow: false, request: None, done: Some(sender) }));
+    let task_state = state.clone();
+    app.run_on_main_thread(move || {
+        let address = CefString::from(task_state.lock().expect("session fetch").asked.as_str());
+        let started = request_create().and_then(|mut request| {
+            request.set_url(Some(&address));
+            request.set_method(Some(&CefString::from("GET")));
+            // The page's own site, so cookies marked SameSite go along as on a visit.
+            request.set_first_party_for_cookies(Some(&address));
+            request.set_flags(UR_FLAG_SKIP_CACHE | UR_FLAG_ALLOW_STORED_CREDENTIALS);
+            let mut client = SessionFetchClient::new(task_state.clone());
+            // No request context given: the global one, which is the panel browser's.
+            urlrequest_create(Some(&mut request), Some(&mut client), None)
+        });
+        let mut state = task_state.lock().expect("session fetch");
+        match started {
+            // Unless it has completed already, from inside the call that created it.
+            Some(request) if state.done.is_some() => state.request = Some(request),
+            Some(_) => {}
+            None => {
+                if let Some(done) = state.done.take() {
+                    let _ = done.send(Err("CEF could not start the request.".into()));
+                }
+            }
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    let page = match receiver.recv_timeout(SESSION_FETCH_TIMEOUT) {
+        Ok(result) => result?,
+        Err(_) => {
+            // Cancelled where it was created; its completion then finds nobody waiting.
+            let _ = app.run_on_main_thread(move || {
+                let request = {
+                    let mut state = state.lock().expect("session fetch");
+                    state.done = None;
+                    state.request.take()
+                };
+                if let Some(request) = request {
+                    request.cancel();
+                }
+            });
+            return Err("The judge did not answer in time.".into());
+        }
+    };
+    // A redirect that left the judges is not a page of theirs, whatever it says.
+    session_fetch_target(&page.url).map_err(|_| "The judge redirected the request to another site.".to_string())?;
+    Ok(page)
+}
+
+/// The text of a judge's page as the user logged in to the problem browser is served it:
+/// `invoke("browser_fetch_text", { url: "https://doj.kr/ko/submissions" })`. Fails when the
+/// browser has not been opened in this run; a logged-out user gets the judge's login page.
+#[tauri::command]
+pub async fn browser_fetch_text(app: AppHandle, url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || session_fetch(&app, &url).map(|page| page.body))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub fn browser_extensions_list(state: tauri::State<'_, BrowserState>) -> Vec<ExtensionInfo> {
     list_extensions(&state.0)
@@ -1991,6 +2159,15 @@ pub fn browser_extension_remove(state: tauri::State<'_, BrowserState>, id: Strin
 #[cfg(test)]
 mod extension_tests {
     use super::*;
+
+    #[test]
+    fn session_fetch_stays_on_the_judges_over_https() {
+        assert_eq!(session_fetch_target(" https://doj.kr/ko/submissions?problem=550 ").unwrap().as_str(), "https://doj.kr/ko/submissions?problem=550");
+        assert!(session_fetch_target("https://www.codeforces.com/contest/1").is_ok());
+        for refused in ["http://doj.kr/ko/submissions", "https://doj.kr.example.com/", "https://example.com/?next=doj.kr", "https://doj.kr@example.com/", "https://user:pw@doj.kr/", "https://doj.kr:8443/", "file:///etc/passwd", "doj.kr/ko"] {
+            assert!(session_fetch_target(refused).is_err(), "{refused}");
+        }
+    }
 
     #[test]
     fn accepts_a_bare_id_and_store_links() {
