@@ -69,6 +69,8 @@ const definitions = {
   // covered contest imports, so it seeds the new one for existing installs.
   defaultLanguage: stored<Language>("mild-default-language", (value) => (value || localStorage.getItem("mild-contest-import-language")) as Language || "cpp"),
   organizeImports: flag("mild-organize-imports", false),
+  // Off by default: importing a contest starts its clock only when asked to.
+  autoContest: flag("mild-auto-contest", false),
   // Off by default: a submission is only sent when the user has asked for the button to be pressed.
   submitPress: flag("mild-submit-press", false),
   companionEnabled: flag("mild-companion-enabled", true),

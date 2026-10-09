@@ -1,5 +1,5 @@
 import { VerdictBadge } from "./VerdictBadge";
-import { verdictView } from "./workbench";
+import { commonFolder, contestPlan, verdictView, type ContestSchedule } from "./workbench";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { AppMark, Icon, LanguageIcon } from "./icons";
 import { diffLines, splitFlags } from "./judge";
@@ -167,6 +167,7 @@ function App() {
   // both the menu bar and the view, and the second arrival must not close a file too.
   const browserClosedAtRef = useRef(0);
   const [organizeImports] = useSetting("organizeImports");
+  const [autoContest] = useSetting("autoContest");
   const [autoSave, setAutoSave] = useSetting("autoSave");
   const [submitPress] = useSetting("submitPress");
   const [companionEnabled] = useSetting("companionEnabled");
@@ -183,7 +184,7 @@ function App() {
   const interactiveEntryIdRef = useRef(0);
   const interactiveLogRef = useRef<HTMLDivElement | null>(null);
   const interactiveInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const companionBatchRef = useRef<{ id: string; size: number; problems: ImportedAtCoderProblem[]; timer: number } | null>(null);
+  const companionBatchRef = useRef<{ id: string; size: number; problems: ImportedAtCoderProblem[]; timer: number; opened: boolean } | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
   // What the editor and the test panel show is the open tab itself: one copy, so a
@@ -239,9 +240,10 @@ function App() {
   const judgeProblemKey = useMemo(() => [...new Set([...savedFiles.map((file) => file.sourceUrl), ...openSourceUrls.split("\n")].filter(Boolean))].sort().join("|"), [savedFiles, openSourceUrls]);
   const reportedStatuses = ["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated",
     t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed"),
-    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported"), t("checkerCreated")];
+    t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported"), t("checkerCreated"),
+    t("contestAutoEnded"), t("contestAutoUpcoming"), t("contestAutoUnknown"), t("contestAutoBusy"), t("contestAutoNoFolder")];
   const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
-    && !fileStatus.startsWith("imported ");
+    && !fileStatus.startsWith("imported ") && !fileStatus.startsWith(t("contestAutoStarted")) && !fileStatus.startsWith(t("importingContest"));
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -1270,7 +1272,38 @@ function App() {
     localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
   }, [activeTab?.filename, tabs, workspacePath]);
 
-  const addImportedProblemsNow = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1) => {
+  /** The page the last import was asked for from: a contest page tells when the contest runs. */
+  const importPageRef = useRef("");
+  /**
+   * Contest mode for a contest just imported, when the setting asks for it: on the folder the
+   * problems went into, with the contest's own clock. A contest that is over, or a clock that
+   * is already running, is left alone, and the status bar says why.
+   */
+  const startImportedContest = async (filenames: string[], urls: string[]) => {
+    const folder = commonFolder(filenames);
+    if (!folder) { setFileStatus(t("contestAutoNoFolder")); return; }
+    if (contestRunningRef.current) { setFileStatus(t("contestAutoBusy")); return; }
+    let schedule: ContestSchedule | null = null;
+    try {
+      schedule = await invoke<ContestSchedule | null>("contest_schedule", { urls: urls.filter(Boolean) });
+    } catch { /* treated as unknown below */ }
+    const plan = contestPlan(schedule, Date.now());
+    if ("skip" in plan) {
+      setFileStatus(t(plan.skip === "ended" ? "contestAutoEnded" : plan.skip === "upcoming" ? "contestAutoUpcoming" : "contestAutoUnknown"));
+      return;
+    }
+    setContest({ startedAt: plan.startedAt, durationMin: plan.durationMin, folder, solved: {} });
+    // The board comes up with it: the contest has begun, and its problems are what matters now.
+    setContestOpen(true);
+    setFileStatus(`${t("contestAutoStarted")} · ${formatClock(plan.startedAt + plan.durationMin * 60_000 - Date.now())}`);
+  };
+  /**
+   * `activate: false` adds the problems without taking the editor from what is open — the rest
+   * of a contest loading behind the problem already being read. `contestClock: false` leaves the
+   * contest clock to the import that opened the contest.
+   */
+  const addImportedProblemsNow = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1, options: { activate?: boolean; contestClock?: boolean } = {}) => {
+    const activate = options.activate !== false;
     const existingFiles = [...savedFiles, ...tabs].filter((file, index, files) => files.findIndex((item) => fileKey(item.filename) === fileKey(file.filename)) === index);
     const existingProblemIds = new Set(existingFiles.map((file) => problemIdentity(file.source, file.sourceUrl)).filter(Boolean));
     const incomingProblemIds = new Set<string>();
@@ -1328,17 +1361,18 @@ function App() {
     });
     if (!importedTabs.length) throw new Error("No problems were imported.");
     const firstCursorOffset = importedCursorOffsets.get(importedTabs[0].id);
-    if (firstCursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: importedTabs[0].id, language: importLanguage, offset: firstCursorOffset };
+    if (activate && firstCursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: importedTabs[0].id, language: importLanguage, offset: firstCursorOffset };
     const nextTabs = [...tabs, ...importedTabs];
-    if (workspacePath) await persistTabs(nextTabs, importedTabs[0].id);
+    if (workspacePath) await persistTabs(nextTabs, activate ? importedTabs[0].id : "");
     else {
       setTabs((items) => [...items, ...importedTabs]);
-      activateTab(importedTabs[0]);
+      if (activate) activateTab(importedTabs[0]);
     }
     setAtCoderOpen(false);
     setNewFileImportPending(false);
     setAtCoderUrl("");
     setFileStatus("saved");
+    if (contestImport && options.contestClock !== false && autoContestRef.current) void startImportedContest(importedTabs.map((tab) => tab.filename), [importPageRef.current, ...candidates.map((problem) => problem.sourceUrl)]);
   };
   /**
    * Imports run one at a time. Each works from the tabs and files as it finds them — which
@@ -1348,6 +1382,7 @@ function App() {
    * The next import starts only once this one's result has been rendered.
    */
   const addImportedNowRef = useLatest(addImportedProblemsNow);
+  const autoContestRef = useLatest(autoContest);
   const importQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const nextRender = useNextRender();
   const addImportedProblems = (...args: Parameters<typeof addImportedProblemsNow>) => {
@@ -1356,11 +1391,62 @@ function App() {
     return run;
   };
 
+  /**
+   * Imports `url` with the editor's own importer. A contest arrives a problem at a time: the
+   * first opens the moment it is fetched — the problems come in contest order — and the rest
+   * are added behind it without taking the editor away from it. Throws what the backend says.
+   */
+  const problemPanelOpenRef = useLatest(problemPanelOpen);
+  const problemBrowserModeRef = useLatest(problemBrowserMode);
+  const openProblemUrlRef = useLatest((target: string) => openProblemUrl(target));
+  const importFromJudge = async (url: string) => {
+    importPageRef.current = url;
+    const stream = crypto.randomUUID();
+    const streamed = new Set<string>();
+    const stopListening = await listen<{ stream: string; index: number; total: number; problem: ImportedAtCoderProblem }>("import-problem", (event) => {
+      if (event.payload.stream !== stream || streamed.has(event.payload.problem.sourceUrl)) return;
+      const first = streamed.size === 0;
+      streamed.add(event.payload.problem.sourceUrl);
+      void addImportedProblems([event.payload.problem], false, true, { activate: first, contestClock: first })
+        .then(() => setFileStatus(`${t("importingContest")} ${streamed.size}/${event.payload.total}`))
+        .catch((error) => setFileStatus(errorMessage(error)));
+    });
+    // The first problem's statement starts loading as soon as the contest's list is known,
+    // while the import is still fetching that problem's samples.
+    const stopFirstPage = await listen<{ stream: string; url: string }>("import-first-page", (event) => {
+      if (event.payload.stream !== stream || !problemPanelOpenRef.current) return;
+      if (problemBrowserModeRef.current === "window") void invoke("problem_window_open", { url: event.payload.url, focus: false }).catch(() => undefined);
+      else openProblemUrlRef.current(event.payload.url);
+    });
+    let imported: ImportedAtCoderProblem[];
+    try {
+      imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url, stream });
+      // The last events may land just after the answer does.
+      const deadline = Date.now() + 1500;
+      while (streamed.size && streamed.size < imported.length && Date.now() < deadline) await new Promise((resolve) => window.setTimeout(resolve, 50));
+    } finally {
+      stopListening();
+      stopFirstPage();
+    }
+    if (!streamed.size) {
+      await addImportedProblems(imported, false, isContestImportUrl(url));
+      return;
+    }
+    const missing = imported.filter((problem) => !streamed.has(problem.sourceUrl));
+    if (missing.length) await addImportedProblems(missing, false, true, { activate: false, contestClock: false });
+    await importQueueRef.current;
+    setFileStatus(`imported ${imported.length} problems`);
+  };
+
   const importAtCoderProblem = async () => {
     if (!atCoderUrl.trim() || importInFlightRef.current) return;
     importInFlightRef.current = true;
     setImportingAtCoder(true);
     try {
+      if (!testcaseImportTarget) {
+        await importFromJudge(atCoderUrl.trim());
+        return;
+      }
       const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url: atCoderUrl.trim() });
       if (testcaseImportTarget) {
         const targetStem = testcaseImportTarget.filename.replace(/\.[^.]+$/, "").toLocaleLowerCase();
@@ -1414,8 +1500,9 @@ function App() {
     }
   };
 
-  // Competitive Companion sends a contest as `batch.size` separate POSTs. Collecting them
-  // into one import keeps the filename-collision prompt from firing once per problem.
+  // Competitive Companion sends a contest as `batch.size` separate POSTs, in contest order. Each
+  // is added the moment it arrives and the first opens at once, rather than all of them waiting
+  // for the last.
   const queueCompanionProblem = (problem: ImportedAtCoderProblem, batch?: CompanionProblem["batch"]) => {
     if (!batch || batch.size <= 1) {
       void importCompanionProblems([problem]);
@@ -1423,25 +1510,24 @@ function App() {
     }
     const pending = companionBatchRef.current?.id === batch.id
       ? companionBatchRef.current
-      : { id: batch.id, size: batch.size, problems: [], timer: 0 };
-    if (companionBatchRef.current && companionBatchRef.current !== pending) {
-      window.clearTimeout(companionBatchRef.current.timer);
-      void importCompanionProblems(companionBatchRef.current.problems);
-    }
-    pending.problems = [...pending.problems, problem];
-    window.clearTimeout(pending.timer);
-    const flush = () => {
-      window.clearTimeout(pending.timer);
-      companionBatchRef.current = null;
-      void importCompanionProblems(pending.problems);
-    };
-    if (pending.problems.length >= pending.size) {
-      flush();
-      return;
-    }
-    // The extension can drop a problem it failed to parse, so never wait on the count alone.
-    pending.timer = window.setTimeout(flush, 1500);
+      : { id: batch.id, size: batch.size, problems: [], timer: 0, opened: false };
     companionBatchRef.current = pending;
+    // The extension sends a contest's problems in contest order, so the first to arrive is the first problem.
+    const first = !pending.opened;
+    if (first) pending.opened = true;
+    pending.problems = [...pending.problems, problem];
+    void addImportedProblems([problem], false, true, { activate: first, contestClock: first })
+      .then(() => setFileStatus(`${t("importingContest")} ${pending.problems.length}/${pending.size}`))
+      .catch((error) => setFileStatus(errorMessage(error)));
+    window.clearTimeout(pending.timer);
+    const finish = () => {
+      window.clearTimeout(pending.timer);
+      if (companionBatchRef.current === pending) companionBatchRef.current = null;
+      void importQueueRef.current.then(() => setFileStatus(`imported ${pending.problems.length} problems`));
+    };
+    if (pending.problems.length >= pending.size) { finish(); return; }
+    // The extension can drop a problem it failed to parse, so never wait on the count alone.
+    pending.timer = window.setTimeout(finish, 1500);
   };
 
   // Kept in a ref so the single event subscription always sees the current tab and workspace state.
@@ -1471,6 +1557,27 @@ function App() {
   const importFromProblemPage = async () => {
     const url = browserStatusRef.current.url;
     if (!url || importInFlightRef.current) return false;
+    importPageRef.current = url;
+    // A whole contest goes through the editor's own importer first: it hands over each problem
+    // as it is fetched, where Competitive Companion parses every problem before sending any.
+    // Only a page the editor cannot read (a Cloudflare check) is left to the extension.
+    if (isContestImportUrl(url) && editorCanImport(url)) {
+      importInFlightRef.current = true;
+      setImportingAtCoder(true);
+      try {
+        await importFromJudge(url);
+        return false;
+      } catch (error) {
+        // Left to the extension only when it can read this page; otherwise asking again is no use.
+        if (!errorMessage(error).startsWith(NEEDS_BROWSER) || companionCannotParse(url)) {
+          setFileStatus(importErrorText(error));
+          return false;
+        }
+      } finally {
+        importInFlightRef.current = false;
+        setImportingAtCoder(false);
+      }
+    }
     if (!companionCannotParse(url)) {
       try {
         if (await invoke<boolean>("browser_import_page", { port: companionPort })) {
@@ -1500,8 +1607,7 @@ function App() {
     importInFlightRef.current = true;
     setImportingAtCoder(true);
     try {
-      const imported = await invoke<ImportedAtCoderProblem[]>("import_problem", { url });
-      await addImportedProblems(imported, false, isContestImportUrl(url));
+      await importFromJudge(url);
     } catch (error) {
       setFileStatus(importErrorText(error));
     } finally {
@@ -2122,6 +2228,7 @@ function App() {
   // The seconds are counted by the pieces that show them (ContestClock.tsx). All this
   // component needs from the clock is the one moment the contest ends.
   const contestRunning = Boolean(contest) && Date.now() < contestEndsAt;
+  const contestRunningRef = useLatest(contestRunning);
   const contestSpan = useMemo(() => contest ? { startedAt: contest.startedAt, endsAt: contestEndsAt } : null, [contest?.startedAt, contestEndsAt]);
   const [, markContestOver] = useState(0);
   useEffect(() => {

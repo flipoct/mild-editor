@@ -7,6 +7,8 @@ use crate::submissions::codeforces_problem_key;
 use crate::workspace::SavedTestCase;
 use crate::HTTP_CONNECT_TIMEOUT;
 
+use tauri::Emitter;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ImportedAtCoderProblem {
@@ -337,7 +339,7 @@ fn doj_session_page(session: SessionGet, url: &str) -> Option<String> {
 }
 
 /// A DOJ problem and whether its statement had to come through the session.
-fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<(ImportedAtCoderProblem, bool), String> {
+fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGet, url: &str, session_first: bool) -> Result<(ImportedAtCoderProblem, bool), String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid DOJ problem URL.".to_string())?;
     // `/<locale>/problems/<number or slug>`, or the same with `/ide` after it: the page the
     // editor submits from is as likely to be the one in front of the user.
@@ -356,15 +358,24 @@ fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGe
     page_url.set_fragment(None);
     let keyed_url = page_url.clone();
     page_url.set_query(None);
-    let html = client.get(page_url).send().map_err(|error| format!("Could not fetch DOJ: {error}"))?
-        .error_for_status().map_err(|error| format!("DOJ response error: {error}"))?.text().map_err(|error| error.to_string())?;
-    let mut page = parse_doj_problem(&html);
-    let mut from_session = false;
-    if page.tests.is_empty() && participant {
+    let from_participant = |session: SessionGet| doj_session_page(session, keyed_url.as_str()).map(|html| parse_doj_problem(&html)).filter(|seen| !seen.tests.is_empty());
+    // A problem of a contest only its participants can see is read through the session at
+    // once; the public page would only come back empty.
+    let early = (session_first && participant).then(|| from_participant(session)).flatten();
+    let mut from_session = early.is_some();
+    let mut page = match early {
+        Some(page) => page,
+        None => {
+            let html = client.get(page_url).send().map_err(|error| format!("Could not fetch DOJ: {error}"))?
+                .error_for_status().map_err(|error| format!("DOJ response error: {error}"))?.text().map_err(|error| error.to_string())?;
+            parse_doj_problem(&html)
+        }
+    };
+    if page.tests.is_empty() && participant && !(session_first && participant) {
         // While its contest runs a problem is there for participants only, and to anyone else
         // its page is as empty as that of a problem that does not exist. The participant is
         // the user in the problem browser, and with the key the page is theirs to read.
-        if let Some(seen) = doj_session_page(session, keyed_url.as_str()).map(|html| parse_doj_problem(&html)).filter(|seen| !seen.tests.is_empty()) {
+        if let Some(seen) = from_participant(session) {
             page = seen;
             from_session = true;
         }
@@ -391,7 +402,7 @@ fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGe
 }
 
 fn fetch_doj_problem(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<ImportedAtCoderProblem, String> {
-    fetch_doj_problem_from(client, session, url).map(|(problem, _)| problem)
+    fetch_doj_problem_from(client, session, url, false).map(|(problem, _)| problem)
 }
 
 /// Whether a DOJ address is a list of problems to import as a whole: a contest
@@ -471,10 +482,29 @@ fn contest_letter(index: usize) -> String {
 /// A DOJ contest, or the category a virtual contest runs on, as a whole. What anyone may
 /// read is read plainly; the session of the problem browser comes in where the page is the
 /// participant's alone — the problem list and the statements of a contest that is running.
-fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
+/// What a contest import tells the editor while it runs, so the first problem can be on screen
+/// long before the last is fetched.
+pub(crate) struct Progress<'a> {
+    /// The page of the contest's first problem, the moment the contest's list is known: the
+    /// problem browser can load the statement while the import fetches the problem.
+    pub first_page: &'a dyn Fn(&str),
+    /// Each problem as soon as it has been fetched, with its place and the contest's size.
+    pub problem: &'a dyn Fn(usize, usize, &ImportedAtCoderProblem),
+}
+#[cfg(test)]
+fn ignore_page(_url: &str) {}
+#[cfg(test)]
+fn ignore_problem(_index: usize, _total: usize, _problem: &ImportedAtCoderProblem) {}
+#[cfg(test)]
+const QUIET: Progress<'static> = Progress { first_page: &ignore_page, problem: &ignore_problem };
+
+fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, url: &str, progress: &Progress) -> Result<Vec<ImportedAtCoderProblem>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid DOJ contest URL.".to_string())?;
     let public = client.get(parsed.clone()).send().and_then(|response| response.error_for_status()).and_then(|response| response.text());
     let mut page = public.as_ref().ok().map(|html| (doj_listed_problems(html, &parsed), doj_listing_name(html))).filter(|(listed, _)| !listed.is_empty());
+    // A list only the participant can see means problems only the participant can read: each
+    // is asked of the session straight away, not first of a public page that will be empty.
+    let participant_only = page.is_none();
     if page.is_none() {
         // DOJ shows a running contest's problems only to a participant who is logged in.
         let Some(html) = doj_session_page(session, parsed.as_str()) else {
@@ -489,8 +519,10 @@ fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, ur
         });
     };
     let mut problems = Vec::new();
+    let total = listed.len().min(30);
+    if let Some(first) = listed.first() { (progress.first_page)(first.participant_url.as_deref().unwrap_or(&first.url)); }
     for (index, entry) in listed.into_iter().take(30).enumerate() {
-        let (mut problem, from_session) = fetch_doj_problem_from(client, session, entry.participant_url.as_deref().unwrap_or(&entry.url))?;
+        let (mut problem, from_session) = fetch_doj_problem_from(client, session, entry.participant_url.as_deref().unwrap_or(&entry.url), participant_only)?;
         // A virtual contest's key stays, for it is what a submission must carry. A contest's
         // stays while only the participant can read the problem; once the contest is over the
         // plain address is the problem's, and its verdicts are on the public status page.
@@ -503,12 +535,13 @@ fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, ur
         // In a contest the letter names the problem, not its number in the archive.
         problem.suggested_filename = format!("{}.cpp", entry.letter.unwrap_or_else(|| contest_letter(index)));
         problem.contest = contest.clone();
+        (progress.problem)(index, total, &problem);
         problems.push(problem);
     }
     Ok(problems)
 }
 
-fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<ImportedAtCoderProblem>, String> {
+fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str, progress: &Progress) -> Result<Vec<ImportedAtCoderProblem>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid Codeforces contest URL.".to_string())?;
     let segments = parsed.path_segments().map(|values| values.collect::<Vec<_>>()).unwrap_or_default();
     let contest_marker = segments.iter().position(|value| *value == "contest").ok_or("This is not a Codeforces contest URL.")?;
@@ -572,9 +605,14 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
     urls.sort();
     let mut problems = Vec::new();
     let mut errors = Vec::new();
+    let total = urls.len().min(30);
+    (progress.first_page)(&urls[0]);
     for problem_url in urls.into_iter().take(30) {
         match fetch_codeforces_problem(client, &problem_url) {
-            Ok(problem) => problems.push(problem),
+            Ok(problem) => {
+                (progress.problem)(problems.len(), total, &problem);
+                problems.push(problem);
+            }
             // Half a contest is worse than the whole of it from the browser.
             Err(error) if error.starts_with(NEEDS_BROWSER) => return Err(error),
             Err(error) => errors.push(error),
@@ -588,8 +626,24 @@ fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str) -> Re
 }
 
 #[tauri::command]
-pub(crate) async fn import_problem(app: tauri::AppHandle, url: String) -> Result<Vec<ImportedAtCoderProblem>, String> {
+pub(crate) async fn import_problem(app: tauri::AppHandle, url: String, stream: Option<String>) -> Result<Vec<ImportedAtCoderProblem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // With a stream id, each problem of a contest is sent as an `import-problem` event the
+        // moment it is fetched; the result still holds them all.
+        let emitter = app.clone();
+        let page_emitter = app.clone();
+        let page_stream = stream.clone();
+        let first_page = move |url: &str| {
+            if let Some(stream) = &page_stream {
+                let _ = page_emitter.emit("import-first-page", serde_json::json!({ "stream": stream, "url": url }));
+            }
+        };
+        let streamed = move |index: usize, total: usize, problem: &ImportedAtCoderProblem| {
+            if let Some(stream) = &stream {
+                let _ = emitter.emit("import-problem", serde_json::json!({ "stream": stream, "index": index, "total": total, "problem": problem }));
+            }
+        };
+        let progress = Progress { first_page: &first_page, problem: &streamed };
         // Blocks until the main thread has answered: fine here, off it.
         let session = session_get(&app);
         let client = reqwest::blocking::Client::builder()
@@ -610,11 +664,11 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String) -> Result
             if parsed.path().contains("/problem/") {
                 return fetch_codeforces_problem(&client, &url).map(|problem| vec![problem]);
             }
-            return fetch_codeforces_contest(&client, &url);
+            return fetch_codeforces_contest(&client, &url, &progress);
         }
         if matches!(parsed.host_str(), Some("doj.kr") | Some("www.doj.kr")) {
             if is_doj_listing(&parsed) {
-                return fetch_doj_contest(&client, &session, &url);
+                return fetch_doj_contest(&client, &session, &url, &progress);
             }
             return fetch_doj_problem(&client, &session, &url).map(|problem| vec![problem]);
         }
@@ -661,8 +715,12 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String) -> Result
             return Err("No problems were found in this contest.".into());
         }
         let mut problems = Vec::new();
+        let total = task_urls.len().min(30);
+        (progress.first_page)(&task_urls[0]);
         for task_url in task_urls.into_iter().take(30) {
-            problems.push(fetch_atcoder_problem(&client, &task_url)?);
+            let problem = fetch_atcoder_problem(&client, &task_url)?;
+            (progress.problem)(problems.len(), total, &problem);
+            problems.push(problem);
         }
         Ok(problems)
     })
@@ -673,6 +731,26 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each problem of a contest is reported the moment it is fetched, in contest order, before
+    /// the whole list is returned — what lets the editor open problem A while the rest load.
+    /// Against the live sites; run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn contest_problems_are_reported_one_by_one_in_order() {
+        let client = reqwest::blocking::Client::builder().user_agent("MildEditor/test").timeout(Duration::from_secs(30)).build().unwrap();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = |index: usize, total: usize, problem: &ImportedAtCoderProblem| seen.lock().unwrap().push((index, total, problem.source_url.clone()));
+        let no_session = |_: &str| -> Result<(String, String), String> { Err("no browser here".into()) };
+        let first = std::sync::Mutex::new(String::new());
+        let note_first = |url: &str| *first.lock().unwrap() = url.to_string();
+        let returned = fetch_doj_contest(&client, &no_session, "https://doj.kr/ko/contests/bcd7", &Progress { first_page: &note_first, problem: &report }).expect("doj contest");
+        // The first page is known before any problem is fetched, and it is the first problem's.
+        assert!(first.lock().unwrap().contains(&returned[0].source_url.split('?').next().unwrap().to_string()), "{}", first.lock().unwrap());
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.len(), returned.len());
+        assert!(seen.iter().enumerate().all(|(position, (index, total, url))| *index == position && *total == returned.len() && *url == returned[position].source_url), "{seen:?}");
+    }
 
     #[test]
     fn doj_contest_page_yields_its_problems_in_order() {
@@ -784,14 +862,14 @@ mod tests {
         let missing = fetch_doj_problem(&client, session, "https://doj.kr/ko/problems/99999").err().expect("no such problem");
         assert!(!missing.starts_with(NEEDS_BROWSER), "{missing}");
 
-        let contest = fetch_doj_contest(&client, session, "https://doj.kr/ko/contests/bcd7").unwrap();
+        let contest = fetch_doj_contest(&client, session, "https://doj.kr/ko/contests/bcd7", &QUIET).unwrap();
         assert_eq!(contest.len(), 9);
         assert_eq!((contest[0].title.as_str(), contest[0].suggested_filename.as_str(), contest[0].contest.as_deref()), ("49", "A.cpp", Some("DOJ Beginner Contest 7")));
         assert_eq!(contest[8].suggested_filename, "I.cpp");
 
         // A virtual contest runs on the category page of a past contest, which anyone may read;
         // the letters are the table's, and the key on the address is kept for the submit page.
-        let in_virtual = fetch_doj_contest(&client, session, "https://doj.kr/ko/categories/school/sju/sjupc2026?virtual=key").unwrap();
+        let in_virtual = fetch_doj_contest(&client, session, "https://doj.kr/ko/categories/school/sju/sjupc2026?virtual=key", &QUIET).unwrap();
         assert_eq!(in_virtual.len(), 12);
         assert_eq!((in_virtual[6].suggested_filename.as_str(), in_virtual[6].contest.as_deref()), ("G.cpp", Some("SJUPC 2026")));
         assert_eq!(in_virtual[6].source_url, "https://doj.kr/ko/problems/557?category=school%2Fsju%2Fsjupc2026&virtual=key");
@@ -850,7 +928,7 @@ mod tests {
         let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30)).build().unwrap();
         let problem = fetch_codeforces_problem(&client, "https://codeforces.com/contest/1117/problem/B").err().expect("a challenge");
         assert!(problem.starts_with(NEEDS_BROWSER), "{problem}");
-        let contest = fetch_codeforces_contest(&client, "https://codeforces.com/contest/1117").err().expect("a challenge");
+        let contest = fetch_codeforces_contest(&client, "https://codeforces.com/contest/1117", &QUIET).err().expect("a challenge");
         assert!(contest.starts_with(NEEDS_BROWSER), "{contest}");
     }
 
@@ -923,7 +1001,7 @@ mod tests {
         assert_eq!(emotes.tests.len(), 2);
         assert_eq!(emotes.tests[0].input, "6 9 2\n1 3 3 7 4 2");
         assert_eq!(emotes.tests[0].expected, "54");
-        let contest = fetch_codeforces_contest(&client, "https://codeforces.com/contest/4").unwrap();
+        let contest = fetch_codeforces_contest(&client, "https://codeforces.com/contest/4", &QUIET).unwrap();
         assert!(!contest.is_empty());
     }
 

@@ -230,3 +230,33 @@ export const verdictView = (status: string | undefined): { text: string; tone: V
   if (/^(WJ|WR|JUDGING|TESTING|IN QUEUE)$/i.test(raw) || /^\d+\s*\/\s*\d+/.test(raw)) return { text: raw, tone: "pending", title: raw };
   return { text: raw, tone: "rejected", title: raw };
 };
+
+// --- Contest mode for a contest just imported ----------------------------------------------
+
+export type ContestSchedule = { startMs: number; endMs: number; windowMinutes?: number | null };
+export type ContestPlan = { startedAt: number; durationMin: number } | { skip: "unknown" | "upcoming" | "ended" };
+
+/**
+ * How contest mode starts for a contest imported at `now`. A running contest keeps the judge's
+ * own clock, so the time left is the contest's; one taken in personal windows starts its window
+ * now, but never past the contest's end. A contest that is over is practice, and one not yet
+ * begun has nothing to import, so neither starts the clock.
+ */
+export const contestPlan = (schedule: ContestSchedule | null, now: number): ContestPlan => {
+  if (!schedule) return { skip: "unknown" };
+  if (now >= schedule.endMs) return { skip: "ended" };
+  if (now < schedule.startMs) return { skip: "upcoming" };
+  if (schedule.windowMinutes) {
+    const left = Math.floor((schedule.endMs - now) / 60_000);
+    return { startedAt: now, durationMin: Math.max(1, Math.min(schedule.windowMinutes, left)) };
+  }
+  return { startedAt: schedule.startMs, durationMin: Math.max(1, Math.round((schedule.endMs - schedule.startMs) / 60_000)) };
+};
+
+/** The one folder every imported file went into, or null when they are spread or at the workspace root. */
+export const commonFolder = (filenames: string[]) => {
+  const parents = new Set(filenames.map((name) => name.replace(/\\/g, "/").split("/").slice(0, -1).join("/")));
+  const [only] = parents;
+  return parents.size === 1 && only ? only : null;
+};
+

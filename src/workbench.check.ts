@@ -3,7 +3,7 @@
  * `node --experimental-strip-types src/workbench.check.ts`.
  */
 import { isHelperFile, findStressCompanion, stressCompanionName, stressStem } from "./fileNaming.ts";
-import { autoSaveEnabled, checkerStarter, checkerStatus, matchCommands, matchLabel, summarizeTests, terminalKeyIsEditors, verdictAccepted, verdictView } from "./workbench.ts";
+import { autoSaveEnabled, checkerStarter, checkerStatus, matchCommands, matchLabel, summarizeTests, terminalKeyIsEditors, verdictAccepted, verdictView, contestPlan, commonFolder } from "./workbench.ts";
 
 let failed = 0;
 const eq = (label: string, got: unknown, want: unknown) => {
@@ -102,6 +102,20 @@ eq("decimal scores", verdictView("SCORE 12.5/50").text, "PAC 12.5/50");
 eq("plain verdicts stay", [verdictView("AC").tone, verdictView("WA").text, verdictView("TLE").tone], ["accepted", "WA", "rejected"]);
 eq("still judging", [verdictView("WJ").tone, verdictView("3/12").tone], ["pending", "pending"]);
 eq("a full score counts as solved", [verdictAccepted("SCORE 100/100"), verdictAccepted("SCORE 94/100"), verdictAccepted("AC"), verdictAccepted(undefined)], [true, false, true, false]);
+
+// --- contest mode for an imported contest ----------------------------------------------------
+const minute = 60_000;
+const abc = { startMs: 1000 * minute, endMs: 1100 * minute };
+eq("running: the judge's clock", contestPlan(abc, 1040 * minute), { startedAt: 1000 * minute, durationMin: 100 });
+eq("over: practice, no clock", contestPlan(abc, 1100 * minute), { skip: "ended" });
+eq("not yet begun", contestPlan(abc, 999 * minute), { skip: "upcoming" });
+eq("no schedule found", contestPlan(null, 0), { skip: "unknown" });
+const windowed = { startMs: 0, endMs: 6 * 24 * 60 * minute, windowMinutes: 100 };
+eq("a personal window starts now", contestPlan(windowed, 50 * minute), { startedAt: 50 * minute, durationMin: 100 });
+eq("but never past the contest's end", contestPlan(windowed, windowed.endMs - 30 * minute), { startedAt: windowed.endMs - 30 * minute, durationMin: 30 });
+eq("one contest folder", commonFolder(["AtCoder/abc300/A.py", "AtCoder/abc300/B.py"]), "AtCoder/abc300");
+eq("files at the root: no folder of its own", commonFolder(["A.py", "B.py"]), null);
+eq("spread over folders", commonFolder(["x/A.py", "y/B.py"]), null);
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 if (failed) process.exit(1);
