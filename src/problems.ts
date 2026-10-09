@@ -1,6 +1,6 @@
 import { outputsMatch } from "./judge";
 import { explorerParent, fileKey, normalizedExplorerPath } from "./fileNaming";
-import { checkerStatus, type CheckerVerdict } from "./workbench";
+import { checkerStatus, verdictAccepted, type CheckerVerdict } from "./workbench";
 import type { CompanionProblem, ContestState, ExplorerSelection, ImportedAtCoderProblem, Language, NativeRunResult, ProblemSource, ProblemTab, SavedTest, Status, TestCase, WorkspaceFileResult } from "./types";
 
 /** ICPC scoring: twenty minutes on the clock for each rejected try before the one that solved it. */
@@ -45,7 +45,8 @@ export const formatClock = (ms: number) => {
   return `${Math.floor(total / 3600)}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
 };
 
-export const isAccepted = (status: string | undefined) => status === "AC" || status === "OK";
+/** Accepted, a full score included. */
+export const isAccepted = verdictAccepted;
 
 /** The judge is still working on it: `WJ`, `TESTING`, or AtCoder's running count `12/34`. */
 export const isPendingVerdict = (status: string) => /^(WJ|WR|JUDGING|TESTING|IN QUEUE)$/i.test(status.trim()) || /^\d+\s*\/\s*\d+/.test(status.trim());

@@ -1,3 +1,4 @@
+import { VerdictBadge } from "./VerdictBadge";
 import { memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { buildExplorerTree, mergeExplorerFiles, sortExplorerFiles, useExplorerFiles } from "./explorerFiles";
@@ -449,7 +450,7 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
       <button className={`explorer-file ${fileKey(tab.filename) === fileKey(activeFilename) ? "active" : ""}`} data-drop-directory={explorerParent(tab.filename)} data-file-slot={siblingSlots.get(tab.id)} onPointerDown={(event) => beginDrag({ kind: "file", filename: tab.filename }, explorerBasename(tab.filename), event)} style={{ paddingLeft: `${14 + depth * 14}px` }} onClick={(event) => { if (dragClickRef.current) return; event.currentTarget.focus(); openFile(tab.filename); }} onFocus={() => setExplorerSelection({ kind: "file", filename: tab.filename })} onContextMenu={(event) => { if (!workspacePath) return; event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: tab.filename }); overlays.set({ menu: { file: tab.filename, x: event.clientX, y: event.clientY } }); }} title={`${tab.filename}${openIndex >= 0 && openIndex < 9 ? ` (${modLabel}${openIndex + 1})` : ""}`}>
         <LanguageIcon language={tab.language} />
         <span className="explorer-file-name">{explorerBasename(tab.filename)}</span>
-        {tab.judgeStatus && <span className={`judge-badge ${tab.judgeStatus === "AC" || tab.judgeStatus === "OK" ? "accepted" : ""}`} title={tab.submissionUrl || "latest submission result"}>{tab.judgeStatus}</span>}
+        {tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} title={tab.submissionUrl} />}
         {openIndex >= 0 && openIndex < 9 && <kbd>{openIndex + 1}</kbd>}
       </button>
     </div>];

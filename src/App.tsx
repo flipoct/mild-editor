@@ -1,3 +1,5 @@
+import { VerdictBadge } from "./VerdictBadge";
+import { verdictView } from "./workbench";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { AppMark, Icon, LanguageIcon } from "./icons";
 import { diffLines, splitFlags } from "./judge";
@@ -2215,7 +2217,10 @@ function App() {
     const tries = contest ? contestPenaltyTries(file) : 0;
     if (solvedAt !== undefined || acceptedInContest(file)) return { tone: "solved", label: solvedAt !== undefined ? formatClock(solvedAt) : "AC", tries };
     // An AC from before the contest says nothing about this attempt.
-    if (file.judgeStatus && !isAccepted(file.judgeStatus)) return { tone: "failed", label: file.judgeStatus, tries };
+    if (file.judgeStatus && !isAccepted(file.judgeStatus)) {
+      const view = verdictView(file.judgeStatus);
+      return { tone: view.tone === "partial" ? "partial" : "failed", label: view.text, tries };
+    }
     const open = tabs.find((tab) => fileKey(tab.filename) === fileKey(file.filename));
     const results = (open?.id === activeTabId ? tests : open?.tests ?? []).filter((test) => finalVerdicts.includes(test.status));
     if (!results.length) return { tone: "idle", label: "" };
@@ -3247,10 +3252,11 @@ function App() {
             {verdictNotices.map((notice) => {
               const file = [...tabs, ...savedFiles].find((item) => fileKey(item.filename) === fileKey(notice.filename));
               const dismiss = () => setVerdictNotices((items) => items.filter((item) => item.id !== notice.id));
-              return <div key={notice.id} className={`verdict-notice ${isAccepted(notice.status) ? "accepted" : "rejected"}`}>
+              const view = verdictView(notice.status);
+              return <div key={notice.id} className={`verdict-notice ${view.tone === "accepted" ? "accepted" : view.tone === "partial" ? "partial" : "rejected"}`}>
                 <button className="verdict-notice-body" title={t("verdictOpen")} onClick={() => { if (file) openSavedFile(file); dismiss(); }}>
                   <small>{t("verdictNotice")}</small>
-                  <strong>{notice.status}</strong>
+                  <strong>{view.text}</strong>
                   <span>{explorerBasename(notice.filename)}</span>
                 </button>
                 <button className="verdict-notice-close" aria-label={t("verdictDismiss")} title={t("verdictDismiss")} onClick={dismiss}><Icon name="close" size={12} /></button>
@@ -3529,7 +3535,7 @@ function App() {
                   ? <b key={position}>{character}</b>
                   : <span key={position}>{character}</span>)}</span>
                 {parent && <small>{parent}</small>}
-                {row.file.judgeStatus && <span className={`judge-badge ${isAccepted(row.file.judgeStatus) ? "accepted" : ""}`}>{row.file.judgeStatus}</span>}
+                {row.file.judgeStatus && <VerdictBadge status={row.file.judgeStatus} />}
               </button>;
             }) : <p className="quick-open-empty">{t("quickOpenEmpty")}</p>}
           </div>}
