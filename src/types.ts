@@ -166,8 +166,7 @@ export type WorkspaceFileResult = { filename: string; title: string; language: L
 /** One submission as a judge reported it; `at` is its time in seconds, 0 when unknown. */
 export type SubmissionRecord = { status: string; url?: string; at: number };
 
-/** `sessionUrl`: the page that has this problem's verdict when only the logged-in user is shown it (a running DOJ contest); see `session_pages` in submissions.rs. */
-export type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[]; sessionUrl?: string };
+export type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[] };
 
 export type BackgroundImageFile = { bytes: number[]; mime: string };
 

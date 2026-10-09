@@ -145,6 +145,25 @@ pub fn browser_fill_submission(_window: Window, _state: tauri::State<'_, Browser
     Err(REASON.into())
 }
 
+/// A page read with the problem browser's cookies; never made here.
+pub struct SessionPage {
+    pub url: String,
+    pub body: String,
+}
+
+pub fn session_ready() -> bool {
+    false
+}
+
+pub fn session_fetch(_app: &AppHandle, _url: &str) -> Result<SessionPage, String> {
+    Err(REASON.into())
+}
+
+#[tauri::command]
+pub async fn browser_fetch_text(_app: AppHandle, _url: String) -> Result<String, String> {
+    Err(REASON.into())
+}
+
 #[tauri::command]
 pub fn browser_extension_remove(_state: tauri::State<'_, BrowserState>, _id: String) -> Result<(), String> {
     Err(REASON.into())

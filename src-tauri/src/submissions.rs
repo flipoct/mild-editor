@@ -1,9 +1,9 @@
 //! Polling the judges for the verdict of the latest submission to each problem.
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, time::Duration};
+use std::{collections::BTreeSet, fs, path::Path, sync::Mutex, time::Duration};
 
-use crate::import::is_cloudflare_challenge;
+use crate::import::{doj_wants_login, is_cloudflare_challenge, session_get, SessionGet};
 use crate::workspace::{workspace_metadata_path, write_workspace_metadata, SubmissionRecord, WorkspaceMetadata};
 use crate::HTTP_CONNECT_TIMEOUT;
 
@@ -16,17 +16,6 @@ pub(crate) struct SubmissionStatusRequest {
     atcoder_handle: String,
     codeforces_handle: String,
     doj_handle: String,
-    /// Pages only the logged-in user can read, fetched through the problem browser's session
-    /// and handed in by the frontend, since the client here has no login. Each one answers a
-    /// `session_url` of an earlier poll.
-    #[serde(default)]
-    session_pages: Vec<SessionPage>,
-}
-
-#[derive(Deserialize)]
-struct SessionPage {
-    url: String,
-    html: String,
 }
 
 #[derive(Deserialize)]
@@ -48,10 +37,6 @@ pub(crate) struct SubmissionStatus {
     /// Everything known about this problem's submissions, oldest first.
     #[serde(default)]
     submissions: Vec<SubmissionRecord>,
-    /// Where this problem's verdict is when no public page has it: a page of the judge that
-    /// only the logged-in user is shown. The poll wants it back as a `session_pages` entry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    session_url: Option<String>,
 }
 
 pub(crate) fn codeforces_problem_key(url: &str) -> Option<(i64, String)> {
@@ -82,21 +67,6 @@ fn doj_problem_id(url: &str) -> Option<String> {
     (!id.is_empty() && id.chars().all(|character| character.is_ascii_digit())).then(|| id.to_string())
 }
 
-/// The page that lists the user's submissions to the contest a DOJ problem was opened from
-/// (`?contest=<key>` on its URL). While the contest runs they are nowhere else: the site-wide
-/// status page leaves them out until it is over. DOJ shows the page to a logged-in
-/// participant only and sends anyone else to the login.
-fn doj_contest_submissions_url(url: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(url).ok()?;
-    let key = parsed.query_pairs().find(|(name, value)| name == "contest" && !value.is_empty())?.1.into_owned();
-    let parts = parsed.path_segments()?.collect::<Vec<_>>();
-    let locale = parts.iter().position(|part| *part == "problems").filter(|at| *at > 0).map(|at| parts[at - 1]).unwrap_or("ko");
-    let mut page = parsed.join(&format!("/{locale}/contests/")).ok()?;
-    page.path_segments_mut().ok()?.pop_if_empty().push(&key).push("submissions");
-    page.set_query(None);
-    Some(page.to_string())
-}
-
 /// One row of a DOJ submissions table; the page lists the newest first.
 #[derive(Debug, PartialEq)]
 struct DojSubmission {
@@ -121,12 +91,77 @@ fn parse_doj_submissions(html: &str) -> Vec<DojSubmission> {
     }).collect()
 }
 
-/// The verdict of the user's newest submission to one problem on a DOJ submissions page.
-/// The rows are checked rather than trusted to be what the URL asked for.
-fn doj_verdict(html: &str, problem_id: &str, handle: &str) -> Option<String> {
-    let row = parse_doj_submissions(html).into_iter().find(|row| row.problem == problem_id && row.user.as_deref().is_none_or(|user| user.eq_ignore_ascii_case(handle)))?;
+/// The verdict of the user's newest submission to one problem among the rows of a DOJ
+/// submissions page. The rows are checked rather than trusted to be what the URL asked for.
+fn doj_verdict_among(rows: &[DojSubmission], problem_id: &str, handle: &str) -> Option<String> {
+    let row = rows.iter().find(|row| row.problem == problem_id && row.user.as_deref().is_none_or(|user| user.eq_ignore_ascii_case(handle)))?;
     let values = row.score.split('/').collect::<Vec<_>>();
     Some(if values.len() == 2 && values[0] == values[1] { "AC".into() } else if row.score.is_empty() { "JUDGING".into() } else { format!("SCORE {}", row.score) })
+}
+
+fn doj_verdict(html: &str, problem_id: &str, handle: &str) -> Option<String> {
+    doj_verdict_among(&parse_doj_submissions(html), problem_id, handle)
+}
+
+/// The page a DOJ verdict links to. It depends on the problem alone, not on which page the
+/// verdict was read from this time: the link is how the editor tells one submission from
+/// the next, and a poll that changed source must not look like a new submission. A contest
+/// problem's is "내 제출", since the public status page leaves a running contest out.
+fn doj_submissions_page(source_url: &str, problem_id: &str, handle: &str) -> String {
+    let in_contest = reqwest::Url::parse(source_url).is_ok_and(|parsed| parsed.query_pairs().any(|(name, value)| name == "contest" && !value.is_empty()));
+    let mut url = reqwest::Url::parse(if in_contest { "https://doj.kr/ko/submissions" } else { "https://doj.kr/ko/status" }).unwrap();
+    if !in_contest { url.query_pairs_mut().append_pair("user", handle); }
+    url.query_pairs_mut().append_pair("problem", problem_id);
+    url.to_string()
+}
+
+/// How many problems one poll may ask "내 제출" about by number (see [`DojSession`]).
+const DOJ_LOOKUPS_PER_POLL: usize = 3;
+/// The DOJ problems "내 제출" has been asked about by number in this run.
+static DOJ_LOOKED_UP: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// DOJ's "내 제출" (`/ko/submissions`), read with the login of the problem browser. It has
+/// every submission of the user's, a running contest's included, which the public status
+/// page leaves out until the contest is over.
+///
+/// The poll comes round every 20 seconds for every problem of the workspace, so it costs
+/// one request, whatever their number: the unfiltered page is the user's newest 20
+/// submissions across all problems, and a new submission is by definition at its top. A
+/// problem with no row there is asked for by number (`?problem=<id>`) once in the run of
+/// the app, a few problems a poll — that finds the verdict of a submission older than the
+/// page reaches, and after it nothing about the problem can change without showing up on
+/// the unfiltered page.
+struct DojSession<'a> {
+    get: SessionGet<'a>,
+    handle: &'a str,
+    recent: Vec<DojSubmission>,
+    lookups_left: usize,
+    looked_up: &'a mut BTreeSet<String>,
+}
+
+impl<'a> DojSession<'a> {
+    /// `None` when the session cannot be used and the public page has to do: no browser
+    /// running, the judge out of reach, the user logged out, or a page that is not the list.
+    fn open(get: SessionGet<'a>, handle: &'a str, looked_up: &'a mut BTreeSet<String>) -> Option<Self> {
+        let recent = Self::page(get, "https://doj.kr/ko/submissions")?;
+        Some(Self { get, handle, recent, lookups_left: DOJ_LOOKUPS_PER_POLL, looked_up })
+    }
+
+    fn page(get: SessionGet, url: &str) -> Option<Vec<DojSubmission>> {
+        let (final_url, html) = get(url).ok()?;
+        // With no submissions the table is still there, holding one row that says so.
+        (!doj_wants_login(&final_url, &html) && html.contains("<table")).then(|| parse_doj_submissions(&html))
+    }
+
+    fn verdict(&mut self, problem_id: &str) -> Option<String> {
+        if let Some(verdict) = doj_verdict_among(&self.recent, problem_id, self.handle) { return Some(verdict); }
+        // An empty list is a user who has submitted nothing at all.
+        if self.recent.is_empty() || self.lookups_left == 0 || self.looked_up.contains(problem_id) { return None; }
+        self.lookups_left -= 1;
+        let rows = Self::page(self.get, &format!("https://doj.kr/ko/submissions?problem={problem_id}"))?;
+        self.looked_up.insert(problem_id.to_string());
+        doj_verdict_among(&rows, problem_id, self.handle)
+    }
 }
 
 /// The user's latest submissions from the official API, newest first. The API is not behind
@@ -215,7 +250,9 @@ fn record_submission(history: &mut Vec<SubmissionRecord>, status: &SubmissionSta
     }
 }
 
-fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
+/// `session` reads a judge's page with the login of the problem browser; `None` while that
+/// browser is not running, which a poll is no reason to change.
+fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: Option<SessionGet>) -> Result<Vec<SubmissionStatus>, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("MildEditor/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(20))
@@ -245,12 +282,15 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
         fetch_atcoder_submissions(&client, request.atcoder_handle.trim(), from_second)
     };
     let mut atcoder_extended_submissions: Option<Vec<serde_json::Value>> = None;
+    let doj_handle = request.doj_handle.trim().to_string();
+    let polls_doj = !doj_handle.is_empty() && request.problems.iter().any(|problem| problem.source == "doj" && doj_problem_id(&problem.source_url).is_some());
+    let mut doj_looked_up = DOJ_LOOKED_UP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut doj_session = session.filter(|_| polls_doj).and_then(|get| DojSession::open(get, &doj_handle, &mut doj_looked_up));
 
     for problem in request.problems {
         let mut status = None;
         let mut submission_url = None;
         let mut submitted_at = 0u64;
-        let mut session_url = None;
         match problem.source.as_str() {
             "codeforces" if !request.codeforces_handle.trim().is_empty() => {
                 if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
@@ -293,35 +333,28 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                     }
                 }
             }
-            "doj" if !request.doj_handle.trim().is_empty() => {
+            "doj" if !doj_handle.is_empty() => {
                 if let Some(problem_id) = doj_problem_id(&problem.source_url) {
-                    let handle = request.doj_handle.trim();
-                    let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
-                    url.query_pairs_mut().append_pair("user", handle).append_pair("problem", &problem_id);
-                    if let Ok(html) = client.get(url.clone()).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()) {
-                        if let Some(verdict) = doj_verdict(&html, &problem_id, handle) {
-                            status = Some(verdict);
-                            submission_url = Some(url.to_string());
+                    let verdict = match doj_session.as_mut() {
+                        // Logged in, "내 제출" is the whole answer: asking the public page as
+                        // well could only bring back an older submission than the one it has.
+                        Some(session) => session.verdict(&problem_id),
+                        None => {
+                            let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
+                            url.query_pairs_mut().append_pair("user", &doj_handle).append_pair("problem", &problem_id);
+                            client.get(url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()).ok()
+                                .and_then(|html| doj_verdict(&html, &problem_id, &doj_handle))
                         }
-                    }
-                    // Nothing public: for a contest problem that is how a running contest
-                    // looks, and its submissions are on a page the login alone opens. The
-                    // public page still goes first, because once the contest is over it has
-                    // the later submissions as well and this one stops at the contest's.
-                    if status.is_none() {
-                        if let Some(contest_url) = doj_contest_submissions_url(&problem.source_url) {
-                            if let Some(verdict) = request.session_pages.iter().find(|page| page.url == contest_url).and_then(|page| doj_verdict(&page.html, &problem_id, handle)) {
-                                status = Some(verdict);
-                                submission_url = Some(contest_url.clone());
-                            }
-                            session_url = Some(contest_url);
-                        }
+                    };
+                    if let Some(verdict) = verdict {
+                        status = Some(verdict);
+                        submission_url = Some(doj_submissions_page(&problem.source_url, &problem_id, &doj_handle));
                     }
                 }
             }
             _ => {}
         }
-        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new(), session_url });
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new() });
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
@@ -342,8 +375,8 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
                     if let Some(url) = effective_url {
                         if let Some(index) = statuses.iter().position(|result| result.source_url == url.as_str()) {
                             problem.source_url = Some(url);
-                            // A poll that learned nothing (a judge out of reach, a contest
-                            // page not handed in) is no reason to forget the verdict on file.
+                            // A poll that learned nothing (a judge out of reach, a submission
+                            // too old for the page it read) is no reason to forget the verdict on file.
                             if statuses[index].status.is_some() { problem.judge_status = statuses[index].status.clone(); }
                             record_submission(&mut problem.submissions, &statuses[index]);
                             statuses[index].submissions = problem.submissions.clone();
@@ -362,8 +395,12 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest) -> Result<
 }
 
 #[tauri::command]
-pub(crate) async fn refresh_submission_statuses(request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
-    tauri::async_runtime::spawn_blocking(move || refresh_submission_statuses_sync(request)).await.map_err(|error| error.to_string())?
+pub(crate) async fn refresh_submission_statuses(app: tauri::AppHandle, request: SubmissionStatusRequest) -> Result<Vec<SubmissionStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Blocks until the main thread has answered: fine here, off it.
+        let session = session_get(&app);
+        refresh_submission_statuses_sync(request, crate::browser::session_ready().then_some(&session as SessionGet))
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -399,17 +436,78 @@ mod tests {
     }
 
     #[test]
-    fn doj_problem_urls_give_the_number_and_the_contests_own_page() {
+    fn doj_problem_urls_give_the_number_and_the_page_of_its_verdicts() {
         assert_eq!(doj_problem_id("https://doj.kr/ko/problems/286").as_deref(), Some("286"));
         assert_eq!(doj_problem_id("https://doj.kr/en/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").as_deref(), Some("286"));
         assert_eq!(doj_problem_id("https://doj.kr/ko/problems/286/ide").as_deref(), Some("286"));
+        // A virtual contest's problem: its verdicts are on the public page under the number.
+        let in_virtual = "https://doj.kr/ko/problems/550?category=school%2Fsju%2Fsjupc2026&virtual=cmvirtualkey000000000000x";
+        assert_eq!(doj_problem_id(in_virtual).as_deref(), Some("550"));
+        assert_eq!(doj_problem_id("https://doj.kr/ko/problems/550/ide?category=school%2Fsju%2Fsjupc2026&virtual=key").as_deref(), Some("550"));
         // The status page cannot filter by slug, so a slug is no problem id at all.
         assert_eq!(doj_problem_id("https://doj.kr/ko/problems/bracketstring"), None);
         assert_eq!(doj_problem_id("https://doj.kr/ko/contests/bcd7"), None);
+        assert_eq!(doj_problem_id("https://doj.kr/ko/categories/school/sju/sjupc2026?virtual=key"), None);
 
-        assert_eq!(doj_contest_submissions_url("https://doj.kr/en/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").as_deref(), Some("https://doj.kr/en/contests/cmtimve8l0e0wokcqksb6wqez/submissions"));
-        assert_eq!(doj_contest_submissions_url("https://doj.kr/ko/problems/286"), None);
-        assert_eq!(doj_contest_submissions_url("https://doj.kr/ko/problems/286?contest="), None);
+        assert_eq!(doj_submissions_page("https://doj.kr/ko/problems/286", "286", "a b"), "https://doj.kr/ko/status?user=a+b&problem=286");
+        assert_eq!(doj_submissions_page(in_virtual, "550", "flip"), "https://doj.kr/ko/status?user=flip&problem=550");
+        assert_eq!(doj_submissions_page("https://doj.kr/en/problems/286?contest=key", "286", "flip"), "https://doj.kr/ko/submissions?problem=286");
+    }
+
+    #[test]
+    fn doj_session_settles_a_poll_from_one_page_and_looks_up_the_rest_once() {
+        let table = |rows: &[String]| format!("<table><thead><tr><th>제출자</th><th>문제</th><th>점수</th></tr></thead><tbody>{}</tbody></table>", rows.concat());
+        let none = "<table><tbody><tr><td colspan=\"8\" class=\"muted\">표시할 제출이 아직 없습니다.</td></tr></tbody></table>".to_string();
+        let full = "100<!-- --> / <!-- -->100";
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let recent = table(&[doj_row("me", "550", "gogi-mandu", "is-solved is-full", full), doj_row("me", "302", "tinymita", "is-partial", "40<!-- --> / <!-- -->100"), doj_row("me", "550", "gogi-mandu", "is-partial", "0<!-- --> / <!-- -->100")]);
+        let site = |url: &str| -> Result<(String, String), String> {
+            asked.borrow_mut().push(url.trim_start_matches("https://doj.kr/ko/submissions").to_string());
+            Ok((url.to_string(), match url {
+                "https://doj.kr/ko/submissions" => recent.clone(),
+                "https://doj.kr/ko/submissions?problem=551" => table(&[doj_row("me", "551", "three", "is-solved is-full", full)]),
+                // A filter the site dropped: rows of other problems are not this one's.
+                "https://doj.kr/ko/submissions?problem=553" => recent.clone(),
+                _ => none.clone(),
+            }))
+        };
+        let mut looked_up = BTreeSet::new();
+        {
+            let mut session = DojSession::open(&site, "Me", &mut looked_up).expect("logged in");
+            assert_eq!(session.verdict("550").as_deref(), Some("AC"));
+            assert_eq!(session.verdict("302").as_deref(), Some("SCORE 40/100"));
+            assert_eq!(*asked.borrow(), vec![""], "the problems on the page cost nothing more");
+            assert_eq!(session.verdict("551").as_deref(), Some("AC"));
+            assert_eq!(session.verdict("552"), None);
+            assert_eq!(session.verdict("553"), None);
+            // The poll's allowance is spent: the next problem waits for the next poll.
+            assert_eq!(session.verdict("554"), None);
+            assert_eq!(*asked.borrow(), vec!["", "?problem=551", "?problem=552", "?problem=553"]);
+        }
+        asked.borrow_mut().clear();
+        {
+            let mut session = DojSession::open(&site, "me", &mut looked_up).expect("logged in");
+            assert_eq!([session.verdict("551"), session.verdict("552"), session.verdict("553")], [None, None, None]);
+            assert_eq!(session.verdict("554"), None);
+            assert_eq!(*asked.borrow(), vec!["", "?problem=554"], "each problem is asked for by number once");
+            // Somebody else's rows are nobody's verdict here.
+            assert_eq!(DojSession::open(&site, "other", &mut BTreeSet::from(["550".to_string()])).expect("logged in").verdict("550"), None);
+        }
+
+        // Nothing submitted at all: there is nothing to look up either.
+        let empty = |url: &str| -> Result<(String, String), String> { assert_eq!(url, "https://doj.kr/ko/submissions"); Ok((url.to_string(), none.clone())) };
+        assert_eq!(DojSession::open(&empty, "me", &mut BTreeSet::new()).expect("logged in").verdict("550"), None);
+
+        // No session to use: the browser is not running, the user is logged out, the page is not the list.
+        let logged_out = |url: &str| -> Result<(String, String), String> { Ok((url.to_string(), r#"<script>self.__next_f.push([1,"19:E{\"digest\":\"NEXT_REDIRECT;replace;/ko/login;307;\"}"])</script>"#.to_string())) };
+        assert!(DojSession::open(&logged_out, "me", &mut BTreeSet::new()).is_none());
+        assert!(DojSession::open(&|_| Err("The problem browser has not been opened yet.".into()), "me", &mut BTreeSet::new()).is_none());
+        assert!(DojSession::open(&|url| Ok((url.to_string(), "<html><body>502</body></html>".into())), "me", &mut BTreeSet::new()).is_none());
+        // A lookup that failed is not held against the problem: it is asked again.
+        let flaky = |url: &str| -> Result<(String, String), String> { if url.contains('?') { Err("timeout".into()) } else { Ok((url.to_string(), recent.clone())) } };
+        let mut retried = BTreeSet::new();
+        assert_eq!(DojSession::open(&flaky, "me", &mut retried).expect("logged in").verdict("551"), None);
+        assert!(retried.is_empty());
     }
 
     #[test]
@@ -421,11 +519,11 @@ mod tests {
         // By slug the filter is dropped: twenty rows of everything, none of them to be mistaken for #634.
         let unfiltered = parse_doj_submissions(&page("user=woohyunjng&problem=bracketstring"));
         assert!(unfiltered.len() > 1 && unfiltered.iter().any(|row| row.problem != unfiltered[0].problem), "{unfiltered:?}");
-        // The contest's own page exists under the key a problem link carries, and is the login's alone.
-        let contest_url = doj_contest_submissions_url("https://doj.kr/ko/problems/286?contest=cmtimve8l0e0wokcqksb6wqez").unwrap();
-        let contest_page = client.get(&contest_url).send().unwrap().error_for_status().unwrap().text().unwrap();
-        assert!(contest_page.contains("NEXT_REDIRECT;replace;/ko/login"), "the contest submissions page no longer sends a visitor to the login");
-        assert!(parse_doj_submissions(&contest_page).is_empty());
+        // "내 제출" is the login's alone, and says so the way `doj_wants_login` reads it.
+        let mine = "https://doj.kr/ko/submissions?problem=286";
+        let answer = client.get(mine).send().unwrap().error_for_status().unwrap().text().unwrap();
+        assert!(doj_wants_login(mine, &answer), "the submissions page no longer sends a visitor to the login");
+        assert!(parse_doj_submissions(&answer).is_empty());
     }
 
     #[test]
@@ -446,7 +544,6 @@ mod tests {
             submission_url: url.map(str::to_string),
             submitted_at: at,
             submissions: Vec::new(),
-            session_url: None,
         };
         let mut history = Vec::new();
 
@@ -471,7 +568,7 @@ mod tests {
 
         // Nothing to report leaves the history alone, and it never grows without bound.
         let mut empty = Vec::new();
-        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new(), session_url: None });
+        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new() });
         assert!(empty.is_empty());
         let mut long = Vec::new();
         for index in 0..60 {

@@ -45,7 +45,8 @@ export const submitTarget = (sourceUrl: string | undefined): SubmitTarget | null
     if (problemSet) return { judge: "codeforces", url: "https://codeforces.com/problemset/submit", problemCode: `${problemSet[1]}${problemSet[2].toUpperCase()}` };
   }
   // DOJ submits from the problem's IDE page, `/<locale>/problems/<slug>/ide`. The query stays:
-  // a contest problem carries `?contest=<id>`, which is what makes it a contest submission.
+  // a contest problem carries `?contest=<id>` and a virtual contest's `?category=<path>&virtual=<key>`,
+  // which is what makes it a submission to that contest; the site's own IDE link keeps them as they are.
   const doj = host === "doj.kr" ? path.match(/^(.*\/problems\/([^/]+?))(?:\/ide)?$/) : null;
   if (doj && doj[2] !== "ide") return { judge: "doj", url: `${url.origin}${doj[1]}/ide${url.search}`, problemSlug: doj[2] };
   return null;

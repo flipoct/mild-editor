@@ -213,6 +213,7 @@ pub fn run() {
             browser::browser_extension_remove,
             browser::browser_import_page,
             browser::browser_fill_submission,
+            browser::browser_fetch_text,
             browser::browser_install_userscript,
             browser::problem_window_open,
             browser::problem_window_hide,

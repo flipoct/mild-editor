@@ -81,12 +81,22 @@ export const storedTemplate = (language: Language, source: ProblemSource = "othe
 
 export const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatMap((source) => (["cpp", "python"] as Language[]).map((language) => [templateStorageKey(source, language), storedTemplate(language, source)])));
 
+/**
+ * A DOJ page that lists a contest's problems: the contest itself (`/contests/<slug>`), or a
+ * category (`/categories/<path…>`), which with `?virtual=<key>` is a virtual contest. The
+ * same test as `is_doj_listing` in import.rs.
+ */
+const isDojListing = (url: URL) => {
+  const parts = url.pathname.split("/").filter(Boolean);
+  return !parts.includes("problems") && (parts.includes("contests") || parts.includes("categories"));
+};
+
 export const isContestImportUrl = (rawUrl: string) => {
   try {
     const url = new URL(rawUrl);
     if (url.hostname.endsWith("atcoder.jp")) return url.pathname.includes("/contests/") && !url.pathname.includes("/tasks/");
     // A DOJ contest problem is `/problems/<id>?contest=<key>`: the contest is in the query, not the path.
-    if (url.hostname.endsWith("doj.kr")) return url.pathname.includes("/contests/");
+    if (url.hostname.endsWith("doj.kr")) return isDojListing(url);
     return url.hostname.endsWith("codeforces.com") && url.pathname.includes("/contest/") && !url.pathname.includes("/problem/");
   } catch { return false; }
 };
@@ -100,13 +110,14 @@ export const NEEDS_BROWSER = "needs-browser: ";
 
 /**
  * Pages the bundled Competitive Companion has no parser for although the built-in importer
- * reads them: a DOJ contest (the extension's DOJ parser knows a problem page only). Asking
- * the extension there ends in "found no problem" and nothing imported.
+ * reads them: a DOJ contest, or the category page a virtual contest runs on (the extension's
+ * DOJ parser knows a problem page only). Asking the extension there ends in "found no
+ * problem" and nothing imported.
  */
 export const companionCannotParse = (rawUrl: string) => {
   try {
     const url = new URL(rawUrl);
-    return url.hostname.replace(/^www\./, "") === "doj.kr" && /\/contests\/[^/]+\/?$/.test(url.pathname);
+    return url.hostname.replace(/^www\./, "") === "doj.kr" && (/\/contests\/[^/]+\/?$/.test(url.pathname) || (isDojListing(url) && url.pathname.includes("/categories/")));
   } catch { return false; }
 };
 

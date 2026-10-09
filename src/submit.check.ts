@@ -16,6 +16,9 @@ eq("practice problem", submitTarget("https://doj.kr/ko/problems/1"),
   { judge: "doj", url: "https://doj.kr/ko/problems/1/ide", problemSlug: "1" });
 eq("contest problem keeps its contest", submitTarget("https://doj.kr/ko/problems/421?contest=cmt7b6o9w00063827xfnbigsa"),
   { judge: "doj", url: "https://doj.kr/ko/problems/421/ide?contest=cmt7b6o9w00063827xfnbigsa", problemSlug: "421" });
+eq("virtual contest problem keeps its category and key", submitTarget("https://doj.kr/ko/problems/550?category=school%2Fsju%2Fsjupc2026&virtual=cmvirtualkey000000000000x"),
+  { judge: "doj", url: "https://doj.kr/ko/problems/550/ide?category=school%2Fsju%2Fsjupc2026&virtual=cmvirtualkey000000000000x", problemSlug: "550" });
+eq("a virtual contest's page is not a problem", submitTarget("https://doj.kr/ko/categories/school/sju/sjupc2026?virtual=cmvirtualkey000000000000x"), null);
 eq("imported from the IDE page itself", submitTarget("https://doj.kr/en/problems/7/ide"),
   { judge: "doj", url: "https://doj.kr/en/problems/7/ide", problemSlug: "7" });
 eq("trailing slash", submitTarget("https://www.doj.kr/ko/problems/12/"),
