@@ -384,8 +384,10 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .explorer-metadata { padding-left: 14px; opacity: .55; font-size: var(--fs-xs); }
 .explorer-rename-row { min-width: 0; flex: 1; color: var(--text); }
 .explorer-rename-input { min-width: 0; flex: 1; height: 22px; padding: 0 6px; border-color: var(--accent); border-radius: var(--r-s); font-size: var(--fs-s); }
-.judge-badge { --tone: var(--danger); max-width: 72px; flex: 0 0 auto; overflow: hidden; padding: 2px 5px; border-radius: var(--r-s); background: color-mix(in srgb, var(--tone) 16%, transparent); color: var(--tone); font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.judge-badge { --tone: var(--danger); flex: 0 0 auto; padding: 2px 5px; border-radius: var(--r-s); background: color-mix(in srgb, var(--tone) 16%, transparent); color: var(--tone); font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .judge-badge.accepted { --tone: var(--success); }
+.judge-badge.partial { --tone: var(--warning); }
+.judge-badge.pending { --tone: var(--idle); }
 
 /* Menus and floating notices */
 .explorer-context-menu { position: fixed; z-index: 1100; width: 196px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-l); background: var(--bg-2); box-shadow: var(--elevation); }
@@ -644,7 +646,8 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .contest-problem:hover { border-color: var(--border); background: var(--bg-3); }
 .contest-problem.current { border-color: var(--accent); }
 .contest-problem strong { overflow: hidden; font-size: var(--fs-m); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.contest-problem span { overflow: hidden; color: var(--tone); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+/* The verdict wraps rather than being cut: a partial score is the number that matters. */
+.contest-problem span { color: var(--tone); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
 .contest-problem.solved { --tone: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border-subtle)); background: color-mix(in srgb, var(--success) 10%, var(--bg-1)); }
 .contest-problem.failed { --tone: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-subtle)); background: color-mix(in srgb, var(--danger) 8%, var(--bg-1)); }
 .contest-problem.ready { --tone: var(--accent); }
@@ -673,6 +676,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .verdict-notices { position: absolute; z-index: 30; top: 10px; right: 18px; width: min(280px, calc(100% - 36px)); display: grid; gap: 8px; pointer-events: none; }
 .verdict-notice { --tone: var(--danger); display: flex; align-items: stretch; overflow: hidden; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-left: 3px solid var(--tone); border-radius: var(--r-l); background: color-mix(in srgb, var(--tone) 10%, var(--bg-2)); color: var(--text); box-shadow: var(--elevation); pointer-events: auto; animation: dialog-in .16s ease-out; }
 .verdict-notice.accepted { --tone: var(--success); }
+.verdict-notice.partial { --tone: var(--warning); }
 .verdict-notice-body { min-width: 0; flex: 1; display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 8px; row-gap: 1px; padding: 9px 4px 9px 11px; border: 0; background: transparent; color: inherit; text-align: left; }
 .verdict-notice-body small { grid-column: 1 / -1; color: var(--muted); font-size: var(--fs-xs); }
 .verdict-notice-body strong { color: var(--tone); font-size: var(--fs-l); font-weight: 700; }

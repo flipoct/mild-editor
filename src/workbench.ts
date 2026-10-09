@@ -194,3 +194,39 @@ export const terminalKeyIsEditors = (event: TerminalKey, mac: boolean) =>
   (mac && event.metaKey)
   || (event.ctrlKey && !event.altKey && event.code === "Backquote")
   || ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "p");
+
+// --- Judge verdicts as they are shown -------------------------------------------------------
+
+export type VerdictTone = "accepted" | "partial" | "rejected" | "pending";
+
+/** `SCORE 94/100`, the way a judge with partial scoring reports a submission. */
+const scoreOf = (status: string) => {
+  const match = /^SCORE\s+(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/i.exec(status.trim());
+  return match ? { got: Number(match[1]), max: Number(match[2]), text: `${match[1]}/${match[2]}` } : null;
+};
+
+/** Accepted, including a full score. */
+export const verdictAccepted = (status: string | undefined) => {
+  if (!status) return false;
+  const score = scoreOf(status);
+  return score ? score.max > 0 && score.got >= score.max : status === "AC" || status === "OK";
+};
+
+/**
+ * A verdict as the editor shows it. A score reads like any other verdict: the full score is
+ * AC and nothing is WA, while anything between is PAC with the score kept beside it, since
+ * that number is what tells one partial answer from another.
+ */
+export const verdictView = (status: string | undefined): { text: string; tone: VerdictTone; title: string } => {
+  const raw = (status ?? "").trim();
+  const score = scoreOf(raw);
+  if (score) {
+    if (score.max > 0 && score.got >= score.max) return { text: "AC", tone: "accepted", title: score.text };
+    if (score.got <= 0) return { text: "WA", tone: "rejected", title: score.text };
+    return { text: `PAC ${score.text}`, tone: "partial", title: score.text };
+  }
+  if (raw === "AC" || raw === "OK") return { text: raw, tone: "accepted", title: raw };
+  // Still being judged: WJ, TESTING, or AtCoder's running count 12/34.
+  if (/^(WJ|WR|JUDGING|TESTING|IN QUEUE)$/i.test(raw) || /^\d+\s*\/\s*\d+/.test(raw)) return { text: raw, tone: "pending", title: raw };
+  return { text: raw, tone: "rejected", title: raw };
+};
