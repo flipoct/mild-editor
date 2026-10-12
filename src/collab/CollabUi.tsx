@@ -6,7 +6,7 @@ import { IS_TAURI } from "../platform";
 import { getSetting, useSetting } from "../settingsStore";
 import type { ProblemTab } from "../types";
 import { answerTaken, closeRoomWithTab, joinRoom, leaveRoom, openRoom, showCollabDialog, useCollab } from "./collabStore";
-import { DEFAULT_RELAY_PORT, formatInvite, parseInvite, peerName } from "./protocol";
+import { DEFAULT_RELAY_PORT, formatInvite, parseInvite, peerName, shortAddress } from "./protocol";
 
 type SharedTab = Pick<ProblemTab, "id" | "filename">;
 
@@ -105,6 +105,10 @@ function StartDialog({ t, activeTab, joining }: { t: Translate; activeTab: Share
   </ConfirmDialog>;
 }
 
+const REACH_MESSAGE = {
+  checking: "collabReachChecking", open: "collabReachOpen", "no-gateway": "collabReachNoGateway", nat: "collabReachNat", refused: "collabReachRefused",
+} as const;
+
 /** The room while it is open: how a teammate gets in, who is there, and the way out — the same for everyone in it. */
 function RoomDialog({ t }: { t: Translate }) {
   const local = useCollab((state) => state.local);
@@ -112,21 +116,27 @@ function RoomDialog({ t }: { t: Translate }) {
   const filename = useCollab((state) => state.filename);
   const address = useCollab((state) => state.address);
   const lanAddresses = useCollab((state) => state.lanAddresses);
+  const publicAddress = useCollab((state) => state.publicAddress);
+  const reach = useCollab((state) => state.reach);
   const code = useCollab((state) => state.code);
   const members = useCollab((state) => state.members);
   // On this computer the address the app itself uses is the loopback one, which is no use to anyone else.
-  const addresses = lanAddresses.length ? lanAddresses : [address];
+  const addresses = [...(lanAddresses.length ? lanAddresses : [shortAddress(address)]), ...(publicAddress ? [publicAddress] : [])];
+  const invite = formatInvite(addresses, code.replace(/-/g, ""));
   return <ConfirmDialog id="collab-room-title" eyebrow={t("collabRoom")} title={<>{t("collabRoomTitle")} · {filename}</>} cancel={t("collabDone")} onCancel={() => showCollabDialog(null)}
     actions={<button className="danger-button" onClick={() => void leaveRoom()}>{local ? t("collabLeaveEnd") : t("collabLeave")}</button>}>
     <div className="collab-form">
       <p>{t("collabRoomHelp")}</p>
+      <div className="collab-field"><span>{t("collabInvite")}</span>
+        <div className="collab-copy-row"><code className="collab-invite">{invite}</code><CopyButton text={invite} t={t} /></div>
+        {reach !== "none" && <small className={`collab-reach ${reach}`}>{t(REACH_MESSAGE[reach])}</small>}
+      </div>
       <div className="collab-field"><span>{t("collabAddress")}</span>
-        {addresses.map((item) => <div className="collab-copy-row" key={item}><code>{item}</code><CopyButton text={item} t={t} /></div>)}
+        {addresses.map((item) => <div className="collab-copy-row" key={item}><code>{item}</code>{item === publicAddress && <small>{t("collabPublic")}</small>}<CopyButton text={item} t={t} /></div>)}
       </div>
       <div className="collab-field"><span>{t("collabCode")}</span>
         <div className="collab-copy-row"><code className="collab-code">{code}</code><CopyButton text={code} t={t} /></div>
       </div>
-      <CopyButton text={formatInvite(addresses[0], code.replace(/-/g, ""))} label={t("collabCopyInvite")} t={t} />
       <div className="collab-field"><span>{t("collabMembers")} · <em className={link === "online" ? "online" : "offline"}>{link === "online" ? t("collabOnline") : t("collabOffline")}</em></span>
         <ul className="collab-members">
           {members.map((member) => <li key={member.id}><i style={{ background: member.color }} />{member.name}{member.self && <small>{t("collabYou")}</small>}</li>)}

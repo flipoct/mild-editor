@@ -43,6 +43,37 @@ type Options = {
 const CONNECT_TIMEOUT = 8000;
 
 /**
+ * Which of a relay's `addresses` answers first, or null when none does within the time a
+ * connection is given. An invitation lists every way to the computer a room runs on, and
+ * only some of them lead there from where the joiner sits — the rest never answer at all,
+ * which is why they are all tried at once and not in turn. The relay accepts a socket
+ * before it says anything about the room, so an opened one means "a relay is here", and
+ * whether the room is too is left to the connection that follows.
+ */
+export const firstReachable = (addresses: string[], roomId: string) => new Promise<string | null>((resolve) => {
+  const sockets: WebSocket[] = [];
+  let left = addresses.length;
+  const settle = (address: string | null) => {
+    window.clearTimeout(timer);
+    for (const socket of sockets) { socket.onopen = socket.onclose = null; socket.close(); }
+    resolve(address);
+  };
+  const timer = window.setTimeout(() => settle(null), CONNECT_TIMEOUT);
+  const failed = () => { left -= 1; if (left <= 0) settle(null); };
+  for (const address of addresses) {
+    try {
+      const socket = new WebSocket(roomUrl(address, roomId, false));
+      sockets.push(socket);
+      socket.onopen = () => settle(address);
+      socket.onclose = failed;
+    } catch {
+      failed();
+    }
+  }
+  if (!addresses.length) settle(null);
+});
+
+/**
  * How long a lost connection is retried before the room is called over for this peer. Long
  * enough for a relay to restart or a laptop to change networks; short enough that nobody
  * goes on believing they are in a room whose relay — a teammate's computer, perhaps — is gone.

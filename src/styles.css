@@ -454,6 +454,10 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .confirm-dialog p.collab-error { color: var(--danger); }
 .collab-copy-row { min-height: var(--control-l); display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--field); }
 .collab-copy-row code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-family: var(--font-mono); user-select: all; }
+.collab-copy-row small { flex: none; color: var(--muted); }
+.collab-field small.collab-reach { color: var(--muted); line-height: 1.4; }
+.collab-field small.collab-reach.open { color: var(--success); }
+.collab-field small.collab-reach.no-gateway, .collab-field small.collab-reach.nat, .collab-field small.collab-reach.refused { color: var(--warning); }
 .collab-copy { height: var(--control-s); flex: 0 0 auto; justify-self: start; padding: 0 8px; font-size: var(--fs-xs); }
 .collab-members { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .collab-members li { display: flex; align-items: center; gap: 7px; font-size: var(--fs-m); }

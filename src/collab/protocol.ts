@@ -100,25 +100,43 @@ export const normalizeRelayAddress = (typed: string): string | null => {
 /** The URL of a room on a relay. `open` creates the room if it is not there; without it only an existing room is joined. */
 export const roomUrl = (address: string, roomId: string, open: boolean) => `${address}/room/${roomId}${open ? "?open" : ""}`;
 
-/** Address and code as one line to send a teammate: `ws://192.168.0.7:10044#K7QM-2XWP-9HDT`. */
-export const formatInvite = (address: string, code: string) => `${address}#${formatJoinCode(code)}`;
+/**
+ * Several addresses of one relay, separated by commas: a room opened on a teammate's
+ * computer is reached at one address from the same network, at another through a VPN and
+ * at a third from outside, and whoever joins cannot be asked to know which is theirs. Null
+ * when any of them is not an address.
+ */
+export const normalizeRelayAddresses = (typed: string): string[] | null => {
+  const addresses = typed.split(",").map((part) => part.trim()).filter(Boolean).map(normalizeRelayAddress);
+  return addresses.length && addresses.every((address): address is string => address !== null) ? [...new Set(addresses)] : null;
+};
+
+/** An address as it is shown and sent: the scheme is left off where it is the plain one. */
+export const shortAddress = (address: string) => address.replace(/^ws:\/\//, "");
+
+/**
+ * Every way into a room as one line to send a teammate:
+ * `192.168.0.7:10044,211.36.140.7:10044#K7QM-2XWP-9HDT`.
+ */
+export const formatInvite = (addresses: string[], code: string) => `${addresses.map(shortAddress).join(",")}#${formatJoinCode(code)}`;
 
 /**
  * Takes an invitation apart again, wherever it was pasted. Either half may be missing: the
- * address alone, or a code alone, is returned as what it is.
+ * addresses alone, or a code alone, are returned as what they are.
  */
 export const parseInvite = (pasted: string): { address?: string; code?: string } => {
   const text = pasted.trim();
+  const shown = (addresses: string[]) => addresses.map(shortAddress).join(",");
   const split = /^(.*?)[#\s]+([^#\s]+(?:[\s-]+[^#\s]+)*)$/.exec(text);
   if (split) {
-    const address = normalizeRelayAddress(split[1]);
+    const addresses = normalizeRelayAddresses(split[1]);
     const code = normalizeJoinCode(split[2]);
-    if (address && code) return { address, code };
+    if (addresses && code) return { address: shown(addresses), code };
   }
   const code = normalizeJoinCode(text);
   if (code) return { code };
-  const address = normalizeRelayAddress(text);
-  return address ? { address } : {};
+  const addresses = normalizeRelayAddresses(text);
+  return addresses ? { address: shown(addresses) } : {};
 };
 
 // ── Derivation ──

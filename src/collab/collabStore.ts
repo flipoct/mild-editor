@@ -8,8 +8,8 @@ import { useLatest } from "../hooks";
 import type { messages } from "../i18n";
 import { errorMessage } from "../platform";
 import { createStore } from "../store";
-import { deriveRoom, formatJoinCode, generateJoinCode, normalizeJoinCode, normalizeRelayAddress, PEER_COLORS, peerName, pickPeerColor, roomFile, type RoomFile } from "./protocol";
-import { RelayProvider, type EndReason, type Link } from "./provider";
+import { deriveRoom, formatJoinCode, generateJoinCode, normalizeJoinCode, normalizeRelayAddress, normalizeRelayAddresses, PEER_COLORS, peerName, pickPeerColor, roomFile, type RoomFile } from "./protocol";
+import { firstReachable, RelayProvider, type EndReason, type Link } from "./provider";
 
 /**
  * A shared room, as this copy of the editor is in it: one file, edited by everyone in the
@@ -74,6 +74,13 @@ export type Member = { id: number; name: string; color: string; self: boolean };
  */
 export type CollabDialog = "open" | "join" | "room" | "taken" | "close" | null;
 
+/**
+ * Whether teammates outside this network can reach a room that runs on this computer:
+ * not asked (the room is on a relay, or is somebody else's), being asked of the router,
+ * `open` — the router forwards a port here — or the reason it does not.
+ */
+export type Reach = "none" | "checking" | "open" | "no-gateway" | "nat" | "refused";
+
 type CollabState = {
   dialog: CollabDialog;
   phase: "idle" | "starting" | "live";
@@ -88,6 +95,9 @@ type CollabState = {
   address: string;
   /** What a teammate on the same network types instead, when the relay is this computer's. */
   lanAddresses: string[];
+  /** And what one outside it types, once the router forwards a port here. */
+  publicAddress: string;
+  reach: Reach;
   code: string;
   members: Member[];
   /** The file a joiner already has under the room's name, and the name a copy would get instead. */
@@ -96,7 +106,7 @@ type CollabState = {
   error: { message: Message; detail?: string } | null;
 };
 
-const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, tabId: null, filename: "", link: "offline", address: "", lanAddresses: [], code: "", members: [], taken: null };
+const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, tabId: null, filename: "", link: "offline", address: "", lanAddresses: [], publicAddress: "", reach: "none", code: "", members: [], taken: null };
 
 export const collab = createStore<CollabState>({ ...IDLE, dialog: null, error: null });
 
@@ -450,26 +460,45 @@ export const openRoom = async (request: { tabId: string; name: string; relay: st
       live.text.insert(0, text);
       live.meta.set("file", JSON.stringify(tab.file));
     });
-    goLive(live, request.tabId, { filename: basename(tab.file.filename), address, lanAddresses, code: formatJoinCode(code), dialog: "room" });
+    goLive(live, request.tabId, { filename: basename(tab.file.filename), address, lanAddresses, code: formatJoinCode(code), dialog: "room", reach: live.local ? "checking" : "none" });
+    if (live.local) void reachOutside(live);
   } catch (error) {
     failed(room, error);
   }
 };
 
+const REACH = new Set<Reach>(["no-gateway", "nat", "refused"]);
+
 /**
- * Joins the room at `address` with `code`. Once somebody there has sent the document, its
+ * Asks the router to let teammates outside the network into a room on this computer. The
+ * room is open and usable meanwhile; the invitation gains an address when this works, and
+ * the room says why not when it does not.
+ */
+const reachOutside = async (room: Session) => {
+  const outcome = await invoke<string>("collab_forward_port").then((address) => ({ address }), (error: unknown) => ({ error: String(error) }));
+  if (session !== room) return;
+  if ("address" in outcome) collab.set({ reach: "open", publicAddress: outcome.address });
+  else collab.set({ reach: REACH.has(outcome.error as Reach) ? outcome.error as Reach : "refused" });
+};
+
+/**
+ * Joins the room at `address` with `code`. The address may be several, as an invitation
+ * gives them; the first that answers is the one the room is joined at. Once somebody there has sent the document, its
  * file becomes a file of this user's: under the name it has in the room, or — when they
  * already have one by that name — whichever way they answer the question that is asked.
  */
 export const joinRoom = async (request: { address: string; code: string; name: string }) => {
   if (session || collab.get().phase !== "idle") return;
-  const address = normalizeRelayAddress(request.address);
+  const addresses = normalizeRelayAddresses(request.address);
   const code = normalizeJoinCode(request.code);
-  if (!address || !code) { collab.set({ error: { message: address ? "collabErrCode" : "collabErrAddress" } }); return; }
+  if (!addresses || !code) { collab.set({ error: { message: addresses ? "collabErrCode" : "collabErrAddress" } }); return; }
   collab.set({ phase: "starting", error: null });
   let room: Session | null = null;
   try {
     const keys = await deriveRoom(code);
+    const address = addresses.length > 1 ? await firstReachable(addresses, keys.roomId) : addresses[0];
+    if (!address) throw "unreachable";
+    if (session || collab.get().phase !== "starting") return;
     // A first guess at a colour; `watchMembers` settles it once the others' are known.
     room = session = newSession(false, request.name, PEER_COLORS[1]);
     watchMembers(room);

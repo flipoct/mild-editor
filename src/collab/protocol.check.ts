@@ -2,7 +2,7 @@
  * A quick check of the shared-room protocol — the join code, what is derived from it, and
  * the frames — run with `node --experimental-strip-types src/collab/protocol.check.ts`.
  */
-import { DEFAULT_RELAY_PORT, deriveRoom, formatInvite, formatJoinCode, FRAME_VERSION, generateJoinCode, JOIN_CODE_LENGTH, KDF_ROUNDS, MESSAGE, normalizeJoinCode, normalizeRelayAddress, parseInvite, PEER_COLORS, peerName, pickPeerColor, reconnectDelay, roomFile, roomUrl, seal, unseal } from "./protocol.ts";
+import { DEFAULT_RELAY_PORT, deriveRoom, formatInvite, formatJoinCode, FRAME_VERSION, generateJoinCode, JOIN_CODE_LENGTH, KDF_ROUNDS, MESSAGE, normalizeJoinCode, normalizeRelayAddress, normalizeRelayAddresses, parseInvite, PEER_COLORS, peerName, pickPeerColor, reconnectDelay, roomFile, roomUrl, seal, unseal } from "./protocol.ts";
 
 let failed = 0;
 const eq = (label: string, got: unknown, want: unknown) => {
@@ -49,11 +49,19 @@ eq("whoever has the document may open the room", roomUrl("ws://h:1", "abc", true
 eq("a newcomer only joins it", roomUrl("wss://h/relay", "abc", false), "wss://h/relay/room/abc");
 
 // --- The invitation -----------------------------------------------------------------------
-eq("an invitation", formatInvite("ws://192.168.0.7:10044", "K7QM2XWP9HDT"), "ws://192.168.0.7:10044#K7QM-2XWP-9HDT");
-eq("and back", parseInvite("ws://192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "ws://192.168.0.7:10044", code: "K7QM2XWP9HDT" });
-eq("pasted with a space instead", parseInvite(" 192.168.0.7  k7qm 2xwp 9hdt\n"), { address: `ws://192.168.0.7:${DEFAULT_RELAY_PORT}`, code: "K7QM2XWP9HDT" });
+eq("an invitation", formatInvite(["ws://192.168.0.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7:10044#K7QM-2XWP-9HDT");
+eq("and back", parseInvite("192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044", code: "K7QM2XWP9HDT" });
+eq("with the scheme, as older rooms wrote it", parseInvite("ws://192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044", code: "K7QM2XWP9HDT" });
+eq("pasted with a space instead", parseInvite(" 192.168.0.7  k7qm 2xwp 9hdt\n"), { address: `192.168.0.7:${DEFAULT_RELAY_PORT}`, code: "K7QM2XWP9HDT" });
 eq("only a code", parseInvite("K7QM-2XWP-9HDT"), { code: "K7QM2XWP9HDT" });
-eq("only an address", parseInvite("192.168.0.7:10044"), { address: "ws://192.168.0.7:10044" });
+eq("only an address", parseInvite("192.168.0.7:10044"), { address: "192.168.0.7:10044" });
+eq("every way in, in one invitation", formatInvite(["192.168.0.7:10044", "100.101.102.103:10044", "211.36.140.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7:10044,100.101.102.103:10044,211.36.140.7:10044#K7QM-2XWP-9HDT");
+eq("and back, all of them", parseInvite("192.168.0.7:10044,211.36.140.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044,211.36.140.7:10044", code: "K7QM2XWP9HDT" });
+eq("a relay keeps its scheme", formatInvite(["wss://relay.example.org"], "K7QM2XWP9HDT"), "wss://relay.example.org#K7QM-2XWP-9HDT");
+eq("a relay's invitation back", parseInvite("wss://relay.example.org#K7QM-2XWP-9HDT"), { address: "wss://relay.example.org", code: "K7QM2XWP9HDT" });
+eq("several addresses", normalizeRelayAddresses("192.168.0.7, 10.0.0.2:4000,192.168.0.7"), [`ws://192.168.0.7:${DEFAULT_RELAY_PORT}`, "ws://10.0.0.2:4000"]);
+eq("one bad address spoils the list", normalizeRelayAddresses("192.168.0.7,two words"), null);
+eq("no addresses", normalizeRelayAddresses(" , "), null);
 eq("neither", parseInvite("hello there, friend"), {});
 
 // --- Derivation ---------------------------------------------------------------------------

@@ -29,6 +29,8 @@ portable-pty = "0.9"
 # The relay a shared room runs on (src/collab.rs opens one inside the app). Its own package:
 # the same code is the standalone `mild-relay` server, see relay/Cargo.toml.
 mild-relay = { path = "relay" }
+# Asks the router (UPnP) to let teammates outside the network reach a room opened here.
+igd-next = "0.18"
 
 # Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
 # builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.

@@ -8,13 +8,21 @@
 //! (src/collab) — except that this one ends when its opener leaves, since the relay goes
 //! with them. Nothing listens until a room is opened, and closing it frees the port.
 //!
+//! A teammate somewhere else reaches this computer only if the router lets them in, so
+//! while the room is open the router is asked (UPnP) to forward the port here, the way
+//! games that host on the player's own machine do. The forward is taken back with the room.
+//! Where the router will not, or the network has no public address of its own, the room is
+//! simply one for the local network — or a VPN the team shares — as before.
+//!
 //! The join code never comes here: the frontend makes it, and derives the room id and the
 //! key from it.
 
+use igd_next::{AddPortError, Gateway, PortMappingProtocol, SearchOptions};
 use mild_relay::{Limits, Server};
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub use mild_relay::DEFAULT_PORT;
 
@@ -28,8 +36,21 @@ pub struct RelayStatus {
     pub addresses: Vec<String>,
 }
 
+/// A port the router forwards to the relay, to be given back when the room closes.
+struct Forward {
+    gateway: Gateway,
+    external_port: u16,
+    /// The relay's port the forward leads to; a relay moved elsewhere needs a new one.
+    internal_port: u16,
+    /// What a teammate outside types: the router's public address and the forwarded port.
+    address: String,
+}
+
 #[derive(Default)]
-pub struct CollabState(Mutex<Option<Server>>);
+pub struct CollabState {
+    server: Mutex<Option<Server>>,
+    forward: Mutex<Option<Forward>>,
+}
 
 /// The relay inside the app serves the one room its user opened, not the network.
 fn limits() -> Limits {
@@ -39,7 +60,7 @@ fn limits() -> Limits {
 /// Starts the relay on every IPv4 interface. Asking again for the port it is already on
 /// keeps it — and the room on it — as it is.
 pub fn open(state: &CollabState, port: u16) -> Result<u16, String> {
-    let mut guard = state.0.lock().map_err(|_| "Could not lock the room state.")?;
+    let mut guard = state.server.lock().map_err(|_| "Could not lock the room state.")?;
     if let Some(server) = guard.as_ref() {
         if port == server.local_addr().port() {
             return Ok(port);
@@ -48,6 +69,7 @@ pub fn open(state: &CollabState, port: u16) -> Result<u16, String> {
     // Stopped before the new one binds; stopping waits for the old listener to be gone.
     if let Some(server) = guard.take() {
         server.stop();
+        unforward(state);
     }
     let server = Server::start(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), limits())
         .map_err(|error| format!("Could not listen on port {port}: {error}"))?;
@@ -58,14 +80,19 @@ pub fn open(state: &CollabState, port: u16) -> Result<u16, String> {
 
 /// Ends the room for everyone connected and frees the port before returning.
 pub fn close(state: &CollabState) {
-    let server = state.0.lock().ok().and_then(|mut guard| guard.take());
+    let server = state.server.lock().ok().and_then(|mut guard| guard.take());
     if let Some(server) = server {
         server.stop();
     }
+    unforward(state);
+}
+
+fn relay_port(state: &CollabState) -> Option<u16> {
+    state.server.lock().ok().and_then(|guard| guard.as_ref().map(|server| server.local_addr().port()))
 }
 
 pub fn status(state: &CollabState) -> RelayStatus {
-    let port = state.0.lock().ok().and_then(|guard| guard.as_ref().map(|server| server.local_addr().port()));
+    let port = relay_port(state);
     RelayStatus { open: port.is_some(), port, addresses: if port.is_some() { lan_addresses() } else { Vec::new() } }
 }
 
@@ -101,6 +128,102 @@ fn lan_addresses() -> Vec<String> {
         }
     }
     addresses
+}
+
+// ── Letting teammates elsewhere in ──
+
+/// How long the router keeps the forward if the app never takes it back (a crash, a power
+/// cut): longer than any contest, short enough not to be found there next week.
+const LEASE_SECONDS: u32 = 12 * 60 * 60;
+const FORWARD_NAME: &str = "mild editor shared room";
+
+/// Whether `address` is one the internet routes to. A router whose "external" address is
+/// not — a second router in front of it, or the provider's shared NAT (100.64/10) — can
+/// forward all it likes; nobody outside will arrive.
+fn is_public(address: Ipv4Addr) -> bool {
+    let [a, b, ..] = address.octets();
+    !(address.is_private() || address.is_loopback() || address.is_link_local() || address.is_unspecified()
+        || address.is_broadcast() || address.is_documentation() || address.is_multicast()
+        || (a == 100 && (b & 0xC0) == 64) || a == 0 || a >= 240)
+}
+
+/// Asks the router to forward the relay's port to this computer, and returns the address a
+/// teammate outside the network connects to. An error is one of a few words the frontend
+/// has a sentence for: `closed` (no room is open), `no-gateway` (no router answered),
+/// `nat` (it has no public address) or `refused`.
+///
+/// Blocks for as long as the router takes to answer — up to a few seconds when there is
+/// none — so it is run off the main thread, after the room is already open.
+pub fn forward(state: &CollabState) -> Result<String, &'static str> {
+    let port = relay_port(state).ok_or("closed")?;
+    let known = state.forward.lock().ok().and_then(|guard| guard.as_ref().filter(|known| known.internal_port == port).map(|known| known.address.clone()));
+    if let Some(address) = known {
+        return Ok(address);
+    }
+    unforward(state);
+    let mut search = SearchOptions::default();
+    search.timeout = Some(Duration::from_secs(3));
+    let gateway = igd_next::search_gateway(search).map_err(|_| "no-gateway")?;
+    let external = match gateway.get_external_ip() {
+        Ok(IpAddr::V4(address)) if is_public(address) => address,
+        Ok(_) => return Err("nat"),
+        Err(_) => return Err("refused"),
+    };
+    // The address of this computer on the router's network: the one a socket towards the
+    // router is given.
+    let local = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|socket| { socket.connect(gateway.addr)?; socket.local_addr() }).map_err(|_| "refused")?;
+    let local = SocketAddr::new(local.ip(), port);
+    let add = |external_port: u16, lease: u32| gateway.add_port(PortMappingProtocol::TCP, external_port, local, lease, FORWARD_NAME);
+    let external_port = match add(port, LEASE_SECONDS) {
+        Ok(()) => port,
+        // Some routers only keep forwards until they are told to drop them.
+        Err(AddPortError::OnlyPermanentLeasesSupported) => add(port, 0).map(|()| port).map_err(|_| "refused")?,
+        // Another computer behind this router has the same port: any other one will do,
+        // since the invitation carries it.
+        Err(AddPortError::PortInUse) => gateway.add_any_port(PortMappingProtocol::TCP, local, LEASE_SECONDS, FORWARD_NAME).map_err(|_| "refused")?,
+        Err(_) => return Err("refused"),
+    };
+    let address = format!("{external}:{external_port}");
+    let made = Forward { gateway, external_port, internal_port: port, address: address.clone() };
+    // The room may have been closed while the router was thinking.
+    if relay_port(state) != Some(port) {
+        drop_forward(made);
+        return Err("closed");
+    }
+    match state.forward.lock() {
+        Ok(mut guard) => *guard = Some(made),
+        Err(_) => {
+            drop_forward(made);
+            return Err("refused");
+        }
+    }
+    Ok(address)
+}
+
+/// Gives the forwarded port back. Waits for the router only briefly: this also runs while
+/// the window is closing, and a router that has gone quiet must not hold that up — the
+/// lease ends the forward by itself then.
+fn drop_forward(forward: Forward) {
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = forward.gateway.remove_port(PortMappingProtocol::TCP, forward.external_port);
+        let _ = done.send(());
+    });
+    let _ = wait.recv_timeout(Duration::from_secs(2));
+}
+
+fn unforward(state: &CollabState) {
+    let forward = state.forward.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(forward) = forward {
+        drop_forward(forward);
+    }
+}
+
+#[tauri::command]
+pub async fn collab_forward_port(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || forward(&app.state::<CollabState>()).map_err(str::to_string))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -166,6 +289,22 @@ mod tests {
         let error = open(&state, port).expect_err("the port is in use");
         assert!(error.contains(&port.to_string()), "unexpected message: {error}");
         assert!(!status(&state).open);
+    }
+
+    #[test]
+    fn only_an_address_the_internet_routes_to_is_worth_forwarding_from() {
+        for public in ["211.36.140.7", "1.1.1.1", "100.63.255.255", "100.128.0.1", "172.32.0.1"] {
+            assert!(is_public(public.parse().unwrap()), "{public}");
+        }
+        // A router behind another router, or behind the provider's shared NAT.
+        for inside in ["192.168.0.1", "10.4.2.1", "172.16.0.1", "172.31.255.254", "100.64.0.1", "100.127.255.254", "169.254.1.1", "127.0.0.1", "0.0.0.0", "255.255.255.255", "240.0.0.1", "224.0.0.251"] {
+            assert!(!is_public(inside.parse().unwrap()), "{inside}");
+        }
+    }
+
+    #[test]
+    fn without_a_room_nothing_is_asked_of_the_router() {
+        assert_eq!(forward(&CollabState::default()), Err("closed"));
     }
 
     #[test]

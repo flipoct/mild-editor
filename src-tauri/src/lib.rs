@@ -209,6 +209,7 @@ pub fn run() {
             collab::collab_open_relay,
             collab::collab_close_relay,
             collab::collab_relay_status,
+            collab::collab_forward_port,
             browser::browser_status,
             browser::browser_open,
             browser::browser_set_bounds,
