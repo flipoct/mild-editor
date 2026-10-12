@@ -38,6 +38,8 @@ import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceDirectories, useWorkspacePath, type RelocatedFolder } from "./workspaceStore";
+import { attachCollabEditor, collab, leaveRoom, reconcileSharedTab, replaceSharedText, showCollabDialog, useCollab, useCollabBridge } from "./collab/collabStore";
+import { CollabChip, CollabDialogs } from "./collab/CollabUi";
 
 /** What the editor and the test panel read while no file is open. Constants, so nothing re-runs over them. */
 const NO_CODES: Record<Language, string> = { cpp: "", python: "" };
@@ -209,6 +211,10 @@ function App() {
       ? { ...saved, codes: live.codes, tests: live.tests, dirty: live.dirty, modifiedAt: live.modifiedAt }
       : saved;
   }));
+  // The tab whose text is a shared room's document, if there is a room (src/collab/collabStore.ts).
+  // It is a file of this workspace like any other; only where the editor gets its text differs.
+  const roomTabId = useCollab((room) => room.tabId);
+  const roomLink = useCollab((room) => room.link);
   const testSummary = useMemo(() => summarizeTests(tests), [tests]);
   // One function per language, so a memoised panel that is handed it is not redrawn for nothing.
   const t = useCallback((key: keyof typeof messages.en): string => messages[uiLocale][key], [uiLocale]);
@@ -241,7 +247,8 @@ function App() {
   const reportedStatuses = ["not saved", "saving…", "saved", "loaded", "modified", "project created", "ready", "submission results updated", "no matching submissions found", "test cases imported", "source updated",
     t("problemImportWaiting"), t("submitFilled"), t("submitCopied"), t("submitLogin"), t("submitOpening"), t("submitPressing"), t("submitPressed"),
     t("explorerRescanned"), t("customOrderSet"), t("noClosedTabs"), t("settingsExported"), t("settingsImported"), t("checkerCreated"),
-    t("contestAutoEnded"), t("contestAutoUpcoming"), t("contestAutoUnknown"), t("contestAutoBusy"), t("contestAutoNoFolder")];
+    t("contestAutoEnded"), t("contestAutoUpcoming"), t("contestAutoUnknown"), t("contestAutoBusy"), t("contestAutoNoFolder"),
+    t("collabRoomOver"), t("collabLost"), t("collabLocked")];
   const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ") && !fileStatus.startsWith(t("contestAutoStarted")) && !fileStatus.startsWith(t("importingContest"));
 
@@ -545,6 +552,8 @@ function App() {
 
   const changeActiveLanguage = async (next: Language) => {
     if (!activeTab || next === language) return;
+    // The room's document is the code of one language, for everyone in it.
+    if (activeTab.id === collab.get().tabId) { setFileStatus(t("collabLocked")); return; }
     const requestedFilename = filenameForLanguage(activeTab.filename, next);
     const occupied = [...tabs, ...savedFiles]
       .filter((tab) => tab.id !== activeTab.id && fileKey(tab.filename) !== fileKey(activeTab.filename))
@@ -633,6 +642,7 @@ function App() {
     }
     // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
     const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
+    if (original.id === collab.get().tabId && languageFromFilename(requested) !== original.language) { setFileStatus(t("collabLocked")); return null; }
     if (fileKey(requested) === fileKey(original.filename) && requested === original.filename) return original.filename;
     const occupied = [...savedFiles, ...tabs]
       .filter((file) => file.id !== original.id && fileKey(file.filename) !== fileKey(original.filename))
@@ -910,12 +920,63 @@ function App() {
 
   const requestCloseProblem = (id: string) => {
     const tab = tabs.find((item) => item.id === id);
+    // The store itself, not this render's view of it: the room may have ended a moment ago.
+    const room = collab.get();
+    if (room.tabId === id) {
+      // A room on this computer's relay ends for everyone when it is closed here, so that is asked about.
+      if (room.local) { showCollabDialog("close"); return; }
+      // Otherwise closing the tab is this member leaving; the file is closed like any other.
+      void leaveRoom();
+    }
     if (tab && (tab.dirty || !workspacePath)) {
       setCloseConfirmTabId(id);
       return;
     }
     closeProblem(id);
   };
+
+  // What a shared room asks of the tabs. The room holds the text while it is live; the tab
+  // follows it, which is why everything else here goes on reading the tab.
+  useCollabBridge({
+    tab: (tabId) => {
+      const tab = tabs.find((item) => item.id === tabId);
+      return tab ? { text: tab.codes[tab.language], file: { filename: tab.filename, language: tab.language, title: tab.title, source: tab.source, sourceUrl: tab.sourceUrl, limits: tab.limits } } : null;
+    },
+    // An edit is an edit, whoever typed it: the copy here is modified until this user's own save has written it.
+    sharedText: (tabId, text) => {
+      setTabs((items) => items.map((tab) => tab.id !== tabId || tab.codes[tab.language] === text ? tab
+        : { ...tab, codes: { ...tab.codes, [tab.language]: text }, dirty: true, modifiedAt: Date.now() }));
+      const tab = tabs.find((item) => item.id === tabId);
+      if (!tab || tab.codes[tab.language] === text) return;
+      // A save on its way has not caught it either.
+      lastEditAtRef.current = Date.now();
+      if (tabId === activeTabId) setFileStatus("modified");
+    },
+    place: (filename) => ({
+      taken: [...tabs, ...savedFiles].some((file) => fileKey(file.filename) === fileKey(filename)),
+      copyName: mexFilename(filename, [...savedFiles, ...tabs].map((file) => file.filename)),
+    }),
+    /**
+     * The room's file becomes a tab here, and with a workspace open a file of it: modified,
+     * so the next save or auto save writes it. `replace` puts the room's text into the file
+     * this user already has by that name, which keeps its own tests and judge history.
+     */
+    openRoomTab: (file, text, replace) => {
+      const existing = replace ? [...tabs, ...savedFiles].find((item) => fileKey(item.filename) === fileKey(file.filename)) : undefined;
+      const base = existing ?? makeTab({ ...file, code: text, tests: [], modifiedAt: Date.now() });
+      // A file that was never tied to a judge takes the room's problem, so Submit works from it too.
+      const identity = existing && !existing.sourceUrl && file.sourceUrl ? { source: file.source, sourceUrl: file.sourceUrl, limits: existing.limits ?? file.limits } : null;
+      const tab: ProblemTab = { ...base, ...identity, language: file.language, codes: { ...base.codes, [file.language]: text }, dirty: true, modifiedAt: Date.now() };
+      setTabs((items) => items.some((item) => item.id === tab.id) ? items.map((item) => item.id === tab.id ? tab : item) : [...items, tab]);
+      lastEditAtRef.current = Date.now();
+      activateTab(tab);
+      return tab.id;
+    },
+    closeTab: (tabId) => requestCloseProblem(tabId),
+    report: (message) => setFileStatus(t(message)),
+  });
+  // A room is about one tab, and ends for this user when that tab goes.
+  useEffect(() => reconcileSharedTab(tabs), [tabs]);
 
   /** Reopens the most recently closed tab, skipping any whose file has since gone. */
   const reopenClosedTab = () => {
@@ -966,6 +1027,7 @@ function App() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => submitRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => interactiveRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP, () => paletteRef.current());
+    attachCollabEditor(editor, monaco);
     if (language === "cpp") void connectClangd(editor, monaco);
   };
 
@@ -1123,6 +1185,13 @@ function App() {
     if (!activeTab) return;
     const rendered = renderTemplateWithCursor(template, { source: templateSource, filename: activeTab.filename, title: activeTab.title, url: activeTab.sourceUrl });
     if (rendered.cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: activeTab.id, language: templateLanguage, offset: rendered.cursorOffset };
+    // In a room the code is the room's document, and replacing it is an edit everyone gets.
+    if (activeTab.id === collab.get().tabId) {
+      if (templateLanguage === activeTab.language) replaceSharedText(activeTab.id, rendered.code);
+      else setFileStatus(t("collabLocked"));
+      setSettingsPage(null);
+      return;
+    }
     patchActiveTab((tab) => ({ codes: { ...tab.codes, [templateLanguage]: rendered.code }, language: templateLanguage }));
     markActiveDirty();
     setSettingsPage(null);
@@ -1167,11 +1236,13 @@ function App() {
   // workspace — a save without one asks for a folder, which no timer should do — and not
   // while tests run, which save first anyway.
   const activeTabDirty = Boolean(activeTab?.dirty);
+  // The room's file is edited by teammates whether or not its tab is in front, so it is watched as well.
+  const roomTab = roomTabId !== null && roomTabId !== activeTab?.id ? tabs.find((tab) => tab.id === roomTabId) : undefined;
   useEffect(() => {
-    if (!autoSave || !workspacePath || !activeTabDirty || running) return;
+    if (!autoSave || !workspacePath || !(activeTabDirty || roomTab?.dirty) || running) return;
     const timer = window.setTimeout(() => setAutoSaveRevision((revision) => revision + 1), 1000);
     return () => window.clearTimeout(timer);
-  }, [autoSave, workspacePath, activeTabDirty, codes, running]);
+  }, [autoSave, workspacePath, activeTabDirty, codes, roomTab?.dirty, roomTab?.codes, running]);
 
   useEffect(() => {
     if (!autoSaveRevision) return;
@@ -2900,6 +2971,13 @@ function App() {
       { id: "terminal.restart", label: t("cmdTerminalRestart"), keywords: "terminal shell new restart 터미널 새 다시", run: restartTerminal },
       { id: "terminal.clear", label: t("cmdTerminalClear"), keywords: "terminal clear 터미널 지우기", disabled: !terminalStatus.running, run: () => terminalHost().clear() },
       { id: "terminal.stop", label: t("cmdTerminalStop"), keywords: "terminal kill stop 터미널 종료", disabled: !terminalStatus.running, run: () => terminalHost().stop() },
+      ...(roomTabId === null ? [
+        { id: "collab.open", label: t("cmdCollabOpen"), keywords: "share collaborate live room lan multiplayer together 공유 협업 같이 방 실시간", disabled: noFile, run: () => showCollabDialog("open") },
+        { id: "collab.join", label: t("cmdCollabJoin"), keywords: "share collaborate live room join code 공유 협업 참가 방 코드", run: () => showCollabDialog("join") },
+      ] : [
+        { id: "collab.show", label: t("cmdCollabShow"), keywords: "share collaborate room invite code address 공유 협업 방 초대 코드 주소", run: () => showCollabDialog("room") },
+        { id: "collab.leave", label: t("cmdCollabLeave"), keywords: "share collaborate room leave close stop 공유 협업 방 나가기 닫기", run: () => { if (collab.get().local) showCollabDialog("room"); else void leaveRoom(); } },
+      ]),
       { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
       { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
       { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
@@ -3205,6 +3283,7 @@ function App() {
                   finishTabDrag();
                 }}
               ><LanguageIcon language={tab.language} /></span>
+              {tab.id === roomTabId && <span className={`tab-shared ${roomLink === "online" ? "" : "ended"}`} title={roomLink === "online" ? t("collabTabLive") : t("collabOffline")}><Icon name="users" size={12} /></span>}
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
                 : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
@@ -3377,9 +3456,15 @@ function App() {
             theme={monacoTheme}
             language={language === "cpp" ? "cpp" : "python"}
             path={`file:///${activeTabId}/main.${language === "cpp" ? "cpp" : "py"}`}
-            value={codes[language]}
+            // The tab in a shared room is not controlled from here: the room's document is its
+            // text, and writing React's copy back would undo a teammate's edit (collabStore.ts).
+            value={roomTabId !== null && roomTabId === activeTabId ? undefined : codes[language]}
             onChange={(value) => {
               clearDiagnostics();
+              if (roomTabId !== null && roomTabId === activeTabId) return;
+              // A change to a model that is not this render's tab: the editor has moved on to
+              // another tab and this listener has not been replaced yet. It is not this tab's edit.
+              if (editorRef.current?.getModel()?.uri.path.split("/")[1] !== activeTabId) return;
               markActiveDirty();
               patchActiveTab((tab) => ({ codes: { ...tab.codes, [language]: value || "" } }));
             }}
@@ -3456,6 +3541,7 @@ function App() {
       </section>}
 
       <ExplorerContextMenu {...explorerProps} />
+      <CollabDialogs t={t} activeTab={activeTab} />
 
       {closeConfirmTabId && (() => {
         const tab = tabs.find((item) => item.id === closeConfirmTabId);
@@ -3743,6 +3829,7 @@ function App() {
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">
+          <CollabChip t={t} />
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => setSettingsPage("judge")} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => setSettingsPage("language-server")} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>

@@ -8,6 +8,7 @@ pub mod browser;
 pub mod browser;
 mod checker;
 mod clangd;
+mod collab;
 mod companion;
 mod files;
 mod import;
@@ -126,6 +127,7 @@ pub fn run() {
         .manage(interactive::InteractiveState::default())
         .manage(terminal::TerminalState::default())
         .manage(companion::CompanionState::default())
+        .manage(collab::CollabState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -204,6 +206,9 @@ pub fn run() {
             terminal::terminal_stop,
             companion::start_companion,
             companion::stop_companion,
+            collab::collab_open_relay,
+            collab::collab_close_relay,
+            collab::collab_relay_status,
             browser::browser_status,
             browser::browser_open,
             browser::browser_set_bounds,
@@ -246,6 +251,7 @@ pub fn run() {
                     clangd::stop(&window.state::<clangd::ClangdState>());
                     interactive::stop_session(&window.state::<interactive::InteractiveState>());
                     companion::stop(&window.state::<companion::CompanionState>());
+                    collab::close(&window.state::<collab::CollabState>());
                 }
                 _ => {}
             }

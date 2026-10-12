@@ -1,0 +1,35 @@
+# The relay behind shared rooms (src/collab in the frontend). It is a package of its own for
+# two reasons. The app links its library to open a room on this computer, and the same code
+# builds as `mild-relay`, a small program for a server that teammates who cannot reach each
+# other directly both connect to — so it must not depend on Tauri or CEF. And, as with
+# cef-helper, a second binary of the app package would be copied into the app bundle by the
+# bundler; a workspace member's binary is not.
+#
+#   cargo build --release -p mild-relay        (from src-tauri; the binary shares its target directory)
+[package]
+name = "mild-relay"
+version = "1.16.0"
+description = "Relay for Mild Editor's shared rooms: forwards opaque, end-to-end encrypted frames between the peers of a room"
+authors = ["mild editor"]
+edition = "2021"
+
+[lib]
+name = "mild_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mild-relay"
+path = "src/main.rs"
+
+[dependencies]
+# Already in the tree through Tauri and reqwest; only the features are named here.
+tokio = { version = "1", features = ["net", "rt", "rt-multi-thread", "sync", "time", "macros"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# The WebSocket handshake and framing, server side only: no TLS and no client. A relay on
+# the internet sits behind a reverse proxy for wss://, and what it carries is encrypted
+# end to end either way.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+# The tests are clients.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }

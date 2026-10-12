@@ -8,7 +8,7 @@
     "quick": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
-    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts",
+    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts && node --experimental-strip-types --no-warnings src/collab/protocol.check.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
@@ -25,9 +25,13 @@
     "@tauri-apps/plugin-updater": "^2.11.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "lib0": "^0.2.119",
     "monaco-editor": "^0.55.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "y-monaco": "^0.1.6",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",
