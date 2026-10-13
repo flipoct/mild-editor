@@ -37,6 +37,11 @@ pub(crate) struct SubmissionStatus {
     /// Everything known about this problem's submissions, oldest first.
     #[serde(default)]
     submissions: Vec<SubmissionRecord>,
+    /// The judge was asked and this is its whole answer. False when it could not be reached,
+    /// or when asking about this problem was put off to a later poll: `status` is then
+    /// empty for want of an answer, not because there is no submission — and the verdict
+    /// that turns up next is an old one, which the editor must not announce as news.
+    settled: bool,
 }
 
 pub(crate) fn codeforces_problem_key(url: &str) -> Option<(i64, String)> {
@@ -137,6 +142,8 @@ struct DojSession<'a> {
     recent: Vec<DojSubmission>,
     lookups_left: usize,
     looked_up: &'a mut BTreeSet<String>,
+    /// The last `verdict` came back empty without the judge having been asked.
+    unsettled: bool,
 }
 
 impl<'a> DojSession<'a> {
@@ -144,7 +151,7 @@ impl<'a> DojSession<'a> {
     /// running, the judge out of reach, the user logged out, or a page that is not the list.
     fn open(get: SessionGet<'a>, handle: &'a str, looked_up: &'a mut BTreeSet<String>) -> Option<Self> {
         let recent = Self::page(get, "https://doj.kr/ko/submissions")?;
-        Some(Self { get, handle, recent, lookups_left: DOJ_LOOKUPS_PER_POLL, looked_up })
+        Some(Self { get, handle, recent, lookups_left: DOJ_LOOKUPS_PER_POLL, looked_up, unsettled: false })
     }
 
     fn page(get: SessionGet, url: &str) -> Option<Vec<DojSubmission>> {
@@ -154,11 +161,16 @@ impl<'a> DojSession<'a> {
     }
 
     fn verdict(&mut self, problem_id: &str) -> Option<String> {
+        self.unsettled = false;
         if let Some(verdict) = doj_verdict_among(&self.recent, problem_id, self.handle) { return Some(verdict); }
         // An empty list is a user who has submitted nothing at all.
-        if self.recent.is_empty() || self.lookups_left == 0 || self.looked_up.contains(problem_id) { return None; }
+        if self.recent.is_empty() || self.looked_up.contains(problem_id) { return None; }
+        // Not this poll's turn, or the page did not come: nothing is known yet.
+        self.unsettled = true;
+        if self.lookups_left == 0 { return None; }
         self.lookups_left -= 1;
         let rows = Self::page(self.get, &format!("https://doj.kr/ko/submissions?problem={problem_id}"))?;
+        self.unsettled = false;
         self.looked_up.insert(problem_id.to_string());
         doj_verdict_among(&rows, problem_id, self.handle)
     }
@@ -291,6 +303,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
         let mut status = None;
         let mut submission_url = None;
         let mut submitted_at = 0u64;
+        let mut settled = true;
         match problem.source.as_str() {
             "codeforces" if !request.codeforces_handle.trim().is_empty() => {
                 if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
@@ -338,12 +351,17 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                     let verdict = match doj_session.as_mut() {
                         // Logged in, "내 제출" is the whole answer: asking the public page as
                         // well could only bring back an older submission than the one it has.
-                        Some(session) => session.verdict(&problem_id),
+                        Some(session) => {
+                            let verdict = session.verdict(&problem_id);
+                            settled = !session.unsettled;
+                            verdict
+                        }
                         None => {
                             let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
                             url.query_pairs_mut().append_pair("user", &doj_handle).append_pair("problem", &problem_id);
-                            client.get(url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()).ok()
-                                .and_then(|html| doj_verdict(&html, &problem_id, &doj_handle))
+                            let page = client.get(url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()).ok();
+                            settled = page.is_some();
+                            page.and_then(|html| doj_verdict(&html, &problem_id, &doj_handle))
                         }
                     };
                     if let Some(verdict) = verdict {
@@ -354,7 +372,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
             }
             _ => {}
         }
-        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new() });
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new(), settled });
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
@@ -482,6 +500,8 @@ mod tests {
             assert_eq!(session.verdict("553"), None);
             // The poll's allowance is spent: the next problem waits for the next poll.
             assert_eq!(session.verdict("554"), None);
+            // Put off, not answered: the verdict that comes with a later poll is no news.
+            assert!(session.unsettled);
             assert_eq!(*asked.borrow(), vec!["", "?problem=551", "?problem=552", "?problem=553"]);
         }
         asked.borrow_mut().clear();
@@ -544,6 +564,7 @@ mod tests {
             submission_url: url.map(str::to_string),
             submitted_at: at,
             submissions: Vec::new(),
+            settled: true,
         };
         let mut history = Vec::new();
 
@@ -568,7 +589,7 @@ mod tests {
 
         // Nothing to report leaves the history alone, and it never grows without bound.
         let mut empty = Vec::new();
-        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new() });
+        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new(), settled: true });
         assert!(empty.is_empty());
         let mut long = Vec::new();
         for index in 0..60 {

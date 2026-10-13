@@ -1,14 +1,13 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { explorerBasename, explorerParent } from "../fileNaming";
 import type { Translate } from "../i18n";
 import { Icon } from "../icons";
 import { IS_TAURI } from "../platform";
 import { getSetting, useSetting } from "../settingsStore";
-import type { ProblemTab } from "../types";
-import { answerTaken, closeRoomWithTab, joinRoom, leaveRoom, openRoom, showCollabDialog, useCollab } from "./collabStore";
-import { DEFAULT_RELAY_PORT, formatInvite, parseInvite, peerName, shortAddress } from "./protocol";
-
-type SharedTab = Pick<ProblemTab, "id" | "filename">;
+import { useWorkspaceDirectories, useWorkspacePath } from "../workspaceStore";
+import { joinRoom, leaveRoom, openRoom, showCollabDialog, useCollab } from "./collabStore";
+import { DEFAULT_RELAY_PORT, formatInvite, peerName, shortAddress } from "./protocol";
 
 /** The name a cursor carries until the user gives one: a judge handle if there is one, since that is what teammates know each other by. */
 const fallbackName = () => getSetting("atcoderHandle") || getSetting("codeforcesHandle") || getSetting("dojHandle") || `Player ${10 + Math.floor(Math.random() * 90)}`;
@@ -40,37 +39,45 @@ function CopyButton({ text, label, t }: { text: string; label?: string; t: Trans
   }}><Icon name={copied ? "check" : "copy"} size={13} />{copied ? t("collabCopied") : label ?? t("collabCopy")}</button>;
 }
 
-const Field = ({ label, children }: { label: string; children: ReactNode }) => <label className="collab-field"><span>{label}</span>{children}</label>;
+const Field = ({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) => <label className="collab-field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>;
+
+/** A folder of the workspace, picked from the ones it has; "" is the workspace itself. */
+function FolderSelect({ value, onChange, root }: { value: string; onChange: (folder: string) => void; root: string }) {
+  const directories = useWorkspaceDirectories();
+  return <select value={value} onChange={(event) => onChange(event.target.value)}>
+    <option value="">{root}</option>
+    {[...directories].sort((left, right) => left.localeCompare(right)).map((directory) => <option key={directory} value={directory}>{directory}</option>)}
+  </select>;
+}
 
 /** Opening a room and joining one: two halves of one dialog, since whoever opens it may have meant either. */
-function StartDialog({ t, activeTab, joining }: { t: Translate; activeTab: SharedTab | undefined; joining: boolean }) {
+function StartDialog({ t, activeFilename, joining }: { t: Translate; activeFilename: string; joining: boolean }) {
   const starting = useCollab((state) => state.phase === "starting");
   const error = useCollab((state) => state.error);
+  const workspacePath = useWorkspacePath();
+  const directories = useWorkspaceDirectories();
   const [storedName, setStoredName] = useSetting("collabName");
   const [port, setPort] = useSetting("collabPort");
   const [relay, setRelay] = useSetting("collabRelay");
   const [fallback] = useState(fallbackName);
   const [name, setName] = useState(storedName);
-  // The preview has no backend to listen with, so there a room can only be opened on a relay.
-  const [local, setLocal] = useState(IS_TAURI);
-  const [address, setAddress] = useState("");
-  const [code, setCode] = useState("");
+  // The folder of the file in front is the one most likely meant.
+  const [folder, setFolder] = useState(() => explorerParent(activeFilename));
+  const [parent, setParent] = useState("");
+  const [invite, setInvite] = useState("");
   const shown = peerName(name, fallback);
+  const workspaceName = workspacePath ? explorerBasename(workspacePath) : "";
+  // A folder that has gone since it was picked is not one to share.
+  const known = (path: string) => path === "" || directories.includes(path) ? path : "";
+  // The preview has no backend to listen with, so there a room can only be opened on a relay.
+  const onRelay = !IS_TAURI || Boolean(relay.trim());
 
   const start = () => {
     setStoredName(name.trim());
-    if (joining) void joinRoom({ address, code, name: shown });
-    else if (activeTab) void openRoom({ tabId: activeTab.id, name: shown, relay: local ? null : relay, port });
+    if (joining) void joinRoom({ invite, name: shown, parent: known(parent) });
+    else void openRoom({ folder: known(folder), name: shown, relay: onRelay ? relay : null, port });
   };
-  /** An invitation pasted into either field fills both. */
-  const paste = (event: ClipboardEvent<HTMLInputElement>) => {
-    const invite = parseInvite(event.clipboardData.getData("text"));
-    if (!invite.address || !invite.code) return;
-    event.preventDefault();
-    setAddress(invite.address);
-    setCode(invite.code);
-  };
-  const ready = joining ? Boolean(address.trim() && code.trim()) : Boolean(activeTab && (local || relay.trim()));
+  const ready = Boolean(workspacePath) && (joining ? Boolean(invite.trim()) : IS_TAURI || Boolean(relay.trim()));
 
   return <ConfirmDialog id="collab-start-title" eyebrow={t("collabRoom")} title={t("collabStartTitle")} cancel={t("cancel")} onCancel={() => showCollabDialog(null)}
     actions={<button className="primary-button" disabled={!ready || starting} onClick={start}>{joining ? starting ? t("collabJoining") : t("collabJoin") : starting ? t("collabOpening") : t("collabOpen")}</button>}>
@@ -79,25 +86,20 @@ function StartDialog({ t, activeTab, joining }: { t: Translate; activeTab: Share
         <button type="button" role="tab" aria-selected={!joining} className={joining ? "" : "active"} onClick={() => showCollabDialog("open")}>{t("collabOpenTab")}</button>
         <button type="button" role="tab" aria-selected={joining} className={joining ? "active" : ""} onClick={() => showCollabDialog("join")}>{t("collabJoinTab")}</button>
       </div>
-      {joining ? <p>{t("collabJoinHelp")}</p>
-        : activeTab ? <p>{t("collabSharing")} <strong>{activeTab.filename.split("/").at(-1)}</strong>. {t("collabOpenHelp")}</p>
-        : <p className="collab-warning">{t("collabNoFile")}</p>}
+      {workspacePath ? <p>{joining ? t("collabJoinHelp") : t("collabOpenHelp")}</p> : <p className="collab-warning">{t("collabErrNoWorkspace")}</p>}
       <Field label={t("collabName")}><input value={name} placeholder={fallback} maxLength={24} spellCheck={false} onChange={(event) => setName(event.target.value)} /></Field>
       {joining ? <>
-        <Field label={t("collabAddress")}><input autoFocus value={address} placeholder={`192.168.0.7:${DEFAULT_RELAY_PORT}`} spellCheck={false} onPaste={paste} onChange={(event) => setAddress(event.target.value)} /></Field>
-        <Field label={t("collabCode")}><input className="collab-code-input" value={code} placeholder="K7QM-2XWP-9HDT" spellCheck={false} autoCapitalize="characters" onPaste={paste} onChange={(event) => setCode(event.target.value)} /></Field>
-      </> : <fieldset className="collab-where">
-        <label className={IS_TAURI ? "" : "disabled"}>
-          <input type="radio" name="collab-where" checked={local} disabled={!IS_TAURI} onChange={() => setLocal(true)} />
-          <span><strong>{t("collabLocal")}</strong><small>{IS_TAURI ? t("collabLocalHelp") : t("collabLocalAppOnly")}</small></span>
-          <input className="collab-port" type="number" min={1024} max={65535} value={port} disabled={!local} aria-label={t("collabPort")} title={t("collabPort")} onChange={(event) => setPort(Math.min(65535, Math.max(1024, Math.round(Number(event.target.value)) || DEFAULT_RELAY_PORT)))} />
-        </label>
-        <label>
-          <input type="radio" name="collab-where" checked={!local} onChange={() => setLocal(false)} />
-          <span><strong>{t("collabRelay")}</strong><small>{t("collabRelayHelp")}</small></span>
-        </label>
-        {!local && <input value={relay} placeholder="wss://relay.example.org" spellCheck={false} aria-label={t("collabRelayAddress")} onChange={(event) => setRelay(event.target.value)} />}
-      </fieldset>}
+        <Field label={t("collabInvite")}><input autoFocus value={invite} placeholder="192.168.0.7#K7QM-2XWP-9HDT" spellCheck={false} onChange={(event) => setInvite(event.target.value)} /></Field>
+        <Field label={t("collabParent")} hint={t("collabParentHint")}><FolderSelect value={known(parent)} onChange={setParent} root={workspaceName} /></Field>
+      </> : <>
+        <Field label={t("collabFolder")}><FolderSelect value={known(folder)} onChange={setFolder} root={`${workspaceName} ${t("collabWholeWorkspace")}`} /></Field>
+        {/* A relay remembered from last time is in use, so it is shown, not folded away. */}
+        <details className="collab-advanced" open={onRelay || undefined}>
+          <summary>{t("collabAdvanced")}</summary>
+          {IS_TAURI && <Field label={t("collabPort")}><input type="number" min={1024} max={65535} value={port} disabled={onRelay} onChange={(event) => setPort(Math.min(65535, Math.max(1024, Math.round(Number(event.target.value)) || DEFAULT_RELAY_PORT)))} /></Field>}
+          <Field label={t("collabRelayAddress")} hint={IS_TAURI ? t("collabRelayHelp") : t("collabLocalAppOnly")}><input value={relay} placeholder="wss://relay.example.org" spellCheck={false} onChange={(event) => setRelay(event.target.value)} /></Field>
+        </details>
+      </>}
       {error && <p className="collab-error" role="alert">{t(error.message)}{error.detail ? `: ${error.detail}` : ""}</p>}
       {/* Enter in a field submits the form; the visible button lives in the footer. */}
       <button type="submit" hidden />
@@ -109,33 +111,32 @@ const REACH_MESSAGE = {
   checking: "collabReachChecking", open: "collabReachOpen", "no-gateway": "collabReachNoGateway", nat: "collabReachNat", refused: "collabReachRefused",
 } as const;
 
-/** The room while it is open: how a teammate gets in, who is there, and the way out — the same for everyone in it. */
+/** The room while it is open: the one line a teammate needs, who is there, and the way out — the same for everyone in it. */
 function RoomDialog({ t }: { t: Translate }) {
   const local = useCollab((state) => state.local);
   const link = useCollab((state) => state.link);
-  const filename = useCollab((state) => state.filename);
+  const name = useCollab((state) => state.name);
+  const root = useCollab((state) => state.root);
   const address = useCollab((state) => state.address);
   const lanAddresses = useCollab((state) => state.lanAddresses);
   const publicAddress = useCollab((state) => state.publicAddress);
   const reach = useCollab((state) => state.reach);
   const code = useCollab((state) => state.code);
   const members = useCollab((state) => state.members);
+  const workspacePath = useWorkspacePath();
   // On this computer the address the app itself uses is the loopback one, which is no use to anyone else.
   const addresses = [...(lanAddresses.length ? lanAddresses : [shortAddress(address)]), ...(publicAddress ? [publicAddress] : [])];
   const invite = formatInvite(addresses, code.replace(/-/g, ""));
-  return <ConfirmDialog id="collab-room-title" eyebrow={t("collabRoom")} title={<>{t("collabRoomTitle")} · {filename}</>} cancel={t("collabDone")} onCancel={() => showCollabDialog(null)}
+  return <ConfirmDialog id="collab-room-title" eyebrow={t("collabRoom")} title={<>{t("collabRoomTitle")} · {name}</>} cancel={t("collabDone")} onCancel={() => showCollabDialog(null)}
     actions={<button className="danger-button" onClick={() => void leaveRoom()}>{local ? t("collabLeaveEnd") : t("collabLeave")}</button>}>
     <div className="collab-form">
       <p>{t("collabRoomHelp")}</p>
       <div className="collab-field"><span>{t("collabInvite")}</span>
-        <div className="collab-copy-row"><code className="collab-invite">{invite}</code><CopyButton text={invite} t={t} /></div>
+        <div className="collab-invite"><code>{invite}</code><CopyButton text={invite} t={t} /></div>
         {reach !== "none" && <small className={`collab-reach ${reach}`}>{t(REACH_MESSAGE[reach])}</small>}
       </div>
-      <div className="collab-field"><span>{t("collabAddress")}</span>
-        {addresses.map((item) => <div className="collab-copy-row" key={item}><code>{item}</code>{item === publicAddress && <small>{t("collabPublic")}</small>}<CopyButton text={item} t={t} /></div>)}
-      </div>
-      <div className="collab-field"><span>{t("collabCode")}</span>
-        <div className="collab-copy-row"><code className="collab-code">{code}</code><CopyButton text={code} t={t} /></div>
+      <div className="collab-field"><span>{t("collabMyFolder")}</span>
+        <div className="collab-path"><Icon name="folder" size={13} /><code>{root || (workspacePath ? explorerBasename(workspacePath) : "")}</code></div>
       </div>
       <div className="collab-field"><span>{t("collabMembers")} · <em className={link === "online" ? "online" : "offline"}>{link === "online" ? t("collabOnline") : t("collabOffline")}</em></span>
         <ul className="collab-members">
@@ -147,25 +148,11 @@ function RoomDialog({ t }: { t: Translate }) {
   </ConfirmDialog>;
 }
 
-/** Every dialog of a room. `activeTab` is the file a new room would start from. */
-export function CollabDialogs({ t, activeTab }: { t: Translate; activeTab: SharedTab | undefined }) {
+/** Every dialog of a room. `activeFilename` is the file in front, whose folder a new room is offered for. */
+export function CollabDialogs({ t, activeFilename }: { t: Translate; activeFilename: string }) {
   const dialog = useCollab((state) => state.dialog);
   const live = useCollab((state) => state.phase === "live");
-  const taken = useCollab((state) => state.taken);
-  if (dialog === "taken" && taken) {
-    const name = taken.filename.split("/").at(-1) || taken.filename;
-    return <ConfirmDialog id="collab-taken-title" eyebrow={t("collabRoom")} title={t("collabTakenTitle").replace("{name}", name)} cancel={t("cancel")} onCancel={() => answerTaken(null)}
-      actions={<><button className="subtle-button" onClick={() => answerTaken("copy")}>{t("collabTakenCopy")}</button><button className="danger-button" onClick={() => answerTaken("replace")}>{t("collabTakenReplace")}</button></>}>
-      <p>{t("collabTakenBody").replace("{copy}", taken.copyName.split("/").at(-1) || taken.copyName)}</p>
-    </ConfirmDialog>;
-  }
-  if (dialog === "close" && live) {
-    return <ConfirmDialog id="collab-close-title" eyebrow={t("collabRoom")} title={t("collabCloseTitle")} cancel={t("cancel")} onCancel={() => showCollabDialog(null)}
-      actions={<button className="danger-button" autoFocus onClick={() => void closeRoomWithTab()}>{t("collabCloseConfirm")}</button>}>
-      <p>{t("collabCloseBody")}</p>
-    </ConfirmDialog>;
-  }
   if (dialog === "room" && live) return <RoomDialog t={t} />;
-  if ((dialog === "open" || dialog === "join") && !live) return <StartDialog t={t} activeTab={activeTab} joining={dialog === "join"} />;
+  if ((dialog === "open" || dialog === "join") && !live) return <StartDialog t={t} activeFilename={activeFilename} joining={dialog === "join"} />;
   return null;
 }

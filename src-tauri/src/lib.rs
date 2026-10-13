@@ -189,6 +189,8 @@ pub fn run() {
             workspace::rename_workspace_folder,
             workspace::move_workspace_folder,
             workspace::delete_workspace_folder,
+            workspace::ensure_workspace_folder,
+            workspace::remove_empty_workspace_folder,
             workspace::delete_workspace_file,
             workspace::open_workspace_file_location,
             workspace::open_workspace_folder_location,

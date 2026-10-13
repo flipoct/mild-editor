@@ -111,12 +111,12 @@ export const normalizeRelayAddresses = (typed: string): string[] | null => {
   return addresses.length && addresses.every((address): address is string => address !== null) ? [...new Set(addresses)] : null;
 };
 
-/** An address as it is shown and sent: the scheme is left off where it is the plain one. */
-export const shortAddress = (address: string) => address.replace(/^ws:\/\//, "");
+/** An address as it is shown and sent: the scheme and the port are left off where they are the plain ones. */
+export const shortAddress = (address: string) => address.replace(/^ws:\/\//, "").replace(new RegExp(`^([^/]+):${DEFAULT_RELAY_PORT}$`), "$1");
 
 /**
- * Every way into a room as one line to send a teammate:
- * `192.168.0.7:10044,211.36.140.7:10044#K7QM-2XWP-9HDT`.
+ * Every way into a room as one line to send a teammate — the invitation, and the only
+ * thing a teammate is given or types: `192.168.0.7,211.36.140.7#K7QM-2XWP-9HDT`.
  */
 export const formatInvite = (addresses: string[], code: string) => `${addresses.map(shortAddress).join(",")}#${formatJoinCode(code)}`;
 
@@ -211,58 +211,108 @@ export const unseal = async (room: Room, frame: Uint8Array): Promise<Message | n
   }
 };
 
-// ── The file ──
+// ── The folder ──
 
 /**
- * What the opener tells the room about the file, so that everyone who joins has it as a
- * file of their own that is as usable as the opener's: where it sits in the workspace, and
- * which problem it solves (for Submit and the verdict poll). Travels in the document, as
- * JSON under `meta.file`.
+ * A room shares a folder: every source file under it, with its folders. In the document
+ * each file is a map under a random id — `path` (relative to the shared folder, forward
+ * slashes), `text` (the code, a Y.Text), and three JSON strings that are replaced whole:
+ * `meta`, `tests` and `judge`. Folders that hold no file are listed apart, by path.
+ *
+ * Everything in there is a teammate's text that ends up as a path or a field in this
+ * user's workspace, so nothing is taken as it comes: the functions below say what is
+ * acceptable, and what is not is left out.
  */
-export type RoomFile = {
-  /** Workspace-relative, with forward slashes. */
-  filename: string;
-  language: "cpp" | "python";
-  title: string;
-  source?: "atcoder" | "codeforces" | "doj" | "other";
-  sourceUrl?: string;
-  limits?: { timeLimitMs?: number; memoryLimitMb?: number };
+
+const SOURCE = /\.(cpp|cc|cxx|py)$/i;
+
+/**
+ * A path from the room as one this workspace can take: relative, no drive, no `..`, no
+ * character a file name cannot have, at most eight folders deep — and, for a file, a source
+ * file. Null for anything else; a path is never repaired, since two members repairing it
+ * differently would no longer agree on where the file is.
+ */
+export const safePath = (path: unknown, file: boolean): string | null => {
+  if (typeof path !== "string" || !path || path.length > 400) return null;
+  const parts = path.split("/");
+  if (parts.length > 9 || parts.some((part) => !part || part !== part.trim() || part.length > 120 || /^\.+$/.test(part) || /[<>:"|?*\\\u0000-\u001f]/.test(part))) return null;
+  return !file || SOURCE.test(parts[parts.length - 1]) ? path : null;
 };
 
-const SOURCES = ["atcoder", "codeforces", "doj", "other"] as const;
+/** The name a joiner's copy of the shared folder gets; whatever the room calls it, it is one plain folder name. */
+export const safeFolderName = (name: unknown) =>
+  (typeof name === "string" ? name : "").replace(/[<>:"|?*\\/\u0000-\u001f]/g, "").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 60) || "shared";
 
-/**
- * The room's file as a joiner will take it. Everything in it is somebody else's text that
- * ends up as a path in this user's workspace, so nothing is trusted: the name is made
- * relative and kept inside the workspace (no drive, no leading slash, no `..`), the
- * extension is made to agree with the language, and whatever is not what it should be is
- * dropped. Something unreadable is still a file — `shared.cpp`.
- */
-export const roomFile = (json: string | undefined): RoomFile => {
-  let raw: Record<string, unknown> = {};
-  try { const parsed: unknown = JSON.parse(json ?? ""); if (parsed && typeof parsed === "object") raw = parsed as Record<string, unknown>; } catch { /* not JSON: every field falls back */ }
-  const language = raw.language === "python" ? "python" : "cpp";
-  const extension = language === "python" ? ".py" : ".cpp";
-  const parts = (typeof raw.filename === "string" ? raw.filename : "").split(/[\\/]+/)
-    .map((part) => part.replace(/[<>:"|?*\u0000-\u001f]/g, "").trim().slice(0, 120))
-    .filter((part) => part && !/^\.+$/.test(part)).slice(-8);
-  const last = parts.pop() ?? "shared";
-  const stem = last.replace(/\.(cpp|cc|cxx|py)$/i, "") || "shared";
-  const keeps = language === "python" ? /\.py$/i.test(last) : /\.(cpp|cc|cxx)$/i.test(last);
-  const filename = [...parts, keeps ? last : `${stem}${extension}`].join("/");
-  const text = (value: unknown, limit: number) => typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
-  const sourceUrl = text(raw.sourceUrl, 500);
+const SOURCES = ["atcoder", "codeforces", "doj", "other"] as const;
+const record = (json: unknown): Record<string, unknown> => {
+  try { const parsed: unknown = JSON.parse(typeof json === "string" ? json : ""); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; }
+};
+const line = (value: unknown, limit: number) => typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
+const webAddress = (value: unknown) => { const url = line(value, 500); return /^https?:\/\/\S+$/i.test(url) ? url : undefined; };
+
+/** What a file is about: which problem it solves, for Submit and the verdict poll. */
+export type FileMeta = { title: string; source?: (typeof SOURCES)[number]; sourceUrl?: string; limits?: { timeLimitMs?: number; memoryLimitMb?: number } };
+
+export const fileMeta = (json: unknown): FileMeta => {
+  const raw = record(json);
   const limit = (value: unknown, most: number) => typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.min(most, Math.round(value)) : undefined;
   const limits = raw.limits && typeof raw.limits === "object" ? raw.limits as Record<string, unknown> : {};
   const timeLimitMs = limit(limits.timeLimitMs, 600_000);
   const memoryLimitMb = limit(limits.memoryLimitMb, 65_536);
-  return {
-    filename, language,
-    title: text(raw.title, 200) || stem,
-    source: SOURCES.find((source) => source === raw.source),
-    sourceUrl: /^https?:\/\/\S+$/i.test(sourceUrl) ? sourceUrl : undefined,
-    limits: timeLimitMs || memoryLimitMb ? { timeLimitMs, memoryLimitMb } : undefined,
-  };
+  return { title: line(raw.title, 200), source: SOURCES.find((source) => source === raw.source), sourceUrl: webAddress(raw.sourceUrl), limits: timeLimitMs || memoryLimitMb ? { timeLimitMs, memoryLimitMb } : undefined };
+};
+
+export type FileTest = { name: string; input: string; expected: string };
+
+/** A file's test cases; at most a hundred, none larger than a megabyte a side. */
+export const fileTests = (json: unknown): FileTest[] => {
+  let raw: unknown = [];
+  try { raw = JSON.parse(typeof json === "string" ? json : ""); } catch { /* not JSON: no tests */ }
+  const field = (value: unknown) => typeof value === "string" ? value.slice(0, 1_000_000) : "";
+  return (Array.isArray(raw) ? raw : []).slice(0, 100).filter((test): test is Record<string, unknown> => Boolean(test) && typeof test === "object")
+    .map((test, index) => ({ name: line(test.name, 80) || `test ${index + 1}`, input: field(test.input), expected: field(test.expected) }));
+};
+
+/** Where a problem stands with its judge: the verdict shown, the submission it is of, and every verdict seen. */
+export type FileJudge = { status?: string; url?: string; submissions?: Array<{ status: string; url?: string; at: number }> };
+
+export const fileJudge = (json: unknown): FileJudge => {
+  const raw = record(json);
+  const submissions = (Array.isArray(raw.submissions) ? raw.submissions : []).slice(-200)
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({ status: line(item.status, 40), url: webAddress(item.url), at: typeof item.at === "number" && Number.isFinite(item.at) && item.at > 0 ? Math.round(item.at) : 0 }))
+    .filter((item) => item.status);
+  return { status: line(raw.status, 40) || undefined, url: webAddress(raw.url), submissions: submissions.length ? submissions : undefined };
+};
+
+/** Accepted, as the editor's own badge reads it (src/workbench.ts): AC, OK, Accepted, or a full score. */
+const accepted = (status: string | undefined) => {
+  const text = (status || "").trim();
+  const score = /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/.exec(text.replace(/^PAC\s*/i, ""));
+  return /^(AC|OK|ACCEPTED)\b/i.test(text) || Boolean(score && Number(score[2]) > 0 && Number(score[1]) >= Number(score[2]));
+};
+
+/**
+ * What a team knows of a problem, from what two of its members know: every submission
+ * either has seen, and for the verdict an accepted one before any other, then the newer.
+ * It does not matter which of the two is which, nor how often they are merged — which is
+ * what lets every member do this on their own and still end up with the same answer.
+ */
+export const mergeJudge = (left: FileJudge, right: FileJudge): FileJudge => {
+  const all = new Map<string, { status: string; url?: string; at: number }>();
+  for (const item of [...left.submissions ?? [], ...right.submissions ?? []]) {
+    const key = item.url || `${item.at}`;
+    const known = all.get(key);
+    // One submission seen twice is the same submission further along: judged beats waiting.
+    if (!known || (accepted(item.status) && !accepted(known.status)) || (accepted(item.status) === accepted(known.status) && item.status > known.status)) all.set(key, item);
+  }
+  const submissions = [...all.values()].sort((a, b) => a.at - b.at || a.status.localeCompare(b.status) || (a.url || "").localeCompare(b.url || ""));
+  const when = (judge: FileJudge) => submissions.find((item) => item.url && item.url === judge.url)?.at ?? 0;
+  const rank = (judge: FileJudge): [number, number, string, string] => [judge.status ? accepted(judge.status) ? 2 : 1 : 0, when(judge), judge.status || "", judge.url || ""];
+  const [a, b] = [rank(left), rank(right)];
+  const order = a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2]) || a[3].localeCompare(b[3]);
+  const best = order >= 0 ? left : right;
+  return { status: best.status, url: best.url, submissions: submissions.length ? submissions : undefined };
 };
 
 // ── Reconnecting ──

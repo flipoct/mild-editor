@@ -2,7 +2,7 @@
  * A quick check of the shared-room protocol — the join code, what is derived from it, and
  * the frames — run with `node --experimental-strip-types src/collab/protocol.check.ts`.
  */
-import { DEFAULT_RELAY_PORT, deriveRoom, formatInvite, formatJoinCode, FRAME_VERSION, generateJoinCode, JOIN_CODE_LENGTH, KDF_ROUNDS, MESSAGE, normalizeJoinCode, normalizeRelayAddress, normalizeRelayAddresses, parseInvite, PEER_COLORS, peerName, pickPeerColor, reconnectDelay, roomFile, roomUrl, seal, unseal } from "./protocol.ts";
+import { DEFAULT_RELAY_PORT, deriveRoom, formatInvite, formatJoinCode, FRAME_VERSION, generateJoinCode, JOIN_CODE_LENGTH, KDF_ROUNDS, MESSAGE, normalizeJoinCode, normalizeRelayAddress, normalizeRelayAddresses, parseInvite, PEER_COLORS, peerName, pickPeerColor, reconnectDelay, roomUrl, safeFolderName, safePath, fileMeta, fileTests, fileJudge, mergeJudge, seal, unseal } from "./protocol.ts";
 
 let failed = 0;
 const eq = (label: string, got: unknown, want: unknown) => {
@@ -49,14 +49,15 @@ eq("whoever has the document may open the room", roomUrl("ws://h:1", "abc", true
 eq("a newcomer only joins it", roomUrl("wss://h/relay", "abc", false), "wss://h/relay/room/abc");
 
 // --- The invitation -----------------------------------------------------------------------
-eq("an invitation", formatInvite(["ws://192.168.0.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7:10044#K7QM-2XWP-9HDT");
-eq("and back", parseInvite("192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044", code: "K7QM2XWP9HDT" });
-eq("with the scheme, as older rooms wrote it", parseInvite("ws://192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044", code: "K7QM2XWP9HDT" });
-eq("pasted with a space instead", parseInvite(" 192.168.0.7  k7qm 2xwp 9hdt\n"), { address: `192.168.0.7:${DEFAULT_RELAY_PORT}`, code: "K7QM2XWP9HDT" });
+eq("an invitation", formatInvite(["ws://192.168.0.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7#K7QM-2XWP-9HDT");
+eq("another port is said", formatInvite(["ws://192.168.0.7:4000"], "K7QM2XWP9HDT"), "192.168.0.7:4000#K7QM-2XWP-9HDT");
+eq("and back", parseInvite("192.168.0.7#K7QM-2XWP-9HDT"), { address: "192.168.0.7", code: "K7QM2XWP9HDT" });
+eq("with the scheme, as older rooms wrote it", parseInvite("ws://192.168.0.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7", code: "K7QM2XWP9HDT" });
+eq("pasted with a space instead", parseInvite(" 192.168.0.7  k7qm 2xwp 9hdt\n"), { address: "192.168.0.7", code: "K7QM2XWP9HDT" });
 eq("only a code", parseInvite("K7QM-2XWP-9HDT"), { code: "K7QM2XWP9HDT" });
-eq("only an address", parseInvite("192.168.0.7:10044"), { address: "192.168.0.7:10044" });
-eq("every way in, in one invitation", formatInvite(["192.168.0.7:10044", "100.101.102.103:10044", "211.36.140.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7:10044,100.101.102.103:10044,211.36.140.7:10044#K7QM-2XWP-9HDT");
-eq("and back, all of them", parseInvite("192.168.0.7:10044,211.36.140.7:10044#K7QM-2XWP-9HDT"), { address: "192.168.0.7:10044,211.36.140.7:10044", code: "K7QM2XWP9HDT" });
+eq("only an address", parseInvite("192.168.0.7:10044"), { address: "192.168.0.7" });
+eq("every way in, in one invitation", formatInvite(["192.168.0.7:10044", "100.101.102.103:10044", "211.36.140.7:10044"], "K7QM2XWP9HDT"), "192.168.0.7,100.101.102.103,211.36.140.7#K7QM-2XWP-9HDT");
+eq("and back, all of them", parseInvite("192.168.0.7,211.36.140.7:4000#K7QM-2XWP-9HDT"), { address: "192.168.0.7,211.36.140.7:4000", code: "K7QM2XWP9HDT" });
 eq("a relay keeps its scheme", formatInvite(["wss://relay.example.org"], "K7QM2XWP9HDT"), "wss://relay.example.org#K7QM-2XWP-9HDT");
 eq("a relay's invitation back", parseInvite("wss://relay.example.org#K7QM-2XWP-9HDT"), { address: "wss://relay.example.org", code: "K7QM2XWP9HDT" });
 eq("several addresses", normalizeRelayAddresses("192.168.0.7, 10.0.0.2:4000,192.168.0.7"), [`ws://192.168.0.7:${DEFAULT_RELAY_PORT}`, "ws://10.0.0.2:4000"]);
@@ -118,19 +119,27 @@ padded.set(frame, 4);
 eq("a frame that is a view into a larger buffer", await unseal(room, padded.subarray(4, 4 + frame.length)).then((message) => text(message?.body)), "int main() { return 0; }");
 
 // --- The file a joiner takes ---------------------------------------------------------------
-const told = (file: unknown) => roomFile(JSON.stringify(file));
-eq("a file as the opener has it", told({ filename: "AtCoder/abc400/A_Sum.cpp", language: "cpp", title: "A - Sum", source: "atcoder", sourceUrl: "https://atcoder.jp/contests/abc400/tasks/abc400_a", limits: { timeLimitMs: 2000, memoryLimitMb: 1024 } }),
-  { filename: "AtCoder/abc400/A_Sum.cpp", language: "cpp", title: "A - Sum", source: "atcoder", sourceUrl: "https://atcoder.jp/contests/abc400/tasks/abc400_a", limits: { timeLimitMs: 2000, memoryLimitMb: 1024 } });
-eq("a bare local file", told({ filename: "scratch.py", language: "python", title: "scratch" }), { filename: "scratch.py", language: "python", title: "scratch" });
-eq("a name cannot climb out of the workspace", told({ filename: "../../secrets/../x.cpp", language: "cpp" }).filename, "secrets/x.cpp");
-eq("nor be absolute", [told({ filename: "/etc/passwd.cpp" }).filename, told({ filename: "C:\\Users\\me\\a.cpp" }).filename], ["etc/passwd.cpp", "C/Users/me/a.cpp"]);
-eq("backslashes are folders too", told({ filename: "a\\b\\c.cpp" }).filename, "a/b/c.cpp");
-eq("the extension agrees with the language", [told({ filename: "a.py", language: "cpp" }).filename, told({ filename: "a.cc", language: "cpp" }).filename, told({ filename: "a.exe", language: "python" }).filename], ["a.cpp", "a.cc", "a.exe.py"]);
-eq("an unknown language is C++", told({ filename: "a.cpp", language: "rust" }).language, "cpp");
-eq("only a web address is a source URL", [told({ sourceUrl: "javascript:alert(1)" }).sourceUrl, told({ sourceUrl: "https://codeforces.com/contest/1/problem/A" }).sourceUrl], [undefined, "https://codeforces.com/contest/1/problem/A"]);
-eq("an unknown judge is no judge", told({ source: "elsewhere" }).source, undefined);
-eq("limits are positive numbers or nothing", [told({ limits: { timeLimitMs: -5, memoryLimitMb: "256" } }).limits, told({ limits: { timeLimitMs: 1500.4 } }).limits], [undefined, { timeLimitMs: 1500 }]);
-eq("nothing readable is still a file", [roomFile(undefined), roomFile("not json"), roomFile("[1]")].map((file) => file.filename + "|" + file.language + "|" + file.title), ["shared.cpp|cpp|shared", "shared.cpp|cpp|shared", "shared.cpp|cpp|shared"]);
+eq("a file's path", ["A.cpp", "abc/B_two.py", "Codeforces/Round 1/C.cc"].map((path) => safePath(path, true)), ["A.cpp", "abc/B_two.py", "Codeforces/Round 1/C.cc"]);
+eq("nothing that leaves the folder", ["../A.cpp", "a/../B.cpp", "/A.cpp", "C:/A.cpp", "a\\B.cpp", "a//B.cpp", "./A.cpp", " A.cpp", "a/ b/C.cpp"].map((path) => safePath(path, true)), [null, null, null, null, null, null, null, null, null]);
+eq("only source files", ["notes.txt", "A", "A.cpp.exe", ".cpp"].map((path) => safePath(path, true)), [null, null, null, ".cpp"]);
+eq("a folder needs no extension", [safePath("abc/def", false), safePath("abc/..", false), safePath("", false), safePath(7, false)], ["abc/def", null, null, null]);
+eq("not too deep", [safePath("1/2/3/4/5/6/7/8/A.cpp", true), safePath("1/2/3/4/5/6/7/8/9/A.cpp", true)], ["1/2/3/4/5/6/7/8/A.cpp", null]);
+eq("a folder name is one name", ["Round 1", "a/b", "..", " x. ", "", 5].map(safeFolderName), ["Round 1", "ab", "shared", "x", "shared", "shared"]);
+eq("meta keeps what it should be", fileMeta(JSON.stringify({ title: " A.\n Sum ", source: "codeforces", sourceUrl: "https://codeforces.com/contest/1/problem/A", limits: { timeLimitMs: 1500.4, memoryLimitMb: -1 }, extra: 1 })), { title: "A. Sum", source: "codeforces", sourceUrl: "https://codeforces.com/contest/1/problem/A", limits: { timeLimitMs: 1500, memoryLimitMb: undefined } });
+eq("and drops what is not", [fileMeta("not json"), fileMeta(JSON.stringify({ source: "spoj", sourceUrl: "javascript:alert(1)" }))], [{ title: "", source: undefined, sourceUrl: undefined, limits: undefined }, { title: "", source: undefined, sourceUrl: undefined, limits: undefined }]);
+eq("tests are name, input, expected", fileTests(JSON.stringify([{ name: "one", input: "1 2\n", expected: "3\n", output: "x" }, "junk", { input: 5 }])), [{ name: "one", input: "1 2\n", expected: "3\n" }, { name: "test 2", input: "", expected: "" }]);
+eq("no tests", [fileTests(undefined), fileTests("{}")], [[], []]);
+const mine = { status: "WA", url: "https://j/s/2", submissions: [{ status: "WA", url: "https://j/s/2", at: 200 }] };
+const theirs = { status: "AC", url: "https://j/s/1", submissions: [{ status: "AC", url: "https://j/s/1", at: 100 }] };
+const team = { status: "AC", url: "https://j/s/1", submissions: [{ status: "AC", url: "https://j/s/1", at: 100 }, { status: "WA", url: "https://j/s/2", at: 200 }] };
+eq("a teammate's AC stands over my later WA", mergeJudge(mine, theirs), team);
+eq("whichever way round", mergeJudge(theirs, mine), team);
+eq("and merging again changes nothing", mergeJudge(team, mine), team);
+eq("nobody has submitted", mergeJudge({}, {}), { status: undefined, url: undefined, submissions: undefined });
+eq("the newer of two rejections", mergeJudge({ status: "TLE", url: "https://j/s/3", submissions: [{ status: "TLE", url: "https://j/s/3", at: 300 }] }, mine).status, "TLE");
+eq("a verdict replaces the wait for it", mergeJudge({ submissions: [{ status: "WJ", url: "https://j/s/4", at: 400 }] }, { submissions: [{ status: "AC", url: "https://j/s/4", at: 400 }] }).submissions, [{ status: "AC", url: "https://j/s/4", at: 400 }]);
+eq("a full score is accepted", mergeJudge({ status: "100/100", url: "https://j/s/5" }, mine).status, "100/100");
+eq("what a judge reports is read, not trusted", fileJudge(JSON.stringify({ status: "AC", url: "ftp://x", submissions: [{ status: "AC", at: "soon" }, { at: 3 }, 4] })), { status: "AC", url: undefined, submissions: [{ status: "AC", url: undefined, at: 0 }] });
 
 // --- Reconnecting -------------------------------------------------------------------------
 eq("the waits double", [0, 1, 2, 3, 4].map((attempt) => reconnectDelay(attempt, 0)), [500, 1000, 2000, 4000, 8000]);

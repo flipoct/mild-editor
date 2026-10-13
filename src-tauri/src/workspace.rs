@@ -246,6 +246,23 @@ fn relocate_workspace_folder(folder: &Path, directory: &Path, destination_relati
     Ok(RenamedWorkspaceFolder { directory: new_directory, renamed })
 }
 
+/// Makes sure a folder is there, with every folder above it. For a shared room
+/// (src/collab), where a teammate made the folder and this copy of it follows.
+#[tauri::command]
+pub(crate) fn ensure_workspace_folder(request: WorkspaceFolderRequest) -> Result<(), String> {
+    let directory = workspace_directory_path(&request.directory)?;
+    fs::create_dir_all(std::path::PathBuf::from(&request.folder_path).join(directory)).map_err(|error| format!("Could not create folder: {error}"))
+}
+
+/// Removes a folder a teammate removed, and only if nothing is left in it: whatever this
+/// user keeps there that the room never knew of stays, and the folder with it.
+#[tauri::command]
+pub(crate) fn remove_empty_workspace_folder(request: WorkspaceFolderRequest) -> Result<bool, String> {
+    let directory = workspace_directory_path(&request.directory)?;
+    if directory.as_os_str().is_empty() { return Ok(false); }
+    Ok(fs::remove_dir(std::path::PathBuf::from(&request.folder_path).join(directory)).is_ok())
+}
+
 #[tauri::command]
 pub(crate) fn delete_workspace_folder(request: WorkspaceFolderRequest) -> Result<Vec<String>, String> {
     let folder = std::path::PathBuf::from(&request.folder_path);
