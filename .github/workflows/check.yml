@@ -63,10 +63,16 @@ jobs:
       # --all-targets covers the binaries: `cargo test --lib` alone once let a
       # platform-specific dependency in the CEF helper binary through to a release build.
       - name: Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+        run: cargo check --manifest-path src-tauri/Cargo.toml --workspace --all-targets
 
       # The tests are plain logic with no platform behaviour in them, so one platform is
       # enough and it may as well be the quick one.
       - name: Test
         if: matrix.platform == 'ubuntu-22.04'
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      # The relay of the shared rooms is a package of its own (src-tauri/relay), so the
+      # line above does not reach it. Its tests are real connections on loopback.
+      - name: Test the relay
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p mild-relay

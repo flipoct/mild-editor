@@ -34,6 +34,8 @@ const paths = {
   refresh: <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8M13.6 2.2v3.2h-3.2" />,
   check: <path d="m3 8.4 3.2 3.2L13 4.6" />,
   scale: <path d="M8 2.2v11.6M5 13.8h6M3 4.2h10M3 4.2 1.4 8.6a1.9 1.9 0 0 0 3.2 0ZM13 4.2l-1.6 4.4a1.9 1.9 0 0 0 3.2 0Z" />,
+  users: <path d="M6 7.4a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.6 13.4c0-2.3 2-3.8 4.4-3.8s4.4 1.5 4.4 3.8M10.4 7.2a2.2 2.2 0 1 0-.5-4.3M11.8 9.8c1.6.5 2.6 1.8 2.6 3.6" />,
+  copy: <path d="M5.6 5.6V2.6h7.8v7.8h-3M2.6 5.6h7.8v7.8H2.6Z" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

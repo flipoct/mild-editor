@@ -1,6 +1,5 @@
 import { isMac } from "./platform";
 import type { UpdateStatus } from "./types";
-
 export const messages = {
   en: {
     submit: "Submit", submitHint: "Open the judge's submit page with this solution filled in", submitNoSource: "Import the problem from a judge, or set its source, to submit from here", submitOpening: "Opening the submit page…", submitFilled: "Submit form filled — review it and press the judge's submit button", submitCopied: "Solution copied — paste it into the judge's submit form", submitLogin: "Log in to the judge in the problem browser, then press Submit again", submitNoBrowser: "The problem browser did not open.", submitPressing: "Submitting…", submitPressed: "Submitted — the judge is judging", submitUnverified: "Not submitted — the filled form did not check out", submitPressUnconfirmed: "The submit button was pressed, but the judge did not move on — check the problem browser", submitCheckForm: "the submit form is not on the page", submitCheckProblem: "a different problem is selected", submitCheckLanguage: "no language of the file's family is selected", submitCheckCode: "the source in the form is not the file's", submitCheckButton: "the submit button is missing or disabled", submitCheckTimeout: "the page did not answer",
@@ -50,6 +49,27 @@ export const messages = {
     interactiveHint: "Run the solution, then answer it yourself: read what the program prints and type the interactor's reply. Enter sends a line, Shift+Enter adds one.",
     interactiveReply: "Your reply", interactiveStarted: "Program started", interactiveStopped: "Stopped", interactiveExited: "Exited with code",
     interactiveEofSent: "Input closed (EOF)", interactiveIdle: "Not running",
+    collabChip: "Share", collabRoom: "Room", collabOpenTab: "Open a room", collabJoinTab: "Join a room",
+    collabName: "Your name", collabPort: "Port",
+    collabOpen: "Open room", collabOpening: "Opening…", collabJoin: "Join", collabJoining: "Joining…", collabRoomTitle: "Shared room",
+    collabRoomLocalNote: "The room runs on this computer: when you leave, it ends for everyone. They keep the folder as it is then.", collabRoomRelayNote: "Leaving only takes you out; the others carry on, and you can come back with the same code while anyone is still in the room.",
+    collabCopy: "Copy", collabCopied: "Copied", collabInvite: "Invitation", collabMembers: "In the room", collabYou: "you", collabOnline: "connected", collabOffline: "reconnecting…",
+    collabLeave: "Leave room", collabLeaveEnd: "Leave and end the room", collabDone: "Done", 
+    collabErrUnreachable: "Could not connect. Check the address, and that the room is open.", collabErrNoRoom: "There is no such room. Check the join code, and that someone is still in the room.", collabErrFull: "The room is full.", collabErrRefused: "That server did not accept the room.", collabErrNoAnswer: "Connected, but nobody in the room answered.",
+    collabErrFailed: "The room could not be opened",
+    collabRoomOver: "the room is over: the computer it ran on has closed it", collabLost: "the room is over: its connection did not come back", 
+    collabChipHint: "Share a folder with teammates: open a room, or join one", collabStartTitle: "Share a folder", cmdCollabOpen: "Share a folder: open a room",
+    collabOpenHelp: "Pick a folder to share. Everyone who joins gets a copy of it in their own workspace, and from then on every file and folder in it is the same for all of you: edits, new files, renames and deletions go both ways.",
+    collabJoinHelp: "Paste the invitation a teammate sent you. A copy of the shared folder is made in your workspace and kept in step with theirs.",
+    collabFolder: "Folder to share", collabWholeWorkspace: "(the whole workspace)", collabParent: "Put it in", collabParentHint: "The shared folder is made here as a new folder; nothing you have is overwritten.", collabMyFolder: "Shared folder, here",
+    collabAdvanced: "Advanced", collabRelayAddress: "Relay server", collabRelayHelp: "Leave empty to open the room on this computer. With the address of a mild-relay server, everyone connects there instead and the room lasts while anyone is in it.", collabLocalAppOnly: "The browser preview cannot listen itself, so it needs a relay.",
+    collabRoomHelp: "Send teammates the invitation; it is all they need. Everything in the folder is encrypted with it, so share it only with them.",
+    collabErrInvite: "That is not an invitation. It looks like 192.168.0.7#K7QM-2XWP-9HDT.", collabErrAddress: "That is not a relay address. Try wss://relay.example.org.", collabErrNoWorkspace: "Open a workspace folder first: the shared folder lives in it.",
+    collabLocked: "a file shared in a room only takes a template of its own language",
+    collabLanguageTitle: "Switch this shared file to {language}?", collabLanguageBody: "The file is renamed and its code replaced for everyone in the room, by the code you have for that language (the template, if you have none). The code as it is now stays with each of you and comes back when the file is switched back.", collabLanguageConfirm: "Switch for everyone", collabTabLive: "shared in a room",
+    collabReachChecking: "Asking the router to let teammates outside this network in…", collabReachOpen: "Teammates elsewhere can join too: the router forwards the port here until the room ends.",
+    collabReachNoGateway: "Only teammates on this network, or on a VPN you share, can join: no router answered the UPnP request.", collabReachNat: "Only teammates on this network, or on a VPN you share, can join: this network has no public address of its own.", collabReachRefused: "Only teammates on this network, or on a VPN you share, can join: the router did not open the port.",
+    cmdCollabJoin: "Join a shared room", cmdCollabShow: "Show the shared room", cmdCollabLeave: "Leave the shared room",
   },
   ko: {
     submit: "제출", submitHint: "이 풀이를 채운 상태로 저지의 제출 페이지 열기", submitNoSource: "여기서 제출하려면 저지에서 문제를 가져오거나 문제 출처를 지정하세요", submitOpening: "제출 페이지 여는 중…", submitFilled: "제출 양식을 채웠습니다 — 확인한 뒤 저지의 제출 버튼을 누르세요", submitCopied: "풀이를 복사했습니다 — 저지의 제출 양식에 붙여넣으세요", submitLogin: "문제 브라우저에서 저지에 로그인한 뒤 제출을 다시 누르세요", submitNoBrowser: "문제 브라우저가 열리지 않았습니다.", submitPressing: "제출하는 중…", submitPressed: "제출했습니다 — 채점 중", submitUnverified: "제출하지 않음 — 채워진 양식이 확인을 통과하지 못했습니다", submitPressUnconfirmed: "제출 버튼을 눌렀지만 저지가 넘어가지 않았습니다 — 문제 브라우저를 확인하세요", submitCheckForm: "페이지에 제출 양식이 없음", submitCheckProblem: "다른 문제가 선택되어 있음", submitCheckLanguage: "파일 언어 계열이 선택되지 않음", submitCheckCode: "양식의 소스가 파일과 다름", submitCheckButton: "제출 버튼이 없거나 비활성", submitCheckTimeout: "페이지가 응답하지 않음",
@@ -99,11 +119,30 @@ export const messages = {
     interactiveHint: "풀이를 실행한 뒤 출제자 역할을 직접 하세요. 프로그램의 출력을 보고 답변을 입력합니다. Enter는 한 줄 전송, Shift+Enter는 줄바꿈입니다.",
     interactiveReply: "보낼 응답", interactiveStarted: "프로그램 실행됨", interactiveStopped: "중지됨", interactiveExited: "종료 코드",
     interactiveEofSent: "입력 종료(EOF) 전송됨", interactiveIdle: "실행 중 아님",
+    collabChip: "공유", collabRoom: "방", collabOpenTab: "방 열기", collabJoinTab: "방 참가",
+    collabName: "내 이름", collabPort: "포트",
+    collabOpen: "방 열기", collabOpening: "여는 중…", collabJoin: "참가", collabJoining: "참가하는 중…", collabRoomTitle: "공유 방",
+    collabRoomLocalNote: "방이 이 컴퓨터에서 돌아가므로, 내가 나가면 모두에게 방이 끝납니다. 팀원에게는 그때의 폴더가 그대로 남습니다.", collabRoomRelayNote: "나가도 나만 빠지고 다른 사람은 계속 편집합니다. 누군가 남아 있는 동안에는 같은 코드로 다시 들어올 수 있습니다.",
+    collabCopy: "복사", collabCopied: "복사됨", collabInvite: "초대 문구", collabMembers: "참가자", collabYou: "나", collabOnline: "연결됨", collabOffline: "다시 연결하는 중…",
+    collabLeave: "방 나가기", collabLeaveEnd: "나가고 방 끝내기", collabDone: "확인", 
+    collabErrUnreachable: "연결할 수 없습니다. 주소가 맞는지, 방이 열려 있는지 확인하세요.", collabErrNoRoom: "그런 방이 없습니다. 참가 코드가 맞는지, 방에 아직 누가 있는지 확인하세요.", collabErrFull: "방이 가득 찼습니다.", collabErrRefused: "서버가 방을 받아주지 않았습니다.", collabErrNoAnswer: "연결됐지만 방에서 아무도 응답하지 않았습니다.",
+    collabErrFailed: "방을 열 수 없습니다",
+    collabRoomOver: "방이 끝났습니다: 방이 돌아가던 컴퓨터에서 닫았습니다", collabLost: "방이 끝났습니다: 연결이 돌아오지 않았습니다", 
+    collabChipHint: "팀원과 폴더 공유: 방을 열거나 참가하기", collabStartTitle: "폴더 공유하기", cmdCollabOpen: "폴더 공유: 방 열기",
+    collabOpenHelp: "공유할 폴더를 고르세요. 참가한 사람은 자기 워크스페이스에 이 폴더의 사본을 받고, 그 뒤로는 안의 파일과 폴더가 모두에게 똑같이 유지됩니다. 편집, 새 파일, 이름 변경, 삭제가 양쪽으로 전달됩니다.",
+    collabJoinHelp: "팀원이 보낸 초대 문구를 붙여넣으세요. 공유 폴더의 사본이 내 워크스페이스에 만들어지고 계속 같은 상태로 유지됩니다.",
+    collabFolder: "공유할 폴더", collabWholeWorkspace: "(워크스페이스 전체)", collabParent: "받을 위치", collabParentHint: "여기에 공유 폴더가 새 폴더로 만들어집니다. 기존 파일은 덮어쓰지 않습니다.", collabMyFolder: "내 쪽 공유 폴더",
+    collabAdvanced: "고급", collabRelayAddress: "릴레이 서버", collabRelayHelp: "비워 두면 이 컴퓨터에서 방을 엽니다. mild-relay 서버 주소를 넣으면 모두가 그 서버에 접속하고, 누구든 남아 있는 동안 방이 유지됩니다.", collabLocalAppOnly: "브라우저 미리보기는 직접 방을 열 수 없어 릴레이가 필요합니다.",
+    collabRoomHelp: "팀원에게 초대 문구만 보내면 됩니다. 폴더의 모든 내용은 이 문구로 암호화되니 팀원에게만 알려주세요.",
+    collabErrInvite: "초대 문구가 아닙니다. 192.168.0.7#K7QM-2XWP-9HDT 같은 형식입니다.", collabErrAddress: "릴레이 주소가 아닙니다. wss://relay.example.org 형식으로 입력하세요.", collabErrNoWorkspace: "먼저 워크스페이스 폴더를 여세요. 공유 폴더는 그 안에 있습니다.",
+    collabLocked: "방에서 공유 중인 파일에는 그 파일 언어의 템플릿만 적용할 수 있습니다",
+    collabLanguageTitle: "공유 중인 파일을 {language}(으)로 바꿀까요?", collabLanguageBody: "방의 모두에게 파일 이름이 바뀌고, 코드가 내가 가진 그 언어의 코드(없으면 템플릿)로 교체됩니다. 지금 코드는 각자에게 남아 있어서, 언어를 되돌리면 다시 나타납니다.", collabLanguageConfirm: "모두에게 바꾸기", collabTabLive: "방에서 공유 중",
+    collabReachChecking: "다른 네트워크의 팀원도 들어올 수 있도록 공유기에 요청하는 중…", collabReachOpen: "다른 곳의 팀원도 참가할 수 있습니다. 방이 끝날 때까지 공유기가 포트를 이 컴퓨터로 넘겨줍니다.",
+    collabReachNoGateway: "같은 네트워크나 같은 VPN의 팀원만 참가할 수 있습니다: UPnP 요청에 응답한 공유기가 없습니다.", collabReachNat: "같은 네트워크나 같은 VPN의 팀원만 참가할 수 있습니다: 이 네트워크에는 자체 공인 주소가 없습니다.", collabReachRefused: "같은 네트워크나 같은 VPN의 팀원만 참가할 수 있습니다: 공유기가 포트를 열어주지 않았습니다.",
+    cmdCollabJoin: "공유 방 참가", cmdCollabShow: "공유 방 보기", cmdCollabLeave: "공유 방 나가기",
   },
 } as const;
-
 export type Translate = (key: keyof typeof messages.en) => string;
-
 /** The one line that says where an update stands, for the settings page and the notice. */
 export const updateStatusLine = (status: UpdateStatus, t: Translate) => status.phase === "unavailable" ? t("updatesDev")
   : status.phase === "idle" ? t("updatesIdle")

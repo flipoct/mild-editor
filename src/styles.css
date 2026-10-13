@@ -142,6 +142,9 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 .tab-close { width: 20px; height: 20px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s, background .12s, color .12s; }
 .problem-tab:hover .tab-close, .problem-tab.active .tab-close, .tab-close:focus-visible { opacity: 1; }
 .tab-close:hover { background: var(--active); color: var(--text); }
+/* A tab whose file is in a shared room: the room's mark before the name, dimmed once the room is out of reach. */
+.tab-shared { flex: 0 0 auto; display: grid; place-items: center; color: var(--success); }
+.tab-shared.ended { color: var(--idle); }
 /* With nothing open the strip would be an empty band, so the row folds away. */
 .app-shell:has(.tab-strip:empty) { grid-template-rows: 38px 0 minmax(0, 1fr) 26px; }
 :root[data-platform="mac"] .app-shell:has(.tab-strip:empty) { grid-template-rows: auto 0 minmax(0, 1fr) 26px; }
@@ -426,6 +429,39 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .confirm-dialog p { margin: 0; color: var(--muted); font-size: var(--fs-m); line-height: 1.5; }
 .confirm-dialog > input { margin-top: 8px; }
 .confirm-dialog .settings-footer { padding-top: 20px; }
+/* Shared rooms (src/collab): the dialogs to open, join and look at one. */
+.collab-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 10px; }
+.collab-form input, .collab-form select { width: 100%; height: var(--control-l); padding: 0 10px; font-size: var(--fs-m); }
+.collab-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: var(--r-m); background: var(--bg-0); }
+.collab-switch button { height: 26px; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted); font-size: var(--fs-s); }
+.collab-switch button.active { background: var(--bg-3); color: var(--text); font-weight: 600; }
+.collab-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.collab-field > small { color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; }
+.collab-field > span { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
+.collab-field em { font-style: normal; }
+.collab-field em.online { color: var(--success); }
+.collab-field em.offline { color: var(--warning); }
+.confirm-dialog p.collab-warning { color: var(--warning); }
+.confirm-dialog p.collab-error { color: var(--danger); }
+.collab-field small.collab-reach.open { color: var(--success); }
+.collab-field small.collab-reach.no-gateway, .collab-field small.collab-reach.nat, .collab-field small.collab-reach.refused { color: var(--warning); }
+/* The invitation is one long line with nowhere to break; it wraps anywhere rather than push the dialog wider. */
+.collab-invite { display: flex; align-items: flex-start; gap: 8px; padding: 7px 6px 7px 10px; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--field); }
+.collab-invite code { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--text); font-family: var(--font-mono); line-height: 1.5; user-select: all; }
+.collab-path { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--muted); }
+.collab-path code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-family: var(--font-mono); }
+.collab-advanced summary { color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.collab-advanced[open] { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.collab-copy { height: var(--control-s); flex: 0 0 auto; justify-self: start; padding: 0 8px; font-size: var(--fs-xs); }
+.collab-members { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.collab-members li { display: flex; align-items: center; gap: 7px; font-size: var(--fs-m); }
+.collab-members i, .collab-faces i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+.collab-members small { padding: 0 5px; border-radius: var(--r-s); background: var(--bg-3); color: var(--muted); font-size: 10.5px; }
+/* A teammate's cursor and selection, drawn by y-monaco. The colour and the name are set per
+   person by the style sheet the room writes (collabStore.ts); these are the shapes. */
+.yRemoteSelection { border-radius: 2px; }
+.yRemoteSelectionHead { position: absolute; height: 100%; box-sizing: border-box; border-left: 2px solid var(--accent); }
+.yRemoteSelectionHead::after { position: absolute; left: -2px; bottom: 100%; z-index: 5; padding: 0 4px; border-radius: 3px 3px 3px 0; color: #16170f; font: 600 10px/14px var(--font-ui); white-space: nowrap; pointer-events: none; opacity: .92; }
 .release-notes { width: min(480px, 92vw); }
 .release-notes .eyebrow { display: block; margin-bottom: 4px; color: var(--accent); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .release-notes-body { max-height: min(50vh, 380px); margin-top: 12px; overflow-y: auto; color: var(--text-2); font-size: var(--fs-m); line-height: 1.55; }
@@ -612,6 +648,9 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .lsp-status.connecting > span, .lsp-state.connecting .lsp-dot { background: var(--warning); animation: pulse 1s infinite; }
 .lsp-status.missing > span, .lsp-status.error > span, .lsp-state.missing .lsp-dot, .lsp-state.error .lsp-dot { background: var(--danger); }
 .lsp-status.missing > span { background: var(--idle); }
+.collab-status.idle .icon { color: var(--muted); }
+.collab-status.ready { color: var(--text); }
+.collab-faces { display: flex; align-items: center; gap: 2px; }
 .panel-chips { display: flex; align-items: center; gap: 2px; padding: 0 6px; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
 .panel-chip.active { background: var(--hover); color: var(--text); }
 .panel-chip.active .icon { color: var(--accent); }

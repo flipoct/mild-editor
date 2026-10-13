@@ -75,6 +75,11 @@ const definitions = {
   submitPress: flag("mild-submit-press", false),
   companionEnabled: flag("mild-companion-enabled", true),
   companionPort: bounded("mild-companion-port", 10043, 1024, 65535),
+  // Shared rooms (src/collab): the name beside this user's cursor — empty until one is given,
+  // and a judge handle stands in — the port a room opens on here, and the relay used last.
+  collabName: text("mild-collab-name", "", trimmed),
+  collabPort: bounded("mild-collab-port", 10044, 1024, 65535),
+  collabRelay: text("mild-collab-relay", "", trimmed),
 
   compileProfile: stored<CompileProfile>("mild-compile-profile", (value) => value === "debug" ? "debug" : "release"),
   profileFlags: {

@@ -166,7 +166,8 @@ export type WorkspaceFileResult = { filename: string; title: string; language: L
 /** One submission as a judge reported it; `at` is its time in seconds, 0 when unknown. */
 export type SubmissionRecord = { status: string; url?: string; at: number };
 
-export type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[] };
+/** `settled` is false when the judge was not asked this time: no status then means "not known yet", not "no submission". */
+export type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[]; settled?: boolean };
 
 export type BackgroundImageFile = { bytes: number[]; mime: string };
 

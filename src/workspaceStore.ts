@@ -176,6 +176,16 @@ export const createWorkspaceFolder = async (name: string, parentDirectory: strin
   expandDirectories(parentDirectory, created);
 };
 
+/**
+ * Told about a folder before the saved files are seen without it or under its new name.
+ * A shared room (src/collab) listens: a folder deleted here must not read as its files
+ * being deleted one by one, which the room would carry to everyone in it.
+ */
+export const folderHooks = {
+  deleting: new Set<(directory: string) => void>(),
+  moved: new Set<(movePath: (path: string) => string) => void>(),
+};
+
 /** What became of the paths under a folder that was renamed or moved. */
 export type RelocatedFolder = {
   /** File key of each file as it was → the name it has now. */
@@ -196,6 +206,7 @@ export const relocateWorkspaceFolder = async (directory: string, command: "renam
   const renamedFiles = new Map(result.renamed.map(([from, to]) => [fileKey(from), to]));
   const oldKey = fileKey(directory);
   const movePath = (path: string) => fileKey(path) === oldKey ? result.directory : fileKey(path).startsWith(`${oldKey}/`) ? `${result.directory}${path.slice(directory.length)}` : path;
+  folderHooks.moved.forEach((hook) => hook(movePath));
   setSavedFiles((items) => items.map((tab) => { const next = renamedFiles.get(fileKey(tab.filename)); return next ? { ...tab, filename: next } : tab; }));
   updateCollapsedDirectories((items) => new Set([...items].map((key) => fileKey(movePath(key)))));
   setExplorerSelection((selected) => selected?.kind === "directory" ? { kind: "directory", path: movePath(selected.path) } : selected?.kind === "file" ? { kind: "file", filename: renamedFiles.get(fileKey(selected.filename)) || selected.filename } : selected);
@@ -206,6 +217,7 @@ export const relocateWorkspaceFolder = async (directory: string, command: "renam
 export const deleteWorkspaceFolder = async (directory: string): Promise<Set<string> | null> => {
   const folderPath = workspace.get().workspacePath;
   if (!folderPath) return null;
+  folderHooks.deleting.forEach((hook) => hook(directory));
   const removed = await invoke<string[]>("delete_workspace_folder", { request: { folderPath, directory } });
   const removedKeys = new Set(removed.map(fileKey));
   const removedRoot = fileKey(directory);

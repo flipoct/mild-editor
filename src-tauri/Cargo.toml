@@ -26,6 +26,11 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.11.0"
 # The built-in terminal: a shell on a pseudo-terminal (ConPTY on Windows).
 portable-pty = "0.9"
+# The relay a shared room runs on (src/collab.rs opens one inside the app). Its own package:
+# the same code is the standalone `mild-relay` server, see relay/Cargo.toml.
+mild-relay = { path = "relay" }
+# Asks the router (UPnP) to let teammates outside the network reach a room opened here.
+igd-next = "0.18"
 
 # Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
 # builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.
@@ -58,6 +63,7 @@ path = "src/main.rs"
 
 # macOS runs CEF sub-processes from a separate helper executable. It is a workspace member
 # rather than a second binary of this package so the bundler does not copy it into the app;
-# see cef-helper/Cargo.toml.
+# see cef-helper/Cargo.toml. The standalone relay of the shared rooms is one for the same
+# reason; see relay/Cargo.toml.
 [workspace]
-members = ["cef-helper"]
+members = ["cef-helper", "relay"]
