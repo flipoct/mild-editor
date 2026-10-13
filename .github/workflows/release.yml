@@ -57,16 +57,17 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.16.0
+            ## What's changed in v1.17.0
 
-            - **DOJ contests through your own session.** With the problem browser open and logged in, verdicts are read from *my submissions* and a running contest, category or virtual contest imports as a whole — the pages DOJ shows only to the participant.
-            - **Contest mode on import** (Settings → online judges, off by default): importing a running contest starts contest mode with the contest's own clock, and its first problem opens as soon as it lands.
-            - **Scores** show as AC, WA or **PAC 94/100**, in full.
-            - **Imports fixed**: AtCoder titles without *Editorial*; Codeforces through the problem browser when Cloudflare asks for a check, with every example; DOJ contest links; no more "Duplicate filename" after overlapping imports.
-            - Competitive Companion in the problem browser repairs itself after an old build has touched the profile; the contest board no longer hides a problem page docked at the left; on Windows a precompiled header MinGW cannot load no longer fails the compile.
-            - Typing is lighter: the explorer no longer re-sorts, and the window no longer redraws twice, on every keystroke.
+            - **Shared rooms: work on a folder together** (**Share** in the status bar). Open a room on a folder and send a teammate the one-line invitation: they get a copy of the folder, and typing, new files, renames, deletions and test cases go both ways from then on, with each other's cursors in the editor. The room runs on the opener's computer and what is sent is encrypted with the invitation.
+            - Teammates on another network can join where the router allows it (UPnP); the room says whether it does. Otherwise a shared VPN such as Tailscale works.
+            - **AC for one is AC for all** in a room, and a shared file's language can be switched for everyone.
+            - Old verdicts are no longer announced as news after start-up.
+            - Switching a file between C++ and Python no longer shows the template's placeholders as code.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.16.0/CHANGELOG.md) for the patch notes.
+            Shared rooms are new: try them on a folder you can afford to lose first, since a deletion is a deletion for everyone in the room.
+
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.17.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

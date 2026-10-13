@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.17.0
+
+- **Shared rooms: work on a folder together** (**Share** in the status bar). Open a room on a folder of your workspace and send a teammate the invitation — one line. They get a copy of the folder in their own workspace, and from then on it is the same for everyone in the room: what is typed appears as it is typed, with each other's cursors, and new files, renames, moves, deletions, empty folders, test cases and a problem's source go both ways. Everyone saves their own copy; when the room ends, everyone simply has the folder.
+  - The room runs on the computer of whoever opened it and ends when they leave. Nothing goes through a server of ours; what is sent is encrypted with a key made from the invitation.
+  - For teammates on another network the router is asked (UPnP) to let them in, and the room says whether it did. Where it does not — many school, office and mobile networks — a shared VPN such as Tailscale works, or a `mild-relay` server (in this repository) under **Advanced**.
+  - A deletion is a deletion for everyone, unsaved edits included. Deleting the shared folder itself, or opening another workspace, only takes you out of the room.
+  - **AC for one is AC for all.** A verdict from the judge shows for everyone in the room, and a later rejection does not take an accepted one back.
+  - A shared file's language can be switched, after a question, since that replaces the code on every screen.
+- Old verdicts are no longer announced as news after start-up. A notice now needs a submission made while the editor was running; a verdict that only arrives late — DOJ is asked about a few problems at a time — is taken in silently.
+- Switching a file between C++ and Python no longer shows the template's `${cursor}` and `${title}` as code, and `${filename}` is the name the file has in that language.
+
 ## 1.16.0
 
 - **DOJ contests through your own session.** A running DOJ contest shows its problems and its submissions only to the participant who is logged in. With the problem browser open and logged in, the editor now reads them there: verdicts come from *my submissions* (one request per poll), and a contest, a category or a virtual contest imports as a whole, in the page's order and with its letters. Logged out, or with the browser closed, it reads the public pages as before.
