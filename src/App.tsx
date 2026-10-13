@@ -849,8 +849,8 @@ function App() {
     const fileLanguage = languageFromFilename(filename) || defaultLanguage;
     const title = explorerBasename(filename).replace(/\.[^.]+$/, "");
     const createdAt = new Date();
-    const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename, title, url: "", now: createdAt });
-    const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename, title, url: "", now: createdAt });
+    const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", "other"), { source: "other", filename: filenameForLanguage(filename, "cpp"), title, url: "", now: createdAt });
+    const renderedPython = renderTemplateWithCursor(storedTemplate("python", "other"), { source: "other", filename: filenameForLanguage(filename, "python"), title, url: "", now: createdAt });
     const tab: ProblemTab = {
       id: crypto.randomUUID(),
       title,
@@ -1490,8 +1490,8 @@ function App() {
       const filename = mexFilename(requestedNames.get(problem.sourceUrl) || problem.suggestedFilename, used);
       used.add(filename);
       const createdAt = new Date();
-      const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", problem.source), { source: problem.source, filename, title: problem.title, url: problem.sourceUrl, now: createdAt });
-      const renderedPython = renderTemplateWithCursor(storedTemplate("python", problem.source), { source: problem.source, filename, title: problem.title, url: problem.sourceUrl, now: createdAt });
+      const renderedCpp = renderTemplateWithCursor(storedTemplate("cpp", problem.source), { source: problem.source, filename: filenameForLanguage(filename, "cpp"), title: problem.title, url: problem.sourceUrl, now: createdAt });
+      const renderedPython = renderTemplateWithCursor(storedTemplate("python", problem.source), { source: problem.source, filename: filenameForLanguage(filename, "python"), title: problem.title, url: problem.sourceUrl, now: createdAt });
       const id = crypto.randomUUID();
       const cursorOffset = importLanguage === "cpp" ? renderedCpp.cursorOffset : renderedPython.cursorOffset;
       if (cursorOffset !== undefined) importedCursorOffsets.set(id, cursorOffset);

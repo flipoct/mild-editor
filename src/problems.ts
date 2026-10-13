@@ -1,5 +1,6 @@
 import { outputsMatch } from "./judge";
 import { explorerParent, fileKey, normalizedExplorerPath } from "./fileNaming";
+import { renderTemplateWithCursor } from "./templateParser";
 import { checkerStatus, verdictAccepted, type CheckerVerdict } from "./workbench";
 import type { CompanionProblem, ContestState, ExplorerSelection, ImportedAtCoderProblem, Language, NativeRunResult, ProblemSource, ProblemTab, SavedTest, Status, TestCase, WorkspaceFileResult } from "./types";
 
@@ -194,10 +195,18 @@ export const hydrateTests = (saved: SavedTest[]): TestCase[] => saved.length
   ? saved.map((test, index) => ({ ...test, name: test.name.replace(/^sample\s+/i, "test "), id: index + 1, output: "", error: "", status: "idle", open: index === 0 }))
   : [blankTest()];
 
+/**
+ * The code a file starts from when it is switched to `language`: the template for its judge,
+ * filled in for the name the file will then have — never the template as it is written,
+ * whose `${cursor}` and `${title}` are not code.
+ */
+export const starterCode = (language: Language, file: { filename: string; title: string; source?: ProblemSource; sourceUrl?: string }) =>
+  renderTemplateWithCursor(storedTemplate(language, file.source || "other"), { source: file.source || "other", filename: filenameForLanguage(file.filename, language), title: file.title, url: file.sourceUrl || "" }).code;
+
 /** A file of the workspace as a tab. Only its own language has code yet; the other starts from the template. */
 export const makeTab = (file: WorkspaceFileResult): ProblemTab => ({
   id: crypto.randomUUID(), title: file.title, filename: file.filename, language: file.language,
-  codes: { cpp: storedTemplate("cpp", file.source || "other"), python: storedTemplate("python", file.source || "other"), [file.language]: file.code },
+  codes: { cpp: file.language === "cpp" ? file.code : starterCode("cpp", file), python: file.language === "python" ? file.code : starterCode("python", file) },
   tests: hydrateTests(file.tests),
   source: file.source || "other", sourceUrl: file.sourceUrl || inferredSourceUrl(file.source, file.filename), judgeStatus: file.judgeStatus, limits: file.limits, modifiedAt: file.modifiedAt, order: file.order, submissions: file.submissions,
 });
