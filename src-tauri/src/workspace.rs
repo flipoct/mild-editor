@@ -2,7 +2,12 @@
 //! problem's tests, source and submissions.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, MutexGuard};
 use std::{fs, path::Path, process::Command};
+
+use crate::tools::decode_output;
 
 const WORKSPACE_METADATA_FILENAME: &str = ".mild-editor.json";
 const LEGACY_WORKSPACE_METADATA_FILENAME: &str = "mild-editor.json";
@@ -15,6 +20,19 @@ pub(crate) fn workspace_metadata_path(folder: &Path) -> std::path::PathBuf {
     }
 }
 
+/// One read-modify-write of `.mild-editor.json` at a time. Commands run on different threads
+/// (the main one, the async pool, the verdict poll), and two that read the file before either
+/// wrote it back lost one of the two changes: a test saved as a verdict arrived, say. Every
+/// command here takes it first; none of them calls another, so it is never taken twice.
+static METADATA_LOCK: Mutex<()> = Mutex::new(());
+
+pub(crate) fn metadata_lock() -> MutexGuard<'static, ()> {
+    METADATA_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// How many problems whose files vanished are remembered (see `WorkspaceMetadata::detached`).
+const MAX_DETACHED: usize = 200;
+
 fn read_workspace_metadata(path: &Path) -> Result<WorkspaceMetadata, String> {
     fs::read_to_string(path)
         .map_err(|error| format!("Could not read workspace metadata: {error}"))
@@ -22,9 +40,97 @@ fn read_workspace_metadata(path: &Path) -> Result<WorkspaceMetadata, String> {
 }
 
 /// `action` finishes the sentence "Could not …" for the error a failed write reports.
+///
+/// Written beside the file and moved over it, so a crash or a full disk midway leaves the old
+/// file whole instead of a truncated one that no longer parses. When the move is refused (the
+/// file held open without delete sharing, as some sync tools and scanners do), it is written
+/// in place as before.
 pub(crate) fn write_workspace_metadata(path: &Path, metadata: &WorkspaceMetadata, action: &str) -> Result<(), String> {
     let json = serde_json::to_string_pretty(metadata).map_err(|error| error.to_string())?;
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| WORKSPACE_METADATA_FILENAME.into());
+    let temporary = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    let moved = fs::write(&temporary, &json).and_then(|_| fs::rename(&temporary, path));
+    if moved.is_ok() { return Ok(()); }
+    let _ = fs::remove_file(&temporary);
     fs::write(path, json).map_err(|error| format!("Could not {action}: {error}"))
+}
+
+/// The metadata a save builds on, which has to go ahead whatever state the file is in.
+/// - Missing: a new workspace.
+/// - Unreadable just now (an antivirus scan holding it, say): an error, not "empty". Taken as
+///   empty, the save would write back a file without every other problem's tests.
+/// - Not parseable: kept beside it as `.mild-editor.json.broken-<seconds>` before the save
+///   replaces it, so whatever it held can still be recovered by hand.
+fn metadata_to_update(path: &Path) -> Result<WorkspaceMetadata, String> {
+    match fs::read_to_string(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(WorkspaceMetadata::empty()),
+        Err(error) => Err(format!("Could not read workspace metadata: {error}")),
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(metadata) => Ok(metadata),
+            Err(_) => {
+                let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|time| time.as_secs()).unwrap_or(0);
+                let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                fs::copy(path, path.with_file_name(format!("{name}.broken-{seconds}")))
+                    .map_err(|error| format!("The workspace metadata is damaged and could not be backed up: {error}"))?;
+                Ok(WorkspaceMetadata::empty())
+            }
+        },
+    }
+}
+
+// --- What the editor last saw of each source file -------------------------------------------
+
+/// The text each source file had when the editor last read or wrote it, as a hash. A save
+/// sends every open tab, and a tab nobody touched still holds that text; if the file changed
+/// on disk meanwhile (another editor, a `git checkout`), writing the tab back would undo that
+/// change without anyone having asked. Kept in memory only: after a restart the editor has
+/// read every file afresh anyway.
+static KNOWN_TEXT: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+
+fn text_hash(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn known_key(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
+fn remember_text(path: &Path, text: &str) {
+    let mut known = KNOWN_TEXT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    known.get_or_insert_with(HashMap::new).insert(known_key(path), text_hash(text));
+}
+
+fn known_text(path: &Path) -> Option<u64> {
+    let known = KNOWN_TEXT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    known.as_ref().and_then(|known| known.get(&known_key(path)).copied())
+}
+
+/// A source file's text, in UTF-8 or, failing that, the system code page (a file with CP949
+/// comments, say), so one such file cannot keep the whole workspace from loading.
+fn read_source_text(path: &Path) -> std::io::Result<String> {
+    fs::read(path).map(|bytes| decode_output(&bytes))
+}
+
+/// What saving `code` to `path` should do, given what is on disk and what the editor last saw.
+#[derive(Debug, PartialEq)]
+enum SourceWrite {
+    /// The file already says this.
+    Unchanged,
+    /// The file changed behind the editor while the tab still holds what the editor last
+    /// saw: the tab is stale, not edited, so the file wins and its text goes back.
+    KeepDisk(String),
+    Write,
+}
+
+fn plan_source_write(path: &Path, code: &str) -> SourceWrite {
+    let Ok(disk) = read_source_text(path) else { return SourceWrite::Write };
+    if disk == code { return SourceWrite::Unchanged; }
+    match known_text(path) {
+        Some(known) if known == text_hash(code) && known != text_hash(&disk) => SourceWrite::KeepDisk(disk),
+        _ => SourceWrite::Write,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -116,11 +222,13 @@ pub(crate) struct WorkspaceFolderRequest {
 
 #[tauri::command]
 pub(crate) fn list_workspace_source_filenames(request: WorkspaceRequest) -> Result<Vec<String>, String> {
+    let _metadata = metadata_lock();
     workspace_source_filenames(Path::new(&request.folder_path))
 }
 
 #[tauri::command]
 pub(crate) fn list_workspace_directories(request: WorkspaceRequest) -> Result<Vec<String>, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
     let mut directories = Vec::new();
     walk_workspace(&folder, &folder, &mut |relative, is_directory| {
@@ -136,6 +244,7 @@ fn valid_folder_name(name: &str) -> bool {
 
 #[tauri::command]
 pub(crate) fn create_workspace_folder(request: CreateWorkspaceFolderRequest) -> Result<String, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
     let parent = workspace_directory_path(&request.parent_directory)?;
     let parent_path = folder.join(&parent);
@@ -170,6 +279,7 @@ pub(crate) struct RenamedWorkspaceFolder {
 
 #[tauri::command]
 pub(crate) fn rename_workspace_folder(request: RenameWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let directory = workspace_directory_path(&request.directory)?;
     if directory.as_os_str().is_empty() { return Err("The workspace root cannot be renamed.".into()); }
@@ -192,6 +302,7 @@ pub(crate) struct MoveWorkspaceFolderRequest {
 
 #[tauri::command]
 pub(crate) fn move_workspace_folder(request: MoveWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let directory = workspace_directory_path(&request.directory)?;
     if directory.as_os_str().is_empty() { return Err("The workspace root cannot be moved.".into()); }
@@ -250,6 +361,7 @@ fn relocate_workspace_folder(folder: &Path, directory: &Path, destination_relati
 /// (src/collab), where a teammate made the folder and this copy of it follows.
 #[tauri::command]
 pub(crate) fn ensure_workspace_folder(request: WorkspaceFolderRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let directory = workspace_directory_path(&request.directory)?;
     fs::create_dir_all(std::path::PathBuf::from(&request.folder_path).join(directory)).map_err(|error| format!("Could not create folder: {error}"))
 }
@@ -258,6 +370,7 @@ pub(crate) fn ensure_workspace_folder(request: WorkspaceFolderRequest) -> Result
 /// user keeps there that the room never knew of stays, and the folder with it.
 #[tauri::command]
 pub(crate) fn remove_empty_workspace_folder(request: WorkspaceFolderRequest) -> Result<bool, String> {
+    let _metadata = metadata_lock();
     let directory = workspace_directory_path(&request.directory)?;
     if directory.as_os_str().is_empty() { return Ok(false); }
     Ok(fs::remove_dir(std::path::PathBuf::from(&request.folder_path).join(directory)).is_ok())
@@ -265,6 +378,7 @@ pub(crate) fn remove_empty_workspace_folder(request: WorkspaceFolderRequest) -> 
 
 #[tauri::command]
 pub(crate) fn delete_workspace_folder(request: WorkspaceFolderRequest) -> Result<Vec<String>, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let directory = workspace_directory_path(&request.directory)?;
     if directory.as_os_str().is_empty() { return Err("The workspace root cannot be deleted.".into()); }
@@ -362,11 +476,17 @@ pub(crate) struct WorkspaceMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     panel_mode: Option<String>,
     pub(crate) problems: Vec<WorkspaceProblemMetadata>,
+    /// Problems whose files were missing at a scan, newest first, with their tests and
+    /// submissions. A file is often gone only for a moment — a `git checkout`, an editor that
+    /// saves by replacing the file, a sync tool — and dropping its entry outright lost its
+    /// tests for good. When a file of that name comes back, it takes its entry back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    detached: Vec<WorkspaceProblemMetadata>,
 }
 
 impl WorkspaceMetadata {
     fn empty() -> Self {
-        Self { version: 2, panel_mode: None, problems: Vec::new() }
+        Self { version: 2, panel_mode: None, problems: Vec::new(), detached: Vec::new() }
     }
 }
 
@@ -427,6 +547,7 @@ fn file_modified_at(path: &std::path::Path) -> u64 {
 
 #[tauri::command]
 pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
     let metadata_path = workspace_metadata_path(&folder);
     let json = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}"))?;
@@ -447,6 +568,7 @@ pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result
 
 #[tauri::command]
 pub(crate) fn update_workspace_source(request: UpdateWorkspaceSourceRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     if !matches!(request.source.as_str(), "atcoder" | "codeforces" | "doj" | "other") {
         return Err("Unknown problem source.".into());
     }
@@ -545,12 +667,24 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
         Some((filename, language, path))
     }).collect::<Vec<_>>();
     let disk_keys = disk_files.iter().map(|(filename, _, _)| filename_key(filename)).collect::<std::collections::HashSet<_>>();
-    metadata.problems.retain(|problem| disk_keys.contains(&filename_key(&problem.filename)));
+    let (kept, gone): (Vec<_>, Vec<_>) = metadata.problems.drain(..).partition(|problem| disk_keys.contains(&filename_key(&problem.filename)));
+    metadata.problems = kept;
+    for problem in gone {
+        metadata.detached.retain(|item| filename_key(&item.filename) != filename_key(&problem.filename));
+        metadata.detached.insert(0, problem);
+    }
+    metadata.detached.truncate(MAX_DETACHED);
     for (filename, language, source_path) in disk_files {
         if let Some(problem) = metadata.problems.iter_mut().find(|problem| filename_key(&problem.filename) == filename_key(&filename)) {
             problem.filename = filename;
             problem.language = language;
             problem.modified_at = file_modified_at(&source_path);
+        } else if let Some(index) = metadata.detached.iter().position(|item| filename_key(&item.filename) == filename_key(&filename)) {
+            let mut problem = metadata.detached.remove(index);
+            problem.filename = filename;
+            problem.language = language;
+            problem.modified_at = file_modified_at(&source_path);
+            metadata.problems.push(problem);
         } else {
             metadata.problems.push(WorkspaceProblemMetadata {
                 title: Path::new(&filename).file_stem().and_then(|value| value.to_str()).unwrap_or(&filename).to_string(),
@@ -610,6 +744,7 @@ fn unique_workspace_filename(folder: &Path, requested: &str, metadata: &Workspac
 
 #[tauri::command]
 pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, String> {
+    let _metadata = metadata_lock();
     if request.problems.is_empty() {
         return Err("There are no problems to save.".into());
     }
@@ -627,17 +762,23 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
         }
         supported_problems.push((problem, filename));
     }
-    let previous_metadata = fs::read_to_string(workspace_metadata_path(&folder))
-        .ok()
-        .and_then(|json| serde_json::from_str::<WorkspaceMetadata>(&json).ok())
-        .unwrap_or_else(WorkspaceMetadata::empty);
+    let previous_metadata = metadata_to_update(&workspace_metadata_path(&folder))?;
     let panel_mode = previous_metadata.panel_mode;
+    let detached = previous_metadata.detached;
     let mut metadata_problems = previous_metadata.problems;
     let mut outputs = Vec::new();
     for (problem, filename) in supported_problems {
         if let Some(parent) = folder.join(&filename).parent() { fs::create_dir_all(parent).map_err(|error| format!("Could not create source folder: {error}"))?; }
-        fs::write(folder.join(&filename), &problem.code)
-            .map_err(|error| format!("Could not save {filename}: {error}"))?;
+        let source_path = folder.join(&filename);
+        let mut code = problem.code;
+        match plan_source_write(&source_path, &code) {
+            SourceWrite::Unchanged => remember_text(&source_path, &code),
+            SourceWrite::KeepDisk(disk) => code = disk,
+            SourceWrite::Write => {
+                fs::write(&source_path, &code).map_err(|error| format!("Could not save {filename}: {error}"))?;
+                remember_text(&source_path, &code);
+            }
+        }
         let modified_at = file_modified_at(&folder.join(&filename));
         let logical_modified_at = problem.modified_at.unwrap_or(modified_at);
         // The arranged position and the submission history are not the frontend's to
@@ -655,7 +796,7 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
             order: existing.and_then(|index| metadata_problems[index].order),
             submissions: existing.map(|index| metadata_problems[index].submissions.clone()).unwrap_or_default(),
         };
-        outputs.push(WorkspaceProblemOutput::new(metadata_problem.clone(), problem.code));
+        outputs.push(WorkspaceProblemOutput::new(metadata_problem.clone(), code));
         match existing {
             Some(index) => metadata_problems[index] = metadata_problem,
             None => metadata_problems.push(metadata_problem),
@@ -665,6 +806,7 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
         version: 2,
         panel_mode: panel_mode.clone(),
         problems: metadata_problems,
+        detached,
     };
     write_workspace_metadata(&workspace_metadata_path(&folder), &metadata, "save workspace metadata")?;
     Ok(LoadedWorkspace {
@@ -683,6 +825,7 @@ pub(crate) struct SavePanelModeRequest {
 
 #[tauri::command]
 pub(crate) fn save_workspace_panel_mode(request: SavePanelModeRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     if !matches!(request.panel_mode.as_str(), "tests" | "interactive") {
         return Err("Unknown panel mode.".into());
     }
@@ -701,6 +844,7 @@ pub(crate) fn save_workspace_panel_mode(request: SavePanelModeRequest) -> Result
 
 #[tauri::command]
 pub(crate) fn create_workspace(request: WorkspaceRequest) -> Result<LoadedWorkspace, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     fs::create_dir_all(&folder).map_err(|error| format!("Could not create project folder: {error}"))?;
     let metadata_path = workspace_metadata_path(&folder);
@@ -713,6 +857,7 @@ pub(crate) fn create_workspace(request: WorkspaceRequest) -> Result<LoadedWorksp
 
 #[tauri::command]
 pub(crate) fn delete_workspace_file(request: WorkspaceFileRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let metadata_path = workspace_metadata_path(&folder);
@@ -725,6 +870,7 @@ pub(crate) fn delete_workspace_file(request: WorkspaceFileRequest) -> Result<(),
 
 #[tauri::command]
 pub(crate) fn open_workspace_file_location(request: WorkspaceFileRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let source = folder.join(filename);
@@ -734,6 +880,7 @@ pub(crate) fn open_workspace_file_location(request: WorkspaceFileRequest) -> Res
 
 #[tauri::command]
 pub(crate) fn open_workspace_folder_location(request: WorkspaceFolderRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let directory = workspace_directory_path(&request.directory)?;
     if directory.as_os_str().is_empty() { return Err("Select a workspace folder.".into()); }
@@ -778,6 +925,7 @@ fn windows_explorer_select_argument(source: &Path) -> String {
 
 #[tauri::command]
 pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let (requested_filename, _) = workspace_source_filename(&request.new_filename)?;
@@ -789,7 +937,8 @@ pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> R
     let source = folder.join(&filename);
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
-    let code = fs::read_to_string(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
+    let code = read_source_text(&destination).map_err(|error| format!("Could not read duplicated source file: {error}"))?;
+    remember_text(&destination, &code);
     // The copy starts with everything the original has except its submissions.
     let duplicated = WorkspaceProblemMetadata { filename: new_filename, language: new_language, modified_at: file_modified_at(&destination), submissions: Vec::new(), ..source_problem };
     metadata.problems.push(duplicated.clone());
@@ -799,6 +948,7 @@ pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> R
 
 #[tauri::command]
 pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let (requested_filename, _) = workspace_source_filename(&request.new_filename)?;
@@ -823,7 +973,8 @@ pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Resu
     }
     problem.filename = new_filename;
     problem.language = new_language;
-    let code = fs::read_to_string(&destination_path).map_err(|error| format!("Could not read renamed source file: {error}"))?;
+    let code = read_source_text(&destination_path).map_err(|error| format!("Could not read renamed source file: {error}"))?;
+    remember_text(&destination_path, &code);
     let result = WorkspaceProblemOutput::new(problem.clone(), code);
     write_workspace_metadata(&metadata_path, &metadata, "update workspace metadata")?;
     Ok(result)
@@ -831,6 +982,7 @@ pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Resu
 
 #[tauri::command]
 pub(crate) fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
+    let _metadata = metadata_lock();
     let selected = std::path::PathBuf::from(path);
     let folder = if selected.is_dir() {
         selected.clone()
@@ -852,6 +1004,7 @@ pub(crate) fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
                 WorkspaceMetadata {
                     version: 2,
                     panel_mode: None,
+                    detached: Vec::new(),
                     problems: vec![WorkspaceProblemMetadata {
                         filename: if old.language == "python" { "main.py".into() } else { "main.cpp".into() },
                         title: old.title,
@@ -884,8 +1037,10 @@ fn read_workspace_problems(folder: &Path, metadata: WorkspaceMetadata) -> Result
     let mut problems = Vec::new();
     for mut problem in metadata.problems {
         let source_path = folder.join(&problem.filename);
-        let code = fs::read_to_string(&source_path)
-            .map_err(|error| format!("Could not read {}: {error}", problem.filename))?;
+        // A file that cannot be read right now is left out of this list rather than failing
+        // the load of every other one; its metadata stays, and the next scan brings it back.
+        let Ok(code) = read_source_text(&source_path) else { continue };
+        remember_text(&source_path, &code);
         if problem.modified_at == 0 { problem.modified_at = file_modified_at(&source_path); }
         problems.push(WorkspaceProblemOutput::new(problem, code));
     }
@@ -898,12 +1053,16 @@ fn read_workspace_problems(folder: &Path, metadata: WorkspaceMetadata) -> Result
 /// until the workspace was opened again.
 #[tauri::command]
 pub(crate) fn reload_workspace_files(request: WorkspaceRequest) -> Result<Vec<WorkspaceProblemOutput>, String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     if !folder.is_dir() { return Err("The workspace folder is gone.".into()); }
     let metadata_path = workspace_metadata_path(&folder);
+    // Only a missing file is an empty workspace. One that could not be read just now would
+    // otherwise be rewritten below from the scan alone, without anyone's tests.
     let mut metadata: WorkspaceMetadata = match fs::read_to_string(&metadata_path) {
         Ok(json) => serde_json::from_str(&json).map_err(|error| format!("Invalid .mild-editor.json format: {error}"))?,
-        Err(_) => WorkspaceMetadata::empty(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => WorkspaceMetadata::empty(),
+        Err(error) => return Err(format!("Could not read workspace metadata: {error}")),
     };
     let before = serde_json::to_string(&metadata).unwrap_or_default();
     sync_workspace_source_files(&folder, &mut metadata)?;
@@ -929,6 +1088,7 @@ pub(crate) struct ReorderWorkspaceFilesRequest {
 /// survives a restart. Files of other folders keep the order they had.
 #[tauri::command]
 pub(crate) fn reorder_workspace_files(request: ReorderWorkspaceFilesRequest) -> Result<(), String> {
+    let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
     let directory = workspace_directory_path(&request.directory)?.to_string_lossy().replace('\\', "/");
     let metadata_path = workspace_metadata_path(&folder);
@@ -1236,5 +1396,106 @@ mod tests {
         }] }).unwrap();
         assert!(saved.problems.is_empty());
         assert!(!directory.path().join("notes.txt").exists());
+    }
+
+    fn input(filename: &str, code: &str, tests: Vec<SavedTestCase>) -> WorkspaceProblemInput {
+        let language = if filename.ends_with(".py") { "python" } else { "cpp" };
+        WorkspaceProblemInput {
+            filename: filename.into(), title: filename.into(), language: language.into(), code: code.into(), tests,
+            source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+        }
+    }
+
+    fn one_test(name: &str) -> Vec<SavedTestCase> {
+        vec![SavedTestCase { name: name.into(), input: "1".into(), expected: "1".into() }]
+    }
+
+    #[test]
+    fn damaged_metadata_is_backed_up_before_a_save_replaces_it() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        fs::write(directory.path().join(WORKSPACE_METADATA_FILENAME), "{ \"version\": 2, \"problems\": [ { truncated").expect("damaged file");
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("A.cpp", "int main() {}", Vec::new())] }).expect("the save still goes ahead");
+        let backups: Vec<_> = fs::read_dir(directory.path()).expect("list").filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".mild-editor.json.broken-")).collect();
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert!(fs::read_to_string(directory.path().join(&backups[0])).expect("backup").contains("truncated"));
+        // And what replaced it is whole.
+        let _: WorkspaceMetadata = serde_json::from_str(&fs::read_to_string(directory.path().join(WORKSPACE_METADATA_FILENAME)).expect("metadata")).expect("parses");
+    }
+
+    #[test]
+    fn metadata_is_written_whole_with_nothing_left_beside_it() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create");
+        save_workspace(SaveWorkspaceRequest { folder_path, problems: vec![input("A.cpp", "int main() {}", one_test("t"))] }).expect("save");
+        let names: Vec<String> = fs::read_dir(directory.path()).expect("list").filter_map(|entry| entry.ok()).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|name| !name.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn a_file_gone_for_a_moment_gets_its_tests_back() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create");
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("A.cpp", "int main() {}", one_test("sample"))] }).expect("save");
+        // A checkout of another branch takes the file away; a scan runs meanwhile.
+        fs::remove_file(directory.path().join("A.cpp")).expect("remove");
+        let without = reload_workspace_files(WorkspaceRequest { folder_path: folder_path.clone() }).expect("scan");
+        assert!(without.iter().all(|problem| problem.filename != "A.cpp"));
+        // Back on the first branch.
+        fs::write(directory.path().join("A.cpp"), "int main() {}").expect("restore");
+        let back = reload_workspace_files(WorkspaceRequest { folder_path }).expect("scan again");
+        let problem = back.iter().find(|problem| problem.filename == "A.cpp").expect("A is back");
+        assert_eq!(problem.tests.len(), 1);
+        assert_eq!(problem.tests[0].name, "sample");
+    }
+
+    #[test]
+    fn a_stale_tab_does_not_undo_a_change_made_elsewhere() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create");
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("A.cpp", "// v1", Vec::new()), input("B.cpp", "// b1", Vec::new())] }).expect("save");
+        // Another editor changes A; the tab still holds v1 and is saved along with B's edit.
+        fs::write(directory.path().join("A.cpp"), "// v2 from elsewhere").expect("external edit");
+        let saved = save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("A.cpp", "// v1", Vec::new()), input("B.cpp", "// b2", Vec::new())] }).expect("save all tabs");
+        assert_eq!(fs::read_to_string(directory.path().join("A.cpp")).expect("A"), "// v2 from elsewhere");
+        assert_eq!(saved.problems.iter().find(|problem| problem.filename == "A.cpp").expect("A").code, "// v2 from elsewhere");
+        assert_eq!(fs::read_to_string(directory.path().join("B.cpp")).expect("B"), "// b2");
+        // A tab edited in the editor is the user's latest word, and is written.
+        save_workspace(SaveWorkspaceRequest { folder_path, problems: vec![input("A.cpp", "// v3 typed here", Vec::new())] }).expect("save the edit");
+        assert_eq!(fs::read_to_string(directory.path().join("A.cpp")).expect("A"), "// v3 typed here");
+    }
+
+    #[test]
+    fn a_source_that_is_not_utf8_does_not_stop_the_workspace_loading() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        fs::write(directory.path().join("A.cpp"), "int main() {}").expect("A");
+        // "// 한글" in CP949.
+        fs::write(directory.path().join("B.cpp"), [b'/', b'/', b' ', 0xC7, 0xD1, 0xB1, 0xDB, b'\n']).expect("B");
+        let loaded = load_workspace(folder_path).expect("loads");
+        let names: Vec<&str> = loaded.problems.iter().map(|problem| problem.filename.as_str()).collect();
+        assert_eq!(names, vec!["A.cpp", "B.cpp"]);
+        if cfg!(windows) {
+            // On a Korean system the code page reads it back as written; elsewhere it is only
+            // required not to fail.
+            let b = loaded.problems.iter().find(|problem| problem.filename == "B.cpp").expect("B");
+            assert!(b.code.starts_with("// "), "{}", b.code);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_metadata_file_is_an_error_not_an_empty_workspace() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        // A directory where the file should be cannot be read, the way a locked file cannot.
+        fs::create_dir(directory.path().join(WORKSPACE_METADATA_FILENAME)).expect("blocker");
+        fs::write(directory.path().join("A.cpp"), "int main() {}").expect("A");
+        assert!(reload_workspace_files(WorkspaceRequest { folder_path: folder_path.clone() }).is_err());
+        assert!(save_workspace(SaveWorkspaceRequest { folder_path, problems: vec![input("A.cpp", "int main() {}", Vec::new())] }).is_err());
     }
 }

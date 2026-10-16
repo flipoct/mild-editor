@@ -137,7 +137,8 @@ let lastRescanAt = 0;
  * nobody asked for says nothing, fails quietly, and — unless `force`d — is not repeated
  * within three seconds of the last one.
  */
-export const rescanWorkspace = async (report: Report, announcement?: string, force = false) => {
+/** Returns what the scan read from disk, for the open tabs to follow; nothing when it did not run. */
+export const rescanWorkspace = async (report: Report, announcement?: string, force = false): Promise<WorkspaceFileResult[] | undefined> => {
   const folderPath = workspace.get().workspacePath;
   if (!folderPath) return;
   if (announcement === undefined && !force && Date.now() - lastRescanAt < 3000) return;
@@ -153,6 +154,7 @@ export const rescanWorkspace = async (report: Report, announcement?: string, for
     }));
     await refreshDirectories(report, folderPath);
     if (announcement !== undefined) report(announcement);
+    return files;
   } catch (error) {
     if (announcement !== undefined) report(errorMessage(error));
   }

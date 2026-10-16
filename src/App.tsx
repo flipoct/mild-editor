@@ -20,7 +20,7 @@ import { mergeExplorerFiles, useExplorerFiles } from "./explorerFiles";
 import { errorMessage, IS_TAURI, isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
 import { explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
-import { columnsFromOrder, dropPanel, edgeAt, layoutRects, visibleLayout, type Edge } from "./panelLayout";
+import { applyDrop, distributeSiblings, dropPreview, dropTargetAt, layoutGrid, nodeAt, resizeLimit, resizeSiblings, signatureOf, type DropTarget, type Rect, type Sash } from "./gridLayout";
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
 import { BuiltinTerminal, terminalHost, terminalKeyIsEditors, typedInTerminal, useTerminalStatus, type TerminalStatus } from "./BuiltinTerminal";
@@ -31,7 +31,7 @@ import { createThemeWindowIcon } from "./themeIcon";
 import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
 import { blankTest, combinedRunOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isPendingVerdict, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
-import { alwaysInstalledFontIds, APP_VERSION, DEFAULT_WEIGHT, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
+import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
 import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
@@ -61,12 +61,11 @@ function App() {
   const savedFiles = useSavedFiles();
   const workspaceDirectories = useWorkspaceDirectories();
   const resizeRef = useRef<{
-    axis: "x" | "y"; before: PanelId; after: PanelId; start: number; span: number;
-    beforeWeight: number; afterWeight: number;
+    axis: "x" | "y"; path: number[]; before: number; after: number; start: number; span: number;
+    beforeWeight: number; afterWeight: number; expect: { before: string; after: string };
   } | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
-  const [panelLayout, setPanelLayout] = useSetting("panelLayout");
-  const [panelWeights, setPanelWeights] = useSetting("panelWeights");
+  const [panelGrid, setPanelGrid] = useSetting("panelGrid");
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const tabDragRef = useRef<string | null>(null);
   const tabDropTargetRef = useRef<string | null>(null);
@@ -428,49 +427,42 @@ function App() {
   }, [customFonts]);
 
   /**
-   * Dividers trade weight between the two panels they sit between, so the rest of the
-   * workspace keeps the size it had. Weight is a share of the container, which keeps a
-   * layout looking the same when the window is resized.
+   * Dividers trade weight between the two siblings they sit between, so the rest of the
+   * workspace keeps the size it had. A sibling may be a whole branch of the grid: dragging
+   * the line beside a stack resizes the stack.
    */
-  const startPanelResize = (
-    axis: "x" | "y",
-    before: PanelId,
-    after: PanelId,
-    pair: number,
-    event: ReactPointerEvent<HTMLDivElement>,
-  ) => {
+  const startPanelResize = (sash: Sash, event: ReactPointerEvent<HTMLDivElement>) => {
     const workspace = workspaceRef.current;
-    if (!workspace) return;
+    if (!workspace || event.button !== 0) return;
     event.preventDefault();
     const box = workspace.getBoundingClientRect();
+    const node = (index: number) => nodeAt(panelGrid.root, [...sash.path, index]);
     resizeRef.current = {
-      axis, before, after,
-      start: axis === "x" ? event.clientX : event.clientY,
-      // Pixels the two panels cover together: their combined weight maps onto this, so
+      axis: sash.axis, path: sash.path, before: sash.before, after: sash.after,
+      start: sash.axis === "x" ? event.clientX : event.clientY,
+      // Pixels the two siblings cover together: their combined weight maps onto this, so
       // the divider follows the pointer one-to-one.
-      span: (axis === "x" ? box.width : box.height) * pair,
-      beforeWeight: weightOf(before, axis === "x" ? "width" : "height"),
-      afterWeight: weightOf(after, axis === "x" ? "width" : "height"),
+      span: (sash.axis === "x" ? box.width : box.height) * sash.pair,
+      beforeWeight: node(sash.before)?.size ?? 1,
+      afterWeight: node(sash.after)?.size ?? 1,
+      expect: { before: signatureOf(node(sash.before)), after: signatureOf(node(sash.after)) },
     };
     event.currentTarget.setPointerCapture(event.pointerId);
-    document.body.classList.add(axis === "x" ? "panel-resizing" : "panel-resizing-y");
+    document.body.classList.add(sash.axis === "x" ? "panel-resizing" : "panel-resizing-y");
   };
 
   useEffect(() => {
     const resize = (event: PointerEvent) => {
       const current = resizeRef.current;
       if (!current || !current.span) return;
+      // A move with no button held means the release went to another window.
+      if (event.buttons === 0) { finish(); return; }
       const moved = (current.axis === "x" ? event.clientX : event.clientY) - current.start;
       const total = current.beforeWeight + current.afterWeight;
       // The pair keeps its combined weight; the pointer decides how it is split.
-      const limit = 0.08 * total;
+      const limit = resizeLimit(total, current.span, current.axis);
       const beforeWeight = Math.max(limit, Math.min(total - limit, current.beforeWeight + moved / current.span * total));
-      const key = current.axis === "x" ? "width" : "height";
-      setPanelWeights((weights) => ({
-        ...weights,
-        [current.before]: { ...weights[current.before], [key]: beforeWeight },
-        [current.after]: { ...weights[current.after], [key]: total - beforeWeight },
-      }));
+      setPanelGrid((grid) => resizeSiblings(grid, current.path, current.before, current.after, beforeWeight, total - beforeWeight, current.expect));
     };
     const finish = () => {
       if (!resizeRef.current) return;
@@ -481,7 +473,8 @@ function App() {
     window.addEventListener("pointermove", resize);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
-    return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); };
+    window.addEventListener("blur", finish);
+    return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish); window.removeEventListener("blur", finish); };
   }, []);
 
   // Tabs in the order they were last active, newest first, so closing one can return to
@@ -724,8 +717,18 @@ function App() {
   };
 
   /** A scan of the folder for what changed behind the editor's back; `announce` is for one asked for by hand. */
-  const rescanWorkspaceFiles = (announce = false, force = false) =>
-    rescanWorkspace(setFileStatus, announce ? t("explorerRescanned") : undefined, force);
+  const rescanWorkspaceFiles = async (announce = false, force = false) => {
+    const files = await rescanWorkspace(setFileStatus, announce ? t("explorerRescanned") : undefined, force);
+    if (!files) return;
+    // An open tab nobody has touched follows its file when it changed elsewhere. One with
+    // edits of its own keeps them, and a room's file follows the room, not the disk.
+    const onDisk = new Map(files.map((file) => [fileKey(file.filename), file]));
+    setTabs((items) => items.map((tab) => {
+      const file = onDisk.get(fileKey(tab.filename));
+      if (!file || tab.dirty || sharedFiles.has(tab.id) || file.language !== tab.language || file.code === tab.codes[tab.language]) return tab;
+      return { ...tab, codes: { ...tab.codes, [tab.language]: file.code } };
+    }));
+  };
   const rescanWorkspaceFilesRef = useLatest(rescanWorkspaceFiles);
   // Coming back to the editor is when a change made elsewhere matters, and it is the one
   // moment a scan cannot be mistaken for the editor reacting to its own writes.
@@ -1114,6 +1117,7 @@ function App() {
     await clangdClientRef.current?.dispose();
     const client = new ClangdClient(monaco, editor);
     clangdClientRef.current = client;
+    client.onStatus = (status) => { if (clangdClientRef.current === client) setClangdStatus(status); };
     try {
       const info = await client.start(getSetting("clangdPath") || null, workspacePath, activeTab?.filename || "A.cpp", codes.cpp, atcoderLibraryPath || null);
       setClangdInfo(info);
@@ -1283,12 +1287,22 @@ function App() {
       if (!folderPath || Array.isArray(folderPath)) return false;
       setFileStatus("saving…");
       const startedAt = Date.now();
-      const snapshot = tabs.map((tab) => ({ ...tab, dirty: false }));
+      const sent = tabs.map((tab) => ({ ...tab, dirty: false }));
       const saved = await invoke<LoadedWorkspace>("save_workspace", {
         request: {
           folderPath,
-          problems: snapshot.map(savedProblem),
+          problems: sent.map(savedProblem),
         },
+      });
+      // A file changed behind the editor (another editor, a checkout) while its tab sat
+      // untouched is not overwritten: the save hands back the file's text instead, and the
+      // tab takes it, as an unmodified editor in VS Code follows its file.
+      const onDisk = new Map(saved.problems.map((file) => [fileKey(file.filename), file]));
+      const snapshot = sent.map((tab) => {
+        const file = onDisk.get(fileKey(tab.filename));
+        return file && file.language === tab.language && file.code !== tab.codes[tab.language]
+          ? { ...tab, codes: { ...tab.codes, [tab.language]: file.code } }
+          : tab;
       });
       setWorkspacePath(saved.folderPath);
       // Typing does not wait for the disk. A tab edited while this save was on its way keeps
@@ -2127,10 +2141,7 @@ function App() {
   const showExplorer = explorerVisible && Boolean(workspacePath);
   const showProblemPanel = problemPanelOpen && problemBrowserMode === "panel";
   const panelShown = (id: PanelId) => id === "editor" || (id === "tests" ? showTestPanel : id === "problem" ? showProblemPanel : showExplorer);
-  const shownLayout = visibleLayout(panelLayout, panelShown);
-  const weightOf = (id: PanelId, axis: "width" | "height") =>
-    panelWeights[id]?.[axis] ?? (axis === "width" ? DEFAULT_WEIGHT[id] : 1);
-  const panelRects = layoutRects(shownLayout, weightOf);
+  const { views: panelRects, sashes } = layoutGrid(panelGrid, panelShown);
   // The problem page is a native view over the webview, so CSS stacking cannot put a modal,
   // popover or menu above it: hide it while anything floats over it. A dialog dims the whole
   // window, so it always counts; the contest board and the explorer menu are small and sit
@@ -2143,7 +2154,10 @@ function App() {
       const box = element.getBoundingClientRect();
       return Boolean(host) && box.right > host!.left && box.left < host!.right && box.bottom > host!.top && box.top < host!.bottom;
     };
+    // A panel being dragged counts too: its drop preview has to show over the page, and VS
+    // Code likewise keeps webviews out of the way while a group is dragged.
     setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .quick-open"))
+      || document.body.classList.contains("panel-dragging")
       || [...document.querySelectorAll(".explorer-context-menu, .contest-popover")].some(reachesPage));
   });
   /**
@@ -2168,44 +2182,24 @@ function App() {
    * a moved subtree, which made the Monaco wrapper dispose its editor and take the whole
    * tree down with it.
    */
+  const rectStyle = (rect: Rect): CSSProperties => ({ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` });
   const panelStyle = (id: PanelId): CSSProperties => {
     const rect = panelRects.get(id);
-    if (!rect) return { display: "none" };
-    return { left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` };
+    return rect ? rectStyle(rect) : { display: "none" };
   };
-  /** The divider before `index` resizes its non-editor neighbour, preferring the left one. */
-  /**
-   * One divider per gap: between neighbouring columns, and between panels stacked in a
-   * column. Dragging one moves weight from the panel on one side to the other.
-   */
-  const dividers = shownLayout.flatMap((column, index) => {
-    // `pair` is the share of the workspace the two panels cover together, along the
-    // divider's axis. The divider is centred on the boundary, half over each panel.
-    const between: Array<{ key: string; axis: "x" | "y"; before: PanelId; after: PanelId; pair: number; style: CSSProperties }> = [];
-    if (index > 0) {
-      const before = shownLayout[index - 1][0];
-      const after = column[0];
-      const rect = panelRects.get(after)!;
-      const pair = (panelRects.get(before)!.width + rect.width) / 100;
-      between.push({ key: `col-${after}`, axis: "x", before, after, pair, style: { left: `calc(${rect.left}% - ${PANEL_DIVIDER_HIT / 2}px)`, top: 0, height: "100%" } });
-    }
-    column.forEach((panel, row) => {
-      if (row === 0) return;
-      const rect = panelRects.get(panel)!;
-      const pair = (panelRects.get(column[row - 1])!.height + rect.height) / 100;
-      between.push({
-        key: `row-${panel}`, axis: "y", before: column[row - 1], after: panel, pair,
-        style: { left: `${rect.left}%`, top: `calc(${rect.top}% - ${PANEL_DIVIDER_HIT / 2}px)`, width: `${rect.width}%` },
-      });
-    });
-    return between;
-  });
+  /** A divider is centred on the boundary it moves, half over each side. */
+  const sashStyle = (sash: Sash): CSSProperties => sash.axis === "x"
+    ? { left: `calc(${sash.position}% - ${PANEL_DIVIDER_HIT / 2}px)`, top: `${sash.from}%`, height: `${sash.length}%` }
+    : { top: `calc(${sash.position}% - ${PANEL_DIVIDER_HIT / 2}px)`, left: `${sash.from}%`, width: `${sash.length}%` };
   // The problem page is a native view, so a divider's half over it cannot be grabbed:
   // the host steps back from those edges, and the divider is whole again.
+  const problemRect = panelRects.get("problem");
+  const sashOn = (axis: "x" | "y", position: number, from: number, length: number) => sashes.some((sash) =>
+    sash.axis === axis && Math.abs(sash.position - position) < 0.01 && sash.from < from + length - 0.01 && sash.from + sash.length > from + 0.01);
   const problemHostInset = {
-    left: dividers.some((divider) => divider.axis === "x" && divider.after === "problem"),
-    right: dividers.some((divider) => divider.axis === "x" && divider.before === "problem"),
-    bottom: dividers.some((divider) => divider.axis === "y" && divider.before === "problem"),
+    left: Boolean(problemRect && sashOn("x", problemRect.left, problemRect.top, problemRect.height)),
+    right: Boolean(problemRect && sashOn("x", problemRect.left + problemRect.width, problemRect.top, problemRect.height)),
+    bottom: Boolean(problemRect && sashOn("y", problemRect.top + problemRect.height, problemRect.left, problemRect.width)),
   };
   const problemHostStyle: CSSProperties = {
     marginLeft: problemHostInset.left ? PANEL_DIVIDER_HIT / 2 : 0,
@@ -2217,9 +2211,6 @@ function App() {
     else if (id === "problem") setProblemPanelOpen((open) => !open);
     else if (id === "explorer") setExplorerVisible((visible) => !visible);
   };
-  /** Put `id` against one edge of `target`: beside it as a column, or into its stack. */
-  const dropPanelOn = (id: PanelId, target: PanelId, edge: Edge) =>
-    setPanelLayout((layout) => dropPanel(layout, id, target, edge));
 
   // ── Submitting through the problem browser ──
   const browserStatusRef = useLatest(browserStatus);
@@ -2499,18 +2490,22 @@ function App() {
       aria-label={`${chipLabel(id)}: ${t("panelGrip")}`}
       onPointerDown={(event) => startPanelDrag(id, event)}
       onPointerMove={trackPanelDrag}
-      onPointerUp={finishPanelDrag}
-      onPointerCancel={finishPanelDrag}
+      onPointerUp={() => finishPanelDrag(true)}
+      onPointerCancel={() => finishPanelDrag(false)}
+      // After a pointerup this finds the drag already over; without one, the capture went
+      // because the window lost the pointer, and the drop is called off.
+      onLostPointerCapture={() => finishPanelDrag(false)}
     ><Icon name="grip" size={14} /></button>
   );
 
   /**
-   * Dragging a chip onto a panel places it against the edge the pointer is nearest. Pointer
-   * events with a capture, the same mechanism the dividers use; HTML5 drag and drop was
-   * unreliable in this webview.
+   * Dragging a panel by its grip works like dragging an editor group in VS Code: the outer
+   * third of another panel splits it on that side, its middle swaps the two, and the border
+   * of the workspace docks the panel along that whole side. Pointer events with a capture,
+   * the same mechanism the dividers use; HTML5 drag and drop was unreliable in this webview.
    */
-  const [panelDrag, setPanelDrag] = useState<{ id: PanelId; over: { target: PanelId; edge: Edge } | null } | null>(null);
-  const panelDragRef = useRef<{ id: PanelId; over: { target: PanelId; edge: Edge } | null; moved: boolean } | null>(null);
+  const [panelDrag, setPanelDrag] = useState<{ id: PanelId; over: DropTarget<PanelId> | null } | null>(null);
+  const panelDragRef = useRef<{ id: PanelId; over: DropTarget<PanelId> | null; moved: boolean } | null>(null);
 
   const startPanelDrag = (id: PanelId, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
@@ -2524,6 +2519,8 @@ function App() {
     const drag = panelDragRef.current;
     const workspace = workspaceRef.current;
     if (!drag || !workspace) return;
+    // A move with no button held means the release went somewhere else.
+    if (event.buttons === 0) { finishPanelDrag(false); return; }
     if (!drag.moved) {
       drag.moved = true;
       setPanelDrag({ id: drag.id, over: null });
@@ -2532,30 +2529,38 @@ function App() {
     const box = workspace.getBoundingClientRect();
     const x = ((event.clientX - box.left) / (box.width || 1)) * 100;
     const y = ((event.clientY - box.top) / (box.height || 1)) * 100;
-    let over: { target: PanelId; edge: Edge } | null = null;
-    for (const [target, rect] of panelRects) {
-      if (x < rect.left || x > rect.left + rect.width || y < rect.top || y > rect.top + rect.height) continue;
-      if (target !== drag.id) over = { target, edge: edgeAt(rect, x, y) };
-      break;
-    }
+    const band = { x: (PANEL_DOCK_BAND / (box.width || 1)) * 100, y: (PANEL_DOCK_BAND / (box.height || 1)) * 100 };
+    const over = dropTargetAt(panelRects, drag.id, x, y, band);
     drag.over = over;
     setPanelDrag({ id: drag.id, over });
   };
 
-  const finishPanelDrag = () => {
+  /** Ends a drag, dropping the panel where it is over only when `drop` says the release was real. */
+  const finishPanelDrag = (drop: boolean) => {
     const drag = panelDragRef.current;
     panelDragRef.current = null;
     document.body.classList.remove("panel-dragging");
     setPanelDrag(null);
-    if (!drag) return false;
-    if (drag.over) dropPanelOn(drag.id, drag.over.target, drag.over.edge);
+    const over = drag?.over;
+    if (drop && drag && over) setPanelGrid((grid) => applyDrop(grid, drag.id, over, panelShown));
   };
+  // As in VS Code, Escape or the window losing focus (Alt+Tab, a notification taking the
+  // front) calls a drag off. Otherwise a release that lands in another window never arrives,
+  // and the workspace is left showing a drop that cannot be finished.
+  const finishPanelDragRef = useLatest(finishPanelDrag);
+  useEffect(() => {
+    if (!panelDrag) return;
+    const cancel = () => finishPanelDragRef.current(false);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); cancel(); } };
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", onKey, true);
+    return () => { window.removeEventListener("blur", cancel); window.removeEventListener("keydown", onKey, true); };
+  }, [Boolean(panelDrag)]);
   const chipLabel = (id: PanelId) => t(id === "tests" ? "chipTests" : id === "editor" ? "chipEditor" : id === "problem" ? "chipProblem" : "chipExplorer");
   /** A chip is lit while its panel is on screen; the problem chip also while the browser has its own window up. */
   const chipActive = (id: PanelId) => id === "problem" ? problemPanelOpen : panelShown(id);
   const resetLayout = () => {
-    setPanelLayout(columnsFromOrder(PANEL_IDS));
-    setPanelWeights({});
+    setPanelGrid(defaultPanelGrid());
     setTestPanelVisible(true);
     setExplorerVisible(true);
     setProblemPanelOpen(false);
@@ -2659,17 +2664,30 @@ function App() {
       if (browserStatus.open) void invoke("browser_set_visible", { visible: false }).catch(() => undefined);
       return;
     }
-    const report = () => {
+    let sent = "";
+    // `force` for the first report of this effect: the view may have been placed by another
+    // host meanwhile (a page reopened, the window mode toggled), so it is told regardless.
+    const report = (force = false) => {
       const bounds = problemHostBounds();
-      if (bounds && bounds.width > 0 && bounds.height > 0) void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return;
+      const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height},${bounds.scale}`;
+      if (!force && key === sent) return;
+      sent = key;
+      void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
     };
-    report();
+    report(true);
     if (browserStatus.open) void invoke("browser_set_visible", { visible: !overlayOpen }).catch(() => undefined);
-    const observer = new ResizeObserver(report);
+    const observer = new ResizeObserver(() => report());
     observer.observe(host);
-    window.addEventListener("resize", report);
-    return () => { observer.disconnect(); window.removeEventListener("resize", report); };
-  }, [browserStatus.available, browserStatus.open, overlayOpen, panelLayout, panelWeights, problemBrowserMode, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
+    const onResize = () => report();
+    window.addEventListener("resize", onResize);
+    // A ResizeObserver sees size only. The host can move without changing size — columns of
+    // equal width swapped, the tab bar above it gone with the last tab, a banner shown or
+    // dismissed — and the native view stayed where the host used to be. A cheap check of the
+    // position catches those; it only reaches the backend when something actually moved.
+    const watch = window.setInterval(() => report(), 150);
+    return () => { observer.disconnect(); window.removeEventListener("resize", onResize); window.clearInterval(watch); };
+  }, [browserStatus.available, browserStatus.open, overlayOpen, panelGrid, problemBrowserMode, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
   // file open, VITE_PROBLEM_PANEL_URL (development only) seeds the panel instead.
@@ -3378,22 +3396,26 @@ function App() {
         </div>
       </nav>
       <section className="workspace" ref={workspaceRef}>
-        {dividers.map((divider) => (
+        {sashes.map((sash) => (
           <div
-            key={divider.key}
-            className={`panel-resizer panel-resizer-${divider.axis}`}
-            style={divider.style}
-            onPointerDown={(event) => startPanelResize(divider.axis, divider.before, divider.after, divider.pair, event)}
+            key={sash.key}
+            className={`panel-resizer panel-resizer-${sash.axis}`}
+            style={sashStyle(sash)}
+            onPointerDown={(event) => startPanelResize(sash, event)}
+            onDoubleClick={() => setPanelGrid((grid) => distributeSiblings(grid, sash.path, sash.siblings))}
+            title={t("sashHint")}
             role="separator"
             aria-label="Resize panel"
-            aria-orientation={divider.axis === "x" ? "vertical" : "horizontal"}
+            aria-orientation={sash.axis === "x" ? "vertical" : "horizontal"}
           />
         ))}
         {panelDrag && [...panelRects].map(([id, rect]) => (
-          <div key={`drop-${id}`} className="panel-drop-zone" style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }} aria-hidden="true">
-            {panelDrag.over?.target === id && <span className={`panel-drop-edge edge-${panelDrag.over.edge}`} />}
-          </div>
+          <div key={`drop-${id}`} className="panel-drop-zone" style={rectStyle(rect)} aria-hidden="true" />
         ))}
+        {panelDrag?.over && (() => {
+          const preview = dropPreview(panelRects, panelDrag.over);
+          return preview && <div className={`panel-drop-preview drop-${panelDrag.over.kind}`} style={rectStyle(preview)} aria-hidden="true" />;
+        })()}
         {PANEL_IDS.filter(panelShown).map((id) => (<Fragment key={id}>
           {id === "tests" && <aside className="test-panel" style={panelStyle(id)}>
             {panelGrip(id)}
