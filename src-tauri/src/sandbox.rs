@@ -42,6 +42,7 @@ mod platform {
         job: HANDLE,
         port: HANDLE,
         memory_limit_hit: std::cell::Cell<bool>,
+        caps_memory: bool,
     }
 
     // SAFETY: both handles are owned by this value and closed only in Drop; the kernel objects
@@ -57,7 +58,7 @@ mod platform {
                 let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
                 if job.is_null() { return None; }
                 let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1);
-                let sandbox = Sandbox { job, port, memory_limit_hit: std::cell::Cell::new(false) };
+                let sandbox = Sandbox { job, port, memory_limit_hit: std::cell::Cell::new(false), caps_memory: memory_limit_kb.is_some() && !port.is_null() };
                 if !port.is_null() {
                     let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT { CompletionKey: job, CompletionPort: port };
                     SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &association as *const _ as _, std::mem::size_of_val(&association) as u32);
@@ -106,6 +107,10 @@ mod platform {
                 (ok != 0).then(|| info.PeakProcessMemoryUsed as u64 / 1024)
             }
         }
+
+        /// Whether the job holds the memory limit itself and reports a breach, so the runner
+        /// asks it instead of sampling. Without a completion port a breach would go unseen.
+        pub(crate) fn caps_memory(&self) -> bool { self.caps_memory }
 
         /// Whether a process asked for more than the cap at any point so far.
         pub(crate) fn memory_limit_hit(&self) -> bool {
@@ -168,6 +173,8 @@ mod platform {
 
         pub(crate) fn cpu_time(&self) -> Option<Duration> { None }
         pub(crate) fn peak_memory_kb(&self) -> Option<u64> { None }
+        /// Memory is not capped here; the runner samples it (see `memory.rs`).
+        pub(crate) fn caps_memory(&self) -> bool { false }
         pub(crate) fn memory_limit_hit(&self) -> bool { false }
     }
 
@@ -208,6 +215,7 @@ mod platform {
         pub(crate) fn kill(&self) {}
         pub(crate) fn cpu_time(&self) -> Option<Duration> { None }
         pub(crate) fn peak_memory_kb(&self) -> Option<u64> { None }
+        pub(crate) fn caps_memory(&self) -> bool { false }
         pub(crate) fn memory_limit_hit(&self) -> bool { false }
     }
     pub(crate) fn configure(_command: &mut Command) {}

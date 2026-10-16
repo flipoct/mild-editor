@@ -227,8 +227,10 @@ pub(crate) fn execute_with_cancel(
         .take()
         .map(|stderr| thread::spawn(move || read_limited(stderr)));
 
+    // Where the sandbox holds the cap (a Windows job), it says when the cap was hit; elsewhere
+    // (Linux, macOS) the cap is the runner's own, against the sampled peak.
     let over_memory = |sampled: Option<u64>| match &jail {
-        Some(jail) if memory_limit_kb.is_some() => jail.memory_limit_hit(),
+        Some(jail) if jail.caps_memory() => jail.memory_limit_hit(),
         _ => memory_limit_kb.is_some_and(|limit| sampled.is_some_and(|used| used > limit)),
     };
     let mut stopped = false;
