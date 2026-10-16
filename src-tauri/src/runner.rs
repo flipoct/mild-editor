@@ -15,11 +15,15 @@ use wait_timeout::ChildExt;
 
 use crate::stress::StressProgram;
 use crate::tools::{decode_output, find_tool, tool_search_path, CommandExtHidden};
-use crate::{checker, memory, pch};
+use crate::{checker, memory, pch, sandbox};
 
 pub(crate) const MAX_CODE: usize = 100_000;
-const MAX_INPUT: usize = 100_000;
-const MAX_OUTPUT: u64 = 1_000_001;
+/// A test input as large as judges hand out: a few hundred thousand numbers on a few lines
+/// runs to megabytes, so the old 100 KB refused the very tests that find a TLE.
+const MAX_INPUT: usize = 32 * 1024 * 1024;
+/// What a program may print before the run stops reading. Printing 2·10⁵ numbers is ~2 MB,
+/// which must not read as a failure; past this, it is a runaway loop.
+const MAX_OUTPUT: u64 = 16 * 1024 * 1024 + 1;
 
 const MISSING_COMPILER: &str = if cfg!(target_os = "macos") {
     "g++ was not found. Install the Xcode Command Line Tools with `xcode-select --install`, or GCC with `brew install gcc`."
@@ -170,16 +174,18 @@ pub(crate) fn execute_with_cancel(
     memory_limit_kb: Option<u64>,
 ) -> RunResult {
     let started = Instant::now();
-    let mut child = match Command::new(command)
+    let jail = sandbox::Sandbox::new(memory_limit_kb);
+    let mut process = Command::new(command);
+    process
         .args(args)
         .current_dir(cwd)
         .env("PATH", tool_search_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
-        .spawn()
-    {
+        .creation_flags(0x08000000);
+    sandbox::configure(&mut process);
+    let mut child = match process.spawn() {
         Ok(child) => child,
         Err(error) => {
             return RunResult {
@@ -192,6 +198,18 @@ pub(crate) fn execute_with_cancel(
                 verdict: Verdict::Re,
             }
         }
+    };
+    // In the sandbox, time is CPU time and memory is the job's own count; outside it (the job
+    // could not be made), the wall clock and samples of the process, as before.
+    let jail = jail.filter(|jail| jail.attach(&child));
+    let cpu_time = || jail.as_ref().and_then(|jail| jail.cpu_time());
+    // CPU time does not run while a program waits, so the wall clock still has the last word,
+    // with room for the start-up a busy or scanning machine adds.
+    let wall_limit = if cpu_time().is_some() { timeout + timeout.max(Duration::from_secs(1)) } else { timeout };
+    let kill = |child: &mut std::process::Child| {
+        if let Some(jail) = &jail { jail.kill(); }
+        let _ = child.kill();
+        let _ = child.wait();
     };
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -209,30 +227,33 @@ pub(crate) fn execute_with_cancel(
         .take()
         .map(|stderr| thread::spawn(move || read_limited(stderr)));
 
+    let over_memory = |sampled: Option<u64>| match &jail {
+        Some(jail) if memory_limit_kb.is_some() => jail.memory_limit_hit(),
+        _ => memory_limit_kb.is_some_and(|limit| sampled.is_some_and(|used| used > limit)),
+    };
     let mut stopped = false;
     let mut memory_exceeded = false;
+    let mut timed_out = false;
     let mut memory_kb: Option<u64> = None;
     let status = loop {
         if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
             stopped = true;
-            let _ = child.kill();
-            let _ = child.wait();
+            kill(&mut child);
             break None;
         }
         let elapsed = started.elapsed();
-        if elapsed >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+        if elapsed >= wall_limit || cpu_time().is_some_and(|used| used >= timeout) {
+            timed_out = true;
+            kill(&mut child);
             break None;
         }
         // Short polls: they are also the memory samples, and on Linux and macOS the only ones.
-        let wait = Duration::from_millis(15).min(timeout - elapsed);
+        let wait = Duration::from_millis(15).min(wall_limit - elapsed);
         let waited = child.wait_timeout(wait);
         memory_kb = memory_kb.max(memory::peak_memory_kb(&child));
-        if memory_limit_kb.is_some_and(|limit| memory_kb.is_some_and(|used| used > limit)) {
+        if over_memory(memory_kb) {
             memory_exceeded = true;
-            let _ = child.kill();
-            let _ = child.wait();
+            kill(&mut child);
             break None;
         }
         match waited {
@@ -241,6 +262,27 @@ pub(crate) fn execute_with_cancel(
             Err(_) => break None,
         }
     };
+    // Whatever the program started and left running goes too; it would otherwise hold the
+    // output pipes open and the reads below would never end.
+    if let Some(jail) = &jail { jail.kill(); }
+    let cpu = cpu_time();
+    if let Some(peak) = jail.as_ref().and_then(|jail| jail.peak_memory_kb()) {
+        memory_kb = Some(peak);
+    }
+    // A program that hit the cap usually dies of the failed allocation (bad_alloc,
+    // MemoryError) before a poll sees it: that is still an MLE, not a crash.
+    if status.is_some_and(|value| !value.success()) && over_memory(memory_kb) {
+        memory_exceeded = true;
+    }
+    // A program that finished between two polls past its CPU budget did not finish in time.
+    if status.is_some() && !memory_exceeded && cpu.is_some_and(|used| used > timeout) {
+        timed_out = true;
+    }
+    // Under a hard cap the peak stops short of the limit (the allocation that would cross it
+    // fails), so an MLE reports the limit itself, as judges do.
+    if memory_exceeded {
+        memory_kb = memory_kb.max(memory_limit_kb);
+    }
 
     let stdout_bytes = stdout_handle
         .and_then(|handle| handle.join().ok())
@@ -249,14 +291,23 @@ pub(crate) fn execute_with_cancel(
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default();
     let mut stderr = decode_output(&stderr_bytes);
-    let mut verdict = match status {
+    // Under a memory limit, a program that died of a failed allocation ran out of memory,
+    // whether or not the cap saw the request: a 32-bit MinGW build runs out of address space
+    // before it reaches a cap of a few hundred megabytes, where a judge's 64-bit build is MLE.
+    if memory_limit_kb.is_some() && status.is_some_and(|value| !value.success())
+        && (stderr.contains("std::bad_alloc") || stderr.contains("MemoryError")) {
+        memory_exceeded = true;
+        memory_kb = memory_kb.max(memory_limit_kb);
+    }
+    let finished = status.filter(|_| !memory_exceeded && !timed_out);
+    let mut verdict = match finished {
         Some(value) if value.success() => Verdict::Ok,
         Some(_) => Verdict::Re,
         None if stopped => Verdict::Stopped,
         None if memory_exceeded => Verdict::Mle,
         None => Verdict::Tle,
     };
-    if status.is_none() {
+    if finished.is_none() {
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
         }
@@ -279,11 +330,11 @@ pub(crate) fn execute_with_cancel(
     }
 
     RunResult {
-        ok: status.map(|value| value.success()).unwrap_or(false),
+        ok: finished.map(|value| value.success()).unwrap_or(false),
         code: status.and_then(|value| value.code()),
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr,
-        time_ms: started.elapsed().as_millis(),
+        time_ms: cpu.unwrap_or_else(|| started.elapsed()).as_millis(),
         memory_kb,
         verdict,
     }
@@ -320,6 +371,11 @@ pub(crate) fn prepare_program(
             let compile_with = |pch_include: Option<&std::path::PathBuf>| {
                 let mut compile_args = vec![format!("-std={standard}")];
                 compile_args.extend(flags.iter().cloned());
+                // The judges' stack (see sandbox::STACK_BYTES). On Linux and macOS it is the
+                // run's rlimit instead; a Windows executable carries its own in the header.
+                if cfg!(windows) && !flags.iter().any(|flag| flag.contains("--stack")) {
+                    compile_args.push(format!("-Wl,--stack,{}", sandbox::STACK_BYTES));
+                }
                 compile_args.push("-pipe".into());
                 // First on the include path, so `bits/stdc++.h.gch` is found before the header itself.
                 if let Some(directory) = pch_include {
@@ -519,10 +575,61 @@ mod tests {
         let limited = execute_with_cancel(&python, &args, directory.path(), "", Duration::from_secs(10), None, Some(64 * 1024));
         assert_eq!(limited.verdict, Verdict::Mle);
         assert!(limited.stderr.contains("Error: MLE (64 MB)"));
-        assert!(limited.memory_kb.is_some_and(|used| used > 64 * 1024));
+        assert!(limited.memory_kb.is_some_and(|used| used >= 64 * 1024));
 
         let quick = execute_with_cancel(&python, &["-c".into(), "print(1)".into()], directory.path(), "", Duration::from_secs(10), None, Some(1024 * 1024));
         assert_eq!(quick.verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn what_a_program_leaves_running_does_not_hold_the_run_open() {
+        let Some(python) = python() else { return };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        // The grandchild inherits the output pipe; reading it to the end used to wait the 30 s out.
+        let parent = "import subprocess, sys
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+print('done')
+";
+        let started = Instant::now();
+        let result = execute(&python, &["-c".into(), parent.into()], directory.path(), "", Duration::from_secs(10));
+        assert_eq!(result.verdict, Verdict::Ok, "{}", result.stderr);
+        assert_eq!(result.stdout.trim(), "done");
+        assert!(started.elapsed() < Duration::from_secs(8), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn time_is_cpu_time_so_waiting_is_not_counted() {
+        let Some(python) = python() else { return };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        // Sleeps 1.2 s of wall time under a 1 s limit: the CPU barely runs, so it is no TLE.
+        let result = execute(&python, &["-c".into(), "import time
+time.sleep(1.2)
+print(1)".into()], directory.path(), "", Duration::from_secs(1));
+        assert_eq!(result.verdict, Verdict::Ok, "{}", result.stderr);
+        assert!(result.time_ms < 900, "{} ms", result.time_ms);
+        // A busy loop is.
+        let busy = execute(&python, &["-c".into(), "while True: pass".into()], directory.path(), "", Duration::from_millis(500));
+        assert_eq!(busy.verdict, Verdict::Tle);
+    }
+
+    #[test]
+    fn deep_recursion_gets_the_judges_stack() {
+        let Some(compiler) = find_tool("g++") else { return };
+        if !pch::is_gcc(&compiler) { return; }
+        // About 200 MB of stack: past every default, inside the 256 MB judges give.
+        let code = "#include <cstdio>
+int f(int n) { volatile char pad[160]; pad[0] = (char)n; return n ? f(n - 1) + pad[0] % 2 : 0; }
+int main() { std::printf(\"%d\", f(1000000) >= 0); }
+";
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let build = BuildOptions { compile_flags: Some(vec!["-O0".into()]), precompile_headers: false };
+        let PreparedProgram::Ready { command, args, .. } = prepare_program("cpp", code, None, directory.path(), false, &build).expect("toolchain") else {
+            panic!("the program should compile");
+        };
+        let result = execute(&command, &args, directory.path(), "", Duration::from_secs(10));
+        assert_eq!(result.verdict, Verdict::Ok, "{}", result.stderr);
+        assert_eq!(result.stdout, "1");
     }
 
     #[test]

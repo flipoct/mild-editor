@@ -8,7 +8,7 @@
     "quick": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
-    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts && node --experimental-strip-types --no-warnings src/gridLayout.check.ts && node --experimental-strip-types --no-warnings src/collab/protocol.check.ts",
+    "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts && node --experimental-strip-types --no-warnings src/gridLayout.check.ts && node --experimental-strip-types --no-warnings src/judge.check.ts && node --experimental-strip-types --no-warnings src/collab/protocol.check.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",

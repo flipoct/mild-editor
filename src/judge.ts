@@ -12,7 +12,14 @@ export type DiffRow = { line: number; expected: string | null; actual: string | 
 
 export const DEFAULT_FLOAT_TOLERANCE = 1e-6;
 
-export const normalize = (value: string) => value.replace(/\r\n/g, "\n").trimEnd();
+/**
+ * Output as judges read it: line endings of any platform, no whitespace at the end of a line
+ * and no blank lines at the end. `cout << x << ' '` leaves a space after the last number of
+ * every line, which AtCoder and Codeforces accept; comparing it raw made a correct solution WA.
+ * Spacing inside a line still counts (see `linesMatch`), and the diff still flags it.
+ */
+export const normalize = (value: string) =>
+  value.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trimEnd()).join("\n").trimEnd();
 
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 /** A decimal point or an exponent: what tells `0.5` from the integer `5`. */
