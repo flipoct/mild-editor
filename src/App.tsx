@@ -2664,16 +2664,29 @@ function App() {
       if (browserStatus.open) void invoke("browser_set_visible", { visible: false }).catch(() => undefined);
       return;
     }
-    const report = () => {
+    let sent = "";
+    // `force` for the first report of this effect: the view may have been placed by another
+    // host meanwhile (a page reopened, the window mode toggled), so it is told regardless.
+    const report = (force = false) => {
       const bounds = problemHostBounds();
-      if (bounds && bounds.width > 0 && bounds.height > 0) void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return;
+      const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height},${bounds.scale}`;
+      if (!force && key === sent) return;
+      sent = key;
+      void invoke("browser_set_bounds", { bounds }).catch(() => undefined);
     };
-    report();
+    report(true);
     if (browserStatus.open) void invoke("browser_set_visible", { visible: !overlayOpen }).catch(() => undefined);
-    const observer = new ResizeObserver(report);
+    const observer = new ResizeObserver(() => report());
     observer.observe(host);
-    window.addEventListener("resize", report);
-    return () => { observer.disconnect(); window.removeEventListener("resize", report); };
+    const onResize = () => report();
+    window.addEventListener("resize", onResize);
+    // A ResizeObserver sees size only. The host can move without changing size — columns of
+    // equal width swapped, the tab bar above it gone with the last tab, a banner shown or
+    // dismissed — and the native view stayed where the host used to be. A cheap check of the
+    // position catches those; it only reaches the backend when something actually moved.
+    const watch = window.setInterval(() => report(), 150);
+    return () => { observer.disconnect(); window.removeEventListener("resize", onResize); window.clearInterval(watch); };
   }, [browserStatus.available, browserStatus.open, overlayOpen, panelGrid, problemBrowserMode, showExplorer, showProblemPanel, showTestPanel, uiZoom]);
 
   // Follow the active file: a tab imported from a judge carries its problem URL. With no
