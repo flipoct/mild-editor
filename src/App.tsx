@@ -717,8 +717,18 @@ function App() {
   };
 
   /** A scan of the folder for what changed behind the editor's back; `announce` is for one asked for by hand. */
-  const rescanWorkspaceFiles = (announce = false, force = false) =>
-    rescanWorkspace(setFileStatus, announce ? t("explorerRescanned") : undefined, force);
+  const rescanWorkspaceFiles = async (announce = false, force = false) => {
+    const files = await rescanWorkspace(setFileStatus, announce ? t("explorerRescanned") : undefined, force);
+    if (!files) return;
+    // An open tab nobody has touched follows its file when it changed elsewhere. One with
+    // edits of its own keeps them, and a room's file follows the room, not the disk.
+    const onDisk = new Map(files.map((file) => [fileKey(file.filename), file]));
+    setTabs((items) => items.map((tab) => {
+      const file = onDisk.get(fileKey(tab.filename));
+      if (!file || tab.dirty || sharedFiles.has(tab.id) || file.language !== tab.language || file.code === tab.codes[tab.language]) return tab;
+      return { ...tab, codes: { ...tab.codes, [tab.language]: file.code } };
+    }));
+  };
   const rescanWorkspaceFilesRef = useLatest(rescanWorkspaceFiles);
   // Coming back to the editor is when a change made elsewhere matters, and it is the one
   // moment a scan cannot be mistaken for the editor reacting to its own writes.
@@ -1276,12 +1286,22 @@ function App() {
       if (!folderPath || Array.isArray(folderPath)) return false;
       setFileStatus("saving…");
       const startedAt = Date.now();
-      const snapshot = tabs.map((tab) => ({ ...tab, dirty: false }));
+      const sent = tabs.map((tab) => ({ ...tab, dirty: false }));
       const saved = await invoke<LoadedWorkspace>("save_workspace", {
         request: {
           folderPath,
-          problems: snapshot.map(savedProblem),
+          problems: sent.map(savedProblem),
         },
+      });
+      // A file changed behind the editor (another editor, a checkout) while its tab sat
+      // untouched is not overwritten: the save hands back the file's text instead, and the
+      // tab takes it, as an unmodified editor in VS Code follows its file.
+      const onDisk = new Map(saved.problems.map((file) => [fileKey(file.filename), file]));
+      const snapshot = sent.map((tab) => {
+        const file = onDisk.get(fileKey(tab.filename));
+        return file && file.language === tab.language && file.code !== tab.codes[tab.language]
+          ? { ...tab, codes: { ...tab.codes, [tab.language]: file.code } }
+          : tab;
       });
       setWorkspacePath(saved.folderPath);
       // Typing does not wait for the disk. A tab edited while this save was on its way keeps
