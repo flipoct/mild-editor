@@ -1,7 +1,7 @@
 import { DEMO_MODE } from "./demo";
 import { DEFAULT_FLOAT_TOLERANCE } from "./judge";
 import { IS_TAURI } from "./platform";
-import { boundedNumber, clampEditorFontSize, clampUiZoom, defaultEditorFontId, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, loadCustomFonts, loadSnippets, parseWallpaperLayout, storedPanelLayout, storedPanelWeights, storedProfileFlags, UI_ZOOM_MAX, UI_ZOOM_MIN } from "./settings";
+import { boundedNumber, clampEditorFontSize, clampUiZoom, defaultEditorFontId, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, loadCustomFonts, loadSnippets, parseWallpaperLayout, storedPanelGrid, storedProfileFlags, UI_ZOOM_MAX, UI_ZOOM_MIN } from "./settings";
 import { createStore } from "./store";
 import type { CompileProfile, EditorFont, ExplorerSort, Language, ProblemBrowserMode, ProblemSource, UiLocale, UiTheme } from "./types";
 import { autoSaveEnabled } from "./workbench";
@@ -52,8 +52,8 @@ const definitions = {
   // On unless turned off: an edit reaches the disk a second after the typing stops.
   autoSave: stored("mild-auto-save", autoSaveEnabled, (on) => on ? "1" : "0"),
 
-  panelLayout: stored("mild-panel-layout", storedPanelLayout, JSON.stringify),
-  panelWeights: stored("mild-panel-weights", storedPanelWeights, JSON.stringify),
+  // The older "mild-panel-layout" and "mild-panel-weights" are read once to seed this, and left alone.
+  panelGrid: stored("mild-panel-grid", storedPanelGrid, JSON.stringify),
   explorerVisible: flag("mild-explorer-visible", true),
   testPanelVisible: flag("mild-test-panel-visible", true),
   problemPanelOpen: stored("mild-problem-panel", (value) => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (value ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1", (open) => open ? "1" : "0"),
