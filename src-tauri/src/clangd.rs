@@ -2,7 +2,7 @@
 //! its LSP messages relayed to and from the webview.
 
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -26,7 +26,7 @@ struct ClangdProcess {
 }
 
 #[derive(Default)]
-pub(crate) struct ClangdState(Mutex<Option<ClangdProcess>>);
+pub(crate) struct ClangdState(Mutex<Option<ClangdProcess>>, AtomicU64);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +34,40 @@ pub(crate) struct ClangdInfo {
     available: bool,
     path: Option<String>,
     version: Option<String>,
+    /// Which start this is; `clangd-exit` names it, so an editor can tell a crash of the
+    /// clangd it talks to from the end of one it replaced.
+    generation: u64,
+}
+
+/// The first line of every `.clangd` the editor writes. A file with it is the editor's to keep
+/// up to date; one without it is the user's own and is never touched.
+const MANAGED_MARKER: &str = "# Written by Mild Editor; edit freely after deleting this line.";
+
+/// A YAML double-quoted scalar: a Windows path, a space or a `#` is safe inside one.
+fn yaml_quoted(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The `.clangd` for a compiler and the AtCoder Library's folder.
+fn clangd_config(compiler: &str, atcoder_library_path: Option<&str>) -> String {
+    let mut flags = vec![yaml_quoted("-std=gnu++20")];
+    if let Some(include) = atcoder_library_path.filter(|path| !path.trim().is_empty()) {
+        flags.push(yaml_quoted(&format!("-I{}", include.replace('\\', "/"))));
+    }
+    format!("{MANAGED_MARKER}\nCompileFlags:\n  Compiler: {}\n  Add: [{}]\n", yaml_quoted(&compiler.replace('\\', "/")), flags.join(", "))
+}
+
+/// Whether the `.clangd` there may be (re)written: there is none, it carries the marker, or it
+/// is exactly what versions before the marker wrote — so a changed compiler or library folder
+/// reaches it, instead of clangd going on with the paths of the day it was first written.
+fn config_is_managed(existing: Option<&str>) -> bool {
+    let Some(text) = existing else { return true };
+    if text.starts_with(MANAGED_MARKER) { return true; }
+    let lines: Vec<&str> = text.lines().collect();
+    lines.len() == 3
+        && lines[0] == "CompileFlags:"
+        && lines[1].starts_with("  Compiler: ")
+        && lines[2].starts_with("  Add: [-std=gnu++20")
 }
 
 fn resolve_clangd(configured_path: Option<String>) -> Result<std::path::PathBuf, String> {
@@ -47,7 +81,14 @@ fn resolve_clangd(configured_path: Option<String>) -> Result<std::path::PathBuf,
     find_tool("clangd").ok_or_else(|| MISSING_CLANGD.to_string())
 }
 
-fn read_lsp_stream<R: Read>(reader: R, app: tauri::AppHandle) {
+/// Relays clangd's messages until its output ends, then says so: the end of the stream is
+/// the end of the process, however it came.
+fn read_lsp_stream<R: Read>(reader: R, app: tauri::AppHandle, generation: u64) {
+    relay_lsp_messages(reader, &app);
+    let _ = app.emit("clangd-exit", generation);
+}
+
+fn relay_lsp_messages<R: Read>(reader: R, app: &tauri::AppHandle) {
     let mut reader = BufReader::new(reader);
     loop {
         let mut content_length = None;
@@ -101,14 +142,12 @@ pub(crate) fn start_clangd(
         clangd_args.push(format!("--query-driver={}", compiler.to_string_lossy()));
         if let Some(workspace_path) = workspace_path {
             let config_path = Path::new(&workspace_path).join(".clangd");
-            if !config_path.exists() {
-                let compiler_path = compiler.to_string_lossy().replace('\\', "/");
-                let mut flags = vec!["-std=gnu++20".to_string()];
-                if let Some(include) = atcoder_library_path.as_ref().filter(|path| !path.trim().is_empty()) {
-                    flags.push(format!("-I{}", include.replace('\\', "/")));
+            let existing = fs::read_to_string(&config_path).ok();
+            if config_is_managed(existing.as_deref()) {
+                let config = clangd_config(&compiler.to_string_lossy(), atcoder_library_path.as_deref());
+                if existing.as_deref() != Some(config.as_str()) {
+                    let _ = fs::write(config_path, config);
                 }
-                let config = format!("CompileFlags:\n  Compiler: {compiler_path}\n  Add: [{}]\n", flags.join(", "));
-                let _ = fs::write(config_path, config);
             }
         }
     }
@@ -132,8 +171,9 @@ pub(crate) fn start_clangd(
         .stderr
         .take()
         .ok_or("Could not open clangd stderr.")?;
+    let generation = state.1.fetch_add(1, Ordering::Relaxed) + 1;
     let stdout_app = app.clone();
-    thread::spawn(move || read_lsp_stream(stdout, stdout_app));
+    thread::spawn(move || read_lsp_stream(stdout, stdout_app, generation));
     thread::spawn(move || {
         let mut sink = Vec::new();
         let _ = BufReader::new(stderr).read_to_end(&mut sink);
@@ -151,6 +191,7 @@ pub(crate) fn start_clangd(
         available: true,
         path: Some(path.to_string_lossy().into_owned()),
         version,
+        generation,
     })
 }
 
@@ -185,4 +226,28 @@ pub(crate) fn stop(state: &ClangdState) {
 #[tauri::command]
 pub(crate) fn stop_clangd(state: tauri::State<'_, ClangdState>) {
     stop(&state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_config_quotes_what_yaml_would_misread() {
+        let config = clangd_config("C:\\Program Files\\mingw64\\bin\\g++.exe", Some("C:\\lib # ac-library"));
+        assert!(config.starts_with(MANAGED_MARKER));
+        assert!(config.contains("Compiler: \"C:/Program Files/mingw64/bin/g++.exe\""), "{config}");
+        assert!(config.contains("Add: [\"-std=gnu++20\", \"-IC:/lib # ac-library\"]"), "{config}");
+    }
+
+    #[test]
+    fn only_the_editors_own_config_is_rewritten() {
+        assert!(config_is_managed(None));
+        assert!(config_is_managed(Some(&clangd_config("/usr/bin/g++", None))));
+        // What versions before the marker wrote.
+        assert!(config_is_managed(Some("CompileFlags:\n  Compiler: C:/old/g++.exe\n  Add: [-std=gnu++20]\n")));
+        // Anything else is the user's.
+        assert!(!config_is_managed(Some("CompileFlags:\n  Add: [-std=c++17]\n")));
+        assert!(!config_is_managed(Some("CompileFlags:\n  Compiler: g++\n  Add: [-std=gnu++20]\nDiagnostics:\n  Suppress: '*'\n")));
+    }
 }

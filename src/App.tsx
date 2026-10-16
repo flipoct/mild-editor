@@ -1117,6 +1117,7 @@ function App() {
     await clangdClientRef.current?.dispose();
     const client = new ClangdClient(monaco, editor);
     clangdClientRef.current = client;
+    client.onStatus = (status) => { if (clangdClientRef.current === client) setClangdStatus(status); };
     try {
       const info = await client.start(getSetting("clangdPath") || null, workspacePath, activeTab?.filename || "A.cpp", codes.cpp, atcoderLibraryPath || null);
       setClangdInfo(info);
