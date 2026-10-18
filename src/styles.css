@@ -649,6 +649,28 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .collab-status.idle .icon { color: var(--muted); }
 .collab-status.ready { color: var(--text); }
 .collab-faces { display: flex; align-items: center; gap: 2px; }
+/* The ICPC rule's keyboard: free, this user's, or a teammate's (in that teammate's colour). */
+.keyboard-status.free .icon { color: var(--success); }
+.keyboard-status.mine { color: var(--text); }
+.keyboard-status.mine .icon { color: var(--accent); }
+.keyboard-status.taken { color: var(--text); }
+.keyboard-status.taken .icon { color: var(--holder, var(--warning)); }
+.keyboard-status em { color: var(--muted); font-style: normal; font-variant-numeric: tabular-nums; }
+.keyboard-banner { --tone: var(--warning); position: absolute; z-index: 31; top: 10px; left: 18px; right: 18px; width: fit-content; max-width: calc(100% - 36px); margin-inline: auto; display: flex; align-items: center; gap: 8px; overflow: hidden; padding: 7px 12px 8px; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-radius: var(--r-l); background: color-mix(in srgb, var(--tone) 12%, var(--bg-2)); color: var(--text); font-size: var(--fs-s); box-shadow: var(--elevation); pointer-events: none; animation: dialog-in .16s ease-out; }
+.keyboard-banner.taken { --tone: var(--holder, var(--warning)); }
+.keyboard-banner.free { --tone: var(--success); }
+.keyboard-banner .icon { flex: 0 0 auto; color: var(--tone); }
+.keyboard-banner span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keyboard-banner em { flex: 0 0 auto; color: var(--muted); font-style: normal; font-variant-numeric: tabular-nums; }
+/* How much of the holder's five idle seconds is left, draining as they stay idle. */
+.keyboard-banner i { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--tone); transform-origin: left; transition: transform .1s linear; }
+.collab-check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: var(--fs-s); cursor: pointer; }
+.collab-check input { width: 15px; height: 15px; margin: 2px 0 0; flex: 0 0 auto; cursor: pointer; }
+.collab-check span { display: grid; gap: 3px; }
+.collab-check small { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
+.confirm-dialog p.collab-rule { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--r-m); background: var(--bg-3); }
+.collab-rule .icon { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.collab-members small.writing { display: inline-flex; align-items: center; gap: 3px; color: var(--text); }
 .panel-chips { display: flex; align-items: center; gap: 2px; padding: 0 6px; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
 .panel-chip.active { background: var(--hover); color: var(--text); }
 .panel-chip.active .icon { color: var(--accent); }

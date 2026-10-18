@@ -43,7 +43,8 @@
  *                 step 1 — there is no server holding the document, so this is how the two
  *                 sides learn of each other's edits made while apart.
  *     sync        a y-protocols sync message (step 1, step 2 or an update)
- *     awareness   a y-protocols awareness update: who is here, their name, colour and cursor
+ *     awareness   a y-protocols awareness update: who is here, their name, colour and cursor,
+ *                 and how far they have written (the ICPC rule, keyboard.ts)
  *     query       asks everyone to send their awareness again
  *     bye         the relay itself is about to stop — it ran inside the sender's app, which
  *                 is closing the room — so there is nothing to reconnect to; the body is empty

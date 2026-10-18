@@ -12,6 +12,7 @@ import { createStore } from "../store";
 import type { ProblemTab } from "../types";
 import { folderHooks, workspace } from "../workspaceStore";
 import { deriveRoom, fileJudge, fileMeta, fileTests, formatJoinCode, generateJoinCode, mergeJudge, normalizeRelayAddress, normalizeRelayAddresses, parseInvite, PEER_COLORS, peerName, pickPeerColor, safeFolderName, safePath, type FileJudge, type FileMeta, type FileTest } from "./protocol";
+import { heardClaim, KEYBOARD_IDLE_MS, keyboardAt, nextRun, writeClaim, type Keyboard, type Writer } from "./keyboard";
 import { firstReachable, RelayProvider, type EndReason, type Link } from "./provider";
 
 /**
@@ -54,6 +55,12 @@ import { firstReachable, RelayProvider, type EndReason, type Link } from "./prov
  * Monaco's own undo stack replays ranges, and a teammate's edit in between makes them
  * wrong. While a shared file is in the editor, Ctrl+Z and Ctrl+Y go to a `Y.UndoManager`
  * of that file which tracks only what this editor typed.
+ *
+ * ── One keyboard ──
+ * A room opened under the ICPC rule lets one member write code at a time (keyboard.ts says
+ * how the members agree on whom without anybody deciding it). Everything this user writes
+ * into a shared file is noted as theirs; while the keyboard is somebody else's the editor
+ * is read-only for shared files (App.tsx), and undo, templates and language switches wait.
  */
 
 type Message = keyof typeof messages.en;
@@ -91,12 +98,18 @@ type CollabState = {
   reach: Reach;
   code: string;
   members: Member[];
+  /** The room keeps the ICPC rule: one member writes code at a time. */
+  icpc: boolean;
+  /** This member's client id, the one `members` and `keyboard` know them by. */
+  self: number;
+  /** Who has the keyboard, under the ICPC rule. */
+  keyboard: Keyboard;
   /** Why opening or joining did not work, for the dialog: a message, and the backend's own words when it had any. */
   error: { message: Message; detail?: string } | null;
 };
 
 const NOBODY: ReadonlySet<string> = new Set();
-const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, shared: NOBODY, root: "", name: "", link: "offline", address: "", lanAddresses: [], publicAddress: "", reach: "none", code: "", members: [] };
+const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, shared: NOBODY, root: "", name: "", link: "offline", address: "", lanAddresses: [], publicAddress: "", reach: "none", code: "", members: [], icpc: false, self: 0, keyboard: { holder: null, until: 0 } };
 
 export const collab = createStore<CollabState>({ ...IDLE, dialog: null, error: null });
 
@@ -216,6 +229,16 @@ type Session = {
   /** Files of the document that changed and have not been looked at yet. */
   dirty: Set<string>;
   scheduled: boolean;
+  /** Under the ICPC rule (see `keyboard`). */
+  icpc: boolean;
+  /** This member's writing, and everyone else's as heard, for the keyboard. */
+  writing: Writer;
+  writers: Map<number, Writer>;
+  /** When the keyboard is next looked at again: its holder's idle time running out. */
+  keyTimer: number | null;
+  /** Telling the others about this member's writing, at most every `CLAIM_EVERY`. */
+  claimTimer: number | null;
+  claimedAt: number;
 };
 
 let session: Session | null = null;
@@ -227,11 +250,13 @@ let view: WorkspaceView = { path: null, files: [], directories: [] };
 const newSession = (opener: boolean, name: string, color: string): Session => {
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
-  awareness.setLocalState({ user: { name, color } });
+  // Writing is announced from the start, so that a teammate's first keystroke is a change of it.
+  awareness.setLocalState({ user: { name, color }, write: { run: 0, n: 0 } });
   return {
     opener, local: false, ready: false, root: "", workspace: null, doc, awareness, provider: null,
     files: doc.getMap<Y.Map<unknown>>("files"), dirs: doc.getMap<boolean>("dirs"), info: doc.getMap<string>("room"),
     entries: new Map(), byLocal: new Map(), dirsSeen: new Map(), dirsBusy: new Set(), dirty: new Set(), scheduled: false,
+    icpc: false, writing: { id: doc.clientID, run: 0, n: 0, at: Number.NEGATIVE_INFINITY }, writers: new Map(), keyTimer: null, claimTimer: null, claimedAt: 0,
   };
 };
 
@@ -277,6 +302,7 @@ const cursorStyles = (members: Member[]) => {
 
 const watchMembers = (room: Session) => room.awareness.on("change", () => {
   if (session !== room) return;
+  hearWriters(room);
   const members = membersOf(room);
   // Two people with one colour: the one with the lower id keeps it. Both sides compute
   // that alike, so exactly one of them moves.
@@ -288,6 +314,86 @@ const watchMembers = (room: Session) => room.awareness.on("change", () => {
   cursorStyles(members);
   collab.set({ members });
 });
+
+// ── One keyboard ──
+
+/** The origin of a write into the document that is neither typing nor undo: a language switch, a template. */
+const WRITE = Symbol("write");
+
+/** How often this member's writing is announced at most; the last edit is always announced, at most this late. */
+const CLAIM_EVERY = 250;
+
+/** Somebody else has the keyboard, under the ICPC rule: this member may read, not write, shared code. */
+const blockedBy = (state: CollabState) => state.icpc && state.keyboard.holder !== null && state.keyboard.holder !== state.self ? state.keyboard.holder : null;
+
+/** Who has the keyboard right now, when it is not this member: the name to show, or null when this member may write. */
+export const keyboardTakenBy = () => {
+  const state = collab.get();
+  const holder = blockedBy(state);
+  return holder === null ? null : state.members.find((member) => member.id === holder)?.name ?? "?";
+};
+
+/** The keyboard as it now stands; looked at again when its holder's idle time runs out. */
+const judgeKeyboard = (room: Session) => {
+  if (room.keyTimer !== null) window.clearTimeout(room.keyTimer);
+  room.keyTimer = null;
+  if (session !== room || !room.icpc) return;
+  const now = Date.now();
+  const keyboard = keyboardAt([...room.writers.values(), room.writing], now);
+  const shown = collab.get().keyboard;
+  if (shown.holder !== keyboard.holder || shown.until !== keyboard.until) collab.set({ keyboard });
+  if (keyboard.holder !== null) room.keyTimer = window.setTimeout(() => judgeKeyboard(room), Math.max(0, keyboard.until - now) + 10);
+};
+
+/** What the others' awareness says of their writing, heard now. Who has left writes no more. */
+const hearWriters = (room: Session) => {
+  const now = Date.now();
+  const states = room.awareness.getStates();
+  for (const id of [...room.writers.keys()]) if (!states.has(id)) room.writers.delete(id);
+  states.forEach((state, id) => {
+    if (id === room.doc.clientID) return;
+    const claim = writeClaim(state);
+    if (claim) room.writers.set(id, heardClaim(room.writers.get(id), id, claim, now));
+  });
+  judgeKeyboard(room);
+};
+
+const announceWriting = (room: Session, immediately: boolean) => {
+  const send = () => {
+    room.claimTimer = null;
+    room.claimedAt = Date.now();
+    if (session === room) room.awareness.setLocalStateField("write", { run: room.writing.run, n: room.writing.n });
+  };
+  const since = Date.now() - room.claimedAt;
+  if (immediately || since >= CLAIM_EVERY) {
+    if (room.claimTimer !== null) window.clearTimeout(room.claimTimer);
+    send();
+  } else room.claimTimer ??= window.setTimeout(send, CLAIM_EVERY - since);
+};
+
+/**
+ * This member wrote into a shared file. Taking a free keyboard is a new turn, and is said at
+ * once — two members starting together should find out as soon as they can.
+ */
+const noteWriting = (room: Session) => {
+  const now = Date.now();
+  const fresh = !(now - room.writing.at < KEYBOARD_IDLE_MS);
+  room.writing = { ...room.writing, run: fresh ? nextRun([...room.writers.values(), room.writing]) : room.writing.run, n: room.writing.n + 1, at: now };
+  announceWriting(room, fresh);
+  judgeKeyboard(room);
+};
+
+const watchWriting = (room: Session) => room.doc.on("afterTransaction", (transaction: Y.Transaction) => {
+  const origin = transaction.origin;
+  if (!transaction.local || !(origin instanceof MonacoBinding || origin instanceof Y.UndoManager || origin === WRITE)) return;
+  if ([...transaction.changed.keys()].some((type) => type instanceof Y.Text)) noteWriting(room);
+});
+
+const stopKeyboard = (room: Session) => {
+  if (room.keyTimer !== null) window.clearTimeout(room.keyTimer);
+  if (room.claimTimer !== null) window.clearTimeout(room.claimTimer);
+  room.keyTimer = room.claimTimer = null;
+};
 
 // ── Paths and values ──
 
@@ -376,7 +482,7 @@ const bind = () => {
 const step = (back: boolean) => {
   const model = editor?.getModel();
   const undo = model && session?.byLocal.get(modelTab(model))?.undo;
-  if (!undo) return;
+  if (!undo || blockedBy(collab.get()) !== null) return;
   if (back) undo.undo(); else undo.redo();
 };
 
@@ -410,7 +516,7 @@ export const attachCollabEditor = (instance: Monaco.editor.IStandaloneCodeEditor
 export const replaceSharedText = (localId: string, next: string) => {
   const entry = session?.byLocal.get(localId);
   if (!entry) return false;
-  rewrite(entry, next, entry.binding);
+  if (blockedBy(collab.get()) === null) rewrite(entry, next, entry.binding ?? WRITE);
   return true;
 };
 
@@ -430,7 +536,7 @@ export const moveSharedFile = (localId: string, filename: string, next: string) 
     entry.map.set("path", path);
     entry.text.delete(0, entry.text.length);
     entry.text.insert(0, next);
-  });
+  }, WRITE);
   return true;
 };
 
@@ -726,6 +832,7 @@ const ANSWER_TIMEOUT = 12_000;
 
 /** Puts `room` away. The relay inside the app goes with a room that was on it. */
 const dispose = (room: Session) => {
+  stopKeyboard(room);
   room.entries.forEach((entry) => { unbind(entry); entry.undo?.destroy(); });
   room.provider?.destroy();
   room.awareness.destroy();
@@ -748,6 +855,7 @@ const finish = (room: Session, message?: Message, quiet = false) => {
   if (session !== room) return;
   if (room.ready && !quiet) room.entries.forEach((entry) => bridge?.setText(entry.localId, entry.text.toString()));
   room.ready = false;
+  stopKeyboard(room);
   room.entries.forEach(unbind);
   session = null;
   liveKey?.set(false);
@@ -790,9 +898,13 @@ type RelayStatus = { open: boolean; port: number | null; addresses: string[] };
 /** The folder is in place: the two directions start, and what is already on either side is carried across. */
 const goLive = (room: Session, shown: Partial<CollabState>) => {
   room.ready = true;
+  // The rule is the room's, set by whoever opened it, and the same for everyone in it.
+  room.icpc = room.info.get("icpc") === "1";
   watchDocument(room);
+  watchWriting(room);
   room.files.forEach((_, id) => room.dirty.add(id));
-  collab.set({ phase: "live", local: room.local, root: room.root, link: "online", members: membersOf(room), ...shown });
+  collab.set({ phase: "live", local: room.local, root: room.root, link: "online", members: membersOf(room), icpc: room.icpc, self: room.doc.clientID, ...shown });
+  hearWriters(room);
   pull(room);
   syncWorkspace(view);
 };
@@ -816,7 +928,7 @@ const reachOutside = async (room: Session) => {
  * relay to open it on; null opens it on this computer, on `port`, which only the app can
  * do — and then the room lasts only as long as this member stays in it.
  */
-export const openRoom = async (request: { folder: string; name: string; relay: string | null; port: number }) => {
+export const openRoom = async (request: { folder: string; name: string; relay: string | null; port: number; icpc: boolean }) => {
   if (session || collab.get().phase !== "idle") return;
   if (!view.path) { collab.set({ error: { message: "collabErrNoWorkspace" } }); return; }
   collab.set({ phase: "starting", error: null });
@@ -842,6 +954,7 @@ export const openRoom = async (request: { folder: string; name: string; relay: s
     // What the room calls the folder: its own name, or the workspace's when all of it is shared.
     const name = safeFolderName(explorerBasename(room.root || view.path || ""));
     room.info.set("name", name);
+    if (request.icpc) room.info.set("icpc", "1");
     goLive(room, { name, address, lanAddresses, code: formatJoinCode(code), dialog: "room", reach: room.local ? "checking" : "none" });
     if (room.local) void reachOutside(room);
   } catch (error) {

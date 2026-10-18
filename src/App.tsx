@@ -38,8 +38,9 @@ import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
-import { attachCollabEditor, collab, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
-import { CollabChip, CollabDialogs } from "./collab/CollabUi";
+import { attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
+import { CollabChip, CollabDialogs, KeyboardBanner, KeyboardChip } from "./collab/CollabUi";
+import { DEVICES, openDevice, useDevice } from "./collab/devices";
 
 /** What the editor and the test panel read while no file is open. Constants, so nothing re-runs over them. */
 const NO_CODES: Record<Language, string> = { cpp: "", python: "" };
@@ -220,6 +221,11 @@ function App() {
   const sharedFiles = useCollab((room) => room.shared);
   const roomLive = useCollab((room) => room.phase === "live");
   const roomLink = useCollab((room) => room.link);
+  // Development only: which device this copy plays, when it is not the first (src/collab/devices.ts).
+  const device = useDevice();
+  // Under the ICPC rule, the teammate who has the keyboard while it is not this user's: shared code is read-only meanwhile.
+  const keyboardBusy = useCollab((room) => room.icpc && room.keyboard.holder !== null && room.keyboard.holder !== room.self
+    ? room.members.find((member) => member.id === room.keyboard.holder)?.name ?? "?" : null);
   const testSummary = useMemo(() => summarizeTests(tests), [tests]);
   // One function per language, so a memoised panel that is handed it is not redrawn for nothing.
   const t = useCallback((key: keyof typeof messages.en): string => messages[uiLocale][key], [uiLocale]);
@@ -553,6 +559,8 @@ function App() {
     if (!activeTab || next === language) return;
     // In a room the switch replaces the code on everyone's screen, so it is asked about first.
     const shared = collab.get().shared.has(activeTab.id);
+    const holder = shared ? keyboardTakenBy() : null;
+    if (holder !== null) { setFileStatus(t("collabKeyboardBusy").replace("{name}", holder)); return; }
     if (shared && !agreed) { setSharedLanguageConfirm(next); return; }
     const requestedFilename = filenameForLanguage(activeTab.filename, next);
     const occupied = [...tabs, ...savedFiles]
@@ -652,6 +660,9 @@ function App() {
     }
     // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
     const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
+    // Another language is other code for everyone, which waits for the keyboard like typing does.
+    const holder = !fromRoom && languageFromFilename(requested) !== original.language && collab.get().shared.has(original.id) ? keyboardTakenBy() : null;
+    if (holder !== null) { setFileStatus(t("collabKeyboardBusy").replace("{name}", holder)); return null; }
     // A new extension is a new language, and with it this user's code for that language —
     // which, for a file in a room, is then everyone's.
     const switchShared = (filename: string) => {
@@ -1268,7 +1279,9 @@ function App() {
     if (rendered.cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: activeTab.id, language: templateLanguage, offset: rendered.cursorOffset };
     // In a room the code is the room's document, and replacing it is an edit everyone gets.
     if (collab.get().shared.has(activeTab.id)) {
-      if (templateLanguage === activeTab.language) replaceSharedText(activeTab.id, rendered.code);
+      const holder = keyboardTakenBy();
+      if (holder !== null) setFileStatus(t("collabKeyboardBusy").replace("{name}", holder));
+      else if (templateLanguage === activeTab.language) replaceSharedText(activeTab.id, rendered.code);
       else setFileStatus(t("collabLocked"));
       setSettingsPage(null);
       return;
@@ -3080,6 +3093,11 @@ function App() {
         { id: "collab.show", label: t("cmdCollabShow"), keywords: "share collaborate room invite code address 공유 협업 방 초대 코드 주소", run: () => showCollabDialog("room") },
         { id: "collab.leave", label: t("cmdCollabLeave"), keywords: "share collaborate room leave close stop 공유 협업 방 나가기 닫기", run: () => { if (collab.get().local) showCollabDialog("room"); else void leaveRoom(); } },
       ]),
+      ...(DEVICES && !device ? [
+        { id: "dev.device", label: t("cmdDevDevice"), keywords: "dev device peer second window test room collaborate 개발 기기 창 테스트 공유 협업", run: () => {
+          openDevice().then((number) => setFileStatus(t("devDeviceOpened").replace("{n}", String(number))), (error) => setFileStatus(errorMessage(error)));
+        } },
+      ] : []),
       { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
       { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
       { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
@@ -3320,7 +3338,7 @@ function App() {
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo"><AppMark /></span>
           <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
-          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
+          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev{device ? ` · ${t("devDevice").replace("{n}", String(device.number))}` : ""}</span>}
           <span className="titlebar-file" data-tauri-drag-region>
             {workspacePath ? <>
               <span className="crumb">{workspacePath.split(/[\\/]/).filter(Boolean).at(-1)}</span>
@@ -3555,6 +3573,7 @@ function App() {
               </div>;
             })}
           </div>}
+          <KeyboardBanner t={t} shared={sharedFiles.has(activeTabId)} />
           {tabs.length ? <>
           <Editor
             beforeMount={setupMonaco}
@@ -3595,6 +3614,9 @@ function App() {
               snippetSuggestions: "top",
               wordWrap: "off",
               tabSize: 4,
+              readOnly: keyboardBusy !== null && sharedFiles.has(activeTabId),
+              // A teammate's name, so nothing in it is read as markdown.
+              readOnlyMessage: { value: t("collabKeyboardBusy").replace("{name}", (keyboardBusy ?? "").replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&")) },
             }}
           />
           </> : <div className="welcome-screen">
@@ -3941,6 +3963,7 @@ function App() {
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">
           <CollabChip t={t} />
+          <KeyboardChip t={t} />
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => setSettingsPage("judge")} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => setSettingsPage("language-server")} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>
