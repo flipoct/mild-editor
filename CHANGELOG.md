@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.18.1
+
+- A Mac can join a shared room on another computer. It could not before, over the same Wi-Fi or Tailscale, and said the room could not be reached: the Mac app now connects through a loopback tunnel of its own.
+
 ## 1.18.0
 
 - **ICPC rule: one keyboard**, when opening a shared room. Everyone can read every file, but only one member writes code at a time, as at an ICPC contest. The keyboard is free again once its holder has typed nothing for 5 seconds; while a teammate has it, shared files are read-only, a banner over the editor names who is writing and counts down, and the status bar shows whose keyboard it is.

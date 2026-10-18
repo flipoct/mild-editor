@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "mild-editor"
-version = "1.18.0"
+version = "1.18.1"
 dependencies = [
  "cef",
  "futures-util",
@@ -2341,14 +2341,14 @@ dependencies = [
 
 [[package]]
 name = "mild-editor-cef-helper"
-version = "1.18.0"
+version = "1.18.1"
 dependencies = [
  "cef",
 ]
 
 [[package]]
 name = "mild-relay"
-version = "1.18.0"
+version = "1.18.1"
 dependencies = [
  "futures-util",
  "tokio",

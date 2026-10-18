@@ -8,7 +8,7 @@
 #   cargo build --release -p mild-relay        (from src-tauri; the binary shares its target directory)
 [package]
 name = "mild-relay"
-version = "1.18.0"
+version = "1.18.1"
 description = "Relay for Mild Editor's shared rooms: forwards opaque, end-to-end encrypted frames between the peers of a room"
 authors = ["mild editor"]
 edition = "2021"
