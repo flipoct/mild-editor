@@ -11,3 +11,7 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+// Development builds: the editor API for the debug probe (MILD_DEBUG_PROBE), which runs
+// outside the bundle and cannot import the prebundled instance itself.
+if (import.meta.env.DEV) (window as unknown as { __monaco?: typeof monaco }).__monaco = monaco;

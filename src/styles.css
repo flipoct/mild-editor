@@ -649,6 +649,28 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .collab-status.idle .icon { color: var(--muted); }
 .collab-status.ready { color: var(--text); }
 .collab-faces { display: flex; align-items: center; gap: 2px; }
+/* The ICPC rule's keyboard: free, this user's, or a teammate's (in that teammate's colour). */
+.keyboard-status.free .icon { color: var(--success); }
+.keyboard-status.mine { color: var(--text); }
+.keyboard-status.mine .icon { color: var(--accent); }
+.keyboard-status.taken { color: var(--text); }
+.keyboard-status.taken .icon { color: var(--holder, var(--warning)); }
+.keyboard-status em { color: var(--muted); font-style: normal; font-variant-numeric: tabular-nums; }
+.keyboard-banner { --tone: var(--warning); position: absolute; z-index: 31; top: 10px; left: 18px; right: 18px; width: fit-content; max-width: calc(100% - 36px); margin-inline: auto; display: flex; align-items: center; gap: 8px; overflow: hidden; padding: 7px 12px 8px; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-radius: var(--r-l); background: color-mix(in srgb, var(--tone) 12%, var(--bg-2)); color: var(--text); font-size: var(--fs-s); box-shadow: var(--elevation); pointer-events: none; animation: dialog-in .16s ease-out; }
+.keyboard-banner.taken { --tone: var(--holder, var(--warning)); }
+.keyboard-banner.free { --tone: var(--success); }
+.keyboard-banner .icon { flex: 0 0 auto; color: var(--tone); }
+.keyboard-banner span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keyboard-banner em { flex: 0 0 auto; color: var(--muted); font-style: normal; font-variant-numeric: tabular-nums; }
+/* How much of the holder's five idle seconds is left, draining as they stay idle. */
+.keyboard-banner i { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--tone); transform-origin: left; transition: transform .1s linear; }
+.collab-check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: var(--fs-s); cursor: pointer; }
+.collab-check input { width: 15px; height: 15px; margin: 2px 0 0; flex: 0 0 auto; cursor: pointer; }
+.collab-check span { display: grid; gap: 3px; }
+.collab-check small { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
+.confirm-dialog p.collab-rule { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--r-m); background: var(--bg-3); }
+.collab-rule .icon { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.collab-members small.writing { display: inline-flex; align-items: center; gap: 3px; color: var(--text); }
 .panel-chips { display: flex; align-items: center; gap: 2px; padding: 0 6px; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
 .panel-chip.active { background: var(--hover); color: var(--text); }
 .panel-chip.active .icon { color: var(--accent); }
@@ -724,6 +746,49 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .verdict-notice-body:hover span { color: var(--text); }
 .verdict-notice-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
 .verdict-notice-close:hover { color: var(--text); }
+
+/* ── Drawing boards (src/board) ─────────────────────────────────────────────────
+   A board covers the editor in its panel; the editor underneath keeps its state. */
+.explorer-board .icon { color: var(--accent); }
+.board-view { position: absolute; inset: 0; z-index: 25; display: flex; flex-direction: column; background: var(--bg-1); }
+.board-bar { min-height: 38px; display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-2); }
+.board-name { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--text); font-size: var(--fs-s); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-name > .icon { flex: 0 0 auto; color: var(--accent); }
+.board-shared { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border-radius: var(--r-s); background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 600; }
+.board-tools { min-width: 0; flex: 1; display: flex; align-items: center; justify-content: center; gap: 3px; overflow-x: auto; scrollbar-width: none; }
+.board-tool, .board-ink, .board-width, .board-zoom { height: 26px; min-width: 26px; flex: 0 0 auto; display: grid; place-items: center; padding: 0 4px; border: 1px solid transparent; border-radius: var(--r-s); background: transparent; color: var(--muted); }
+.board-tool:hover, .board-width:hover, .board-zoom:hover { background: var(--hover); color: var(--text); }
+.board-tool.active, .board-width.active { border-color: var(--border); background: var(--bg-3); color: var(--text); }
+.board-ink::after { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+.board-ink.active { border-color: var(--ink); }
+.board-width i { border-radius: 50%; background: currentColor; }
+.board-zoom { min-width: 46px; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.board-sep { width: 1px; height: 18px; flex: 0 0 auto; margin: 0 4px; background: var(--border-subtle); }
+.board-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.board-actions .subtle-button { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; font-size: var(--fs-xs); }
+.board-tablet-button.paired .icon { color: var(--success); }
+.board-tablet-button em { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--success); color: #10130f; font-size: 10px; font-style: normal; font-weight: 700; }
+.board-stage { position: relative; min-height: 0; flex: 1; }
+.board-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+.board-canvas.tool-hand { cursor: grab; }
+.board-canvas.tool-hand:active { cursor: grabbing; }
+.board-canvas.tool-eraser { cursor: none; }
+.board-tablet { position: absolute; z-index: 2; top: 10px; right: 12px; width: min(300px, calc(100% - 24px)); display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-l); background: var(--bg-2); color: var(--text); box-shadow: var(--elevation); font-size: var(--fs-s); animation: dialog-in .16s ease-out; }
+.board-tablet header { display: flex; align-items: center; justify-content: space-between; }
+.board-tablet p { margin: 0; color: var(--text-2); line-height: 1.45; }
+.board-tablet .board-tablet-error { color: var(--warning); }
+.board-qr { width: 100%; max-width: 220px; justify-self: center; border-radius: var(--r-m); }
+.board-tablet code { display: block; overflow-wrap: anywhere; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs); user-select: all; }
+.board-tablet details summary { color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.board-tablet details code { margin-top: 4px; }
+.board-tablet footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.board-tablet footer span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-xs); }
+.board-tablet footer i { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
+.board-tablet footer .connected { color: var(--text); }
+.board-tablet footer .connected i { background: var(--success); }
+.board-confirm { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-l); background: var(--bg-2); color: var(--text); box-shadow: var(--elevation); transform: translate(-50%, -50%); }
+.board-confirm p { margin: 0; }
+.board-confirm div { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ── Wallpaper mode ───────────────────────────────────────────────────────────
    Keeps every surface in the selected theme while allowing the image through. */

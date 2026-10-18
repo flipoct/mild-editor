@@ -36,14 +36,14 @@ pub struct RelayStatus {
     pub addresses: Vec<String>,
 }
 
-/// A port the router forwards to the relay, to be given back when the room closes.
-struct Forward {
+/// A port the router forwards to this computer, to be given back when what listens there stops.
+pub(crate) struct Forward {
     gateway: Gateway,
     external_port: u16,
-    /// The relay's port the forward leads to; a relay moved elsewhere needs a new one.
-    internal_port: u16,
-    /// What a teammate outside types: the router's public address and the forwarded port.
-    address: String,
+    /// The port here the forward leads to; a server moved elsewhere needs a new one.
+    pub(crate) internal_port: u16,
+    /// What somebody outside connects to: the router's public address and the forwarded port.
+    pub(crate) address: String,
 }
 
 #[derive(Default)]
@@ -104,7 +104,7 @@ pub fn status(state: &CollabState) -> RelayStatus {
 /// the others find a second network the default route does not cover — another LAN, or a
 /// virtual one (Tailscale and Hamachi hand out 100.64/10 and 25/8), which is how friends
 /// in different places usually "play on LAN".
-fn lan_addresses() -> Vec<String> {
+pub(crate) fn lan_addresses() -> Vec<String> {
     const PROBES: [[u8; 4]; 6] = [[8, 8, 8, 8], [192, 168, 255, 254], [10, 255, 255, 254], [172, 31, 255, 254], [100, 127, 255, 254], [25, 255, 255, 254]];
     let routed = PROBES.iter().filter_map(|target| {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
@@ -135,7 +135,7 @@ fn lan_addresses() -> Vec<String> {
 /// How long the router keeps the forward if the app never takes it back (a crash, a power
 /// cut): longer than any contest, short enough not to be found there next week.
 const LEASE_SECONDS: u32 = 12 * 60 * 60;
-const FORWARD_NAME: &str = "mild editor shared room";
+pub(crate) const FORWARD_NAME: &str = "mild editor shared room";
 
 /// Whether `address` is one the internet routes to. A router whose "external" address is
 /// not — a second router in front of it, or the provider's shared NAT (100.64/10) — can
@@ -161,30 +161,8 @@ pub fn forward(state: &CollabState) -> Result<String, &'static str> {
         return Ok(address);
     }
     unforward(state);
-    let mut search = SearchOptions::default();
-    search.timeout = Some(Duration::from_secs(3));
-    let gateway = igd_next::search_gateway(search).map_err(|_| "no-gateway")?;
-    let external = match gateway.get_external_ip() {
-        Ok(IpAddr::V4(address)) if is_public(address) => address,
-        Ok(_) => return Err("nat"),
-        Err(_) => return Err("refused"),
-    };
-    // The address of this computer on the router's network: the one a socket towards the
-    // router is given.
-    let local = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|socket| { socket.connect(gateway.addr)?; socket.local_addr() }).map_err(|_| "refused")?;
-    let local = SocketAddr::new(local.ip(), port);
-    let add = |external_port: u16, lease: u32| gateway.add_port(PortMappingProtocol::TCP, external_port, local, lease, FORWARD_NAME);
-    let external_port = match add(port, LEASE_SECONDS) {
-        Ok(()) => port,
-        // Some routers only keep forwards until they are told to drop them.
-        Err(AddPortError::OnlyPermanentLeasesSupported) => add(port, 0).map(|()| port).map_err(|_| "refused")?,
-        // Another computer behind this router has the same port: any other one will do,
-        // since the invitation carries it.
-        Err(AddPortError::PortInUse) => gateway.add_any_port(PortMappingProtocol::TCP, local, LEASE_SECONDS, FORWARD_NAME).map_err(|_| "refused")?,
-        Err(_) => return Err("refused"),
-    };
-    let address = format!("{external}:{external_port}");
-    let made = Forward { gateway, external_port, internal_port: port, address: address.clone() };
+    let made = forward_port(port, FORWARD_NAME)?;
+    let address = made.address.clone();
     // The room may have been closed while the router was thinking.
     if relay_port(state) != Some(port) {
         drop_forward(made);
@@ -200,10 +178,38 @@ pub fn forward(state: &CollabState) -> Result<String, &'static str> {
     Ok(address)
 }
 
+/// Asks the router to forward TCP `port` to this computer, under `name` in its list. The
+/// error is one of the words `forward` describes.
+pub(crate) fn forward_port(port: u16, name: &str) -> Result<Forward, &'static str> {
+    let mut search = SearchOptions::default();
+    search.timeout = Some(Duration::from_secs(3));
+    let gateway = igd_next::search_gateway(search).map_err(|_| "no-gateway")?;
+    let external = match gateway.get_external_ip() {
+        Ok(IpAddr::V4(address)) if is_public(address) => address,
+        Ok(_) => return Err("nat"),
+        Err(_) => return Err("refused"),
+    };
+    // The address of this computer on the router's network: the one a socket towards the
+    // router is given.
+    let local = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|socket| { socket.connect(gateway.addr)?; socket.local_addr() }).map_err(|_| "refused")?;
+    let local = SocketAddr::new(local.ip(), port);
+    let add = |external_port: u16, lease: u32| gateway.add_port(PortMappingProtocol::TCP, external_port, local, lease, name);
+    let external_port = match add(port, LEASE_SECONDS) {
+        Ok(()) => port,
+        // Some routers only keep forwards until they are told to drop them.
+        Err(AddPortError::OnlyPermanentLeasesSupported) => add(port, 0).map(|()| port).map_err(|_| "refused")?,
+        // Another computer behind this router has the same port: any other one will do,
+        // since the invitation carries it.
+        Err(AddPortError::PortInUse) => gateway.add_any_port(PortMappingProtocol::TCP, local, LEASE_SECONDS, name).map_err(|_| "refused")?,
+        Err(_) => return Err("refused"),
+    };
+    Ok(Forward { gateway, external_port, internal_port: port, address: format!("{external}:{external_port}") })
+}
+
 /// Gives the forwarded port back. Waits for the router only briefly: this also runs while
 /// the window is closing, and a router that has gone quiet must not hold that up — the
 /// lease ends the forward by itself then.
-fn drop_forward(forward: Forward) {
+pub(crate) fn drop_forward(forward: Forward) {
     let (done, wait) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = forward.gateway.remove_port(PortMappingProtocol::TCP, forward.external_port);

@@ -6,16 +6,19 @@ pub mod browser;
 #[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
+mod boards;
 mod checker;
 mod clangd;
 mod collab;
 mod companion;
+mod devices;
 mod files;
 mod import;
 mod interactive;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod memory;
+mod pad;
 mod pch;
 mod runner;
 mod sandbox;
@@ -90,7 +93,10 @@ fn clear_maximized_resize_border(app: &tauri::AppHandle) {
 /// Development only. Prints what a probe script (see `start_debug_probe`) evaluated to.
 #[tauri::command]
 fn debug_report(text: String) {
-    eprintln!("[probe] {text}");
+    match devices::number() {
+        Some(number) => eprintln!("[probe@{number}] {text}"),
+        None => eprintln!("[probe] {text}"),
+    }
 }
 
 /// Development only: with MILD_DEBUG_PROBE=<path>, re-run that file's JavaScript inside the
@@ -129,6 +135,8 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .manage(companion::CompanionState::default())
         .manage(collab::CollabState::default())
+        .manage(devices::Devices::default())
+        .manage(pad::PadState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -138,12 +146,14 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder
         .setup(|app| {
+            devices::open_windows(app.handle())?;
             macos_menu::install(app.handle())?;
             // Start in the real macOS full screen — its own Space with the menu bar out of
             // the way — rather than the configured size in the middle of the display. An
             // undecorated window ignores `maximized` in the config, and maximising it only
             // fills the work area, which is not what full screen means here.
-            if let Some(window) = app.get_webview_window("main") {
+            // A development device stays a window beside the first one (devices.rs).
+            if let Some(window) = app.get_webview_window("main").filter(|_| devices::number().is_none()) {
                 let _ = window.set_fullscreen(true);
             }
             browser::prepare(app.handle());
@@ -154,6 +164,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "macos"))]
     let builder = builder.setup(|app| {
+        devices::open_windows(app.handle())?;
         browser::prepare(app.handle());
         #[cfg(windows)]
         clear_maximized_resize_border(app.handle());
@@ -198,6 +209,14 @@ pub fn run() {
             workspace::duplicate_workspace_file,
             workspace::rename_workspace_file,
             workspace::load_workspace,
+            boards::list_workspace_boards,
+            boards::read_workspace_board,
+            boards::write_workspace_board,
+            boards::delete_workspace_board,
+            pad::pad_open,
+            pad::pad_close,
+            pad::pad_send,
+            pad::pad_forward_port,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,
@@ -231,6 +250,8 @@ pub fn run() {
             browser::problem_window_close,
             browser::problem_window_take_url,
             dev_workspace_path,
+            devices::dev_device,
+            devices::dev_open_device,
             debug_report
         ])
         .on_window_event(|window, event| {
@@ -260,10 +281,16 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build({
+            let mut context = tauri::generate_context!();
+            devices::separate(&mut context);
+            context
+        })
         .expect("error while building mild editor")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                devices::close_all(&app.state::<devices::Devices>());
+                pad::close(&app.state::<pad::PadState>(), None);
                 browser::shutdown(app);
             }
         });

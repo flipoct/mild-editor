@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- A drawing surface: the page itself never zooms or scrolls; the board does. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1c1e22" />
+    <title>Mild Editor · Board</title>
+  </head>
+  <body>
+    <main id="pad">
+      <canvas id="board"></canvas>
+      <nav id="tools" aria-label="tools"></nav>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="/src/pad/main.ts"></script>
+  </body>
+</html>

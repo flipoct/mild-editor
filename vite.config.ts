@@ -10,5 +10,10 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    rollupOptions: {
+      // pad.html is the page a tablet opens to draw on a board (src/pad); the app serves it
+      // from its own build (src-tauri/src/pad.rs), so it is built beside the editor.
+      input: { main: "index.html", pad: "pad.html" },
+    },
   },
 });

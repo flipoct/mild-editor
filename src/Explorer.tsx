@@ -11,7 +11,7 @@ import { canMoveInto } from "./problems";
 import { getSetting, setSetting, useSetting } from "./settingsStore";
 import { createStore } from "./store";
 import type { ExplorerDropTarget, ExplorerFile, ExplorerMenu, ExplorerRename, ExplorerSelection, ExplorerSort, ExplorerTreeNode, ProblemSource } from "./types";
-import { createWorkspaceFolder, deleteWorkspaceFolder, expandDirectories, refreshDirectories, relocateWorkspaceFolder, reorderWorkspaceFiles, rescanWorkspace, revealWorkspaceFile, revealWorkspaceFolder, setExplorerSelection, toggleDirectory, useCollapsedDirectories, useSavedFiles, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
+import { createWorkspaceFolder, deleteWorkspaceFolder, expandDirectories, refreshDirectories, relocateWorkspaceFolder, reorderWorkspaceFiles, rescanWorkspace, revealWorkspaceFile, revealWorkspaceFolder, setExplorerSelection, toggleDirectory, useCollapsedDirectories, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
 
 type ExplorerEntry = NonNullable<ExplorerSelection>;
 
@@ -45,6 +45,10 @@ export type ExplorerProps = {
   /** A folder was deleted with these files (file keys) in it: their tabs have to close. */
   onFilesDeleted: (removedKeys: Set<string>) => void;
   showStatus: (message: string) => void;
+  /** The drawing board shown in the editor's place, if any (src/board): its row is marked. */
+  activeBoard: string;
+  openBoard: (path: string) => void;
+  deleteBoard: (path: string) => void;
 };
 
 /**
@@ -272,6 +276,7 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
   const workspacePath = useWorkspacePath();
   const savedFiles = useSavedFiles();
   const workspaceDirectories = useWorkspaceDirectories();
+  const workspaceBoards = useWorkspaceBoards();
   const collapsedDirectories = useCollapsedDirectories();
   const [explorerSort, setExplorerSort] = useSetting("explorerSort");
   const [explorerSource, setExplorerSource] = useSetting("explorerSource");
@@ -285,7 +290,7 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
   const explorerFiles = useMemo(
     () => sortExplorerFiles(explorerSource === "all" ? allFiles : allFiles.filter((file) => (file.source || "other") === explorerSource), explorerSort),
     [explorerSort, explorerSource, allFiles]);
-  const explorerTree = useMemo(() => buildExplorerTree(explorerFiles, workspaceDirectories), [explorerFiles, workspaceDirectories]);
+  const explorerTree = useMemo(() => buildExplorerTree(explorerFiles, workspaceDirectories, workspaceBoards), [explorerFiles, workspaceDirectories, workspaceBoards]);
   /** File key → place in the tab strip, for the number a row shows. */
   const openIndexes = useMemo(() => {
     const indexes = new Map<string, number>();
@@ -422,6 +427,18 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
     // `nodes` is one folder's children, so a file's position among them is its slot there.
     const siblingSlots = new Map(nodes.filter((node) => node.kind === "file").map((node, slot) => [node.file.id, slot]));
     return nodes.flatMap((node) => {
+    if (node.kind === "board") {
+      const { path } = node;
+      return [<div className="explorer-file-row" key={`board-${path}`}>
+        <button className={`explorer-file explorer-board ${fileKey(path) === fileKey(props.activeBoard) ? "active" : ""}`} style={{ paddingLeft: `${14 + depth * 14}px` }} title={path}
+          onClick={(event) => { event.currentTarget.focus(); props.openBoard(path); }}
+          onFocus={() => setExplorerSelection({ kind: "file", filename: path })}
+          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setExplorerSelection({ kind: "file", filename: path }); overlays.set({ menu: { board: path, x: event.clientX, y: event.clientY } }); }}>
+          <Icon name="board" size={14} />
+          <span className="explorer-file-name">{node.name}</span>
+        </button>
+      </div>];
+    }
     if (node.kind === "directory") {
       const collapsed = collapsedDirectories.has(fileKey(node.path));
       if (rename && renamingDirectory(node.path)) {
@@ -483,6 +500,14 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
 });
 
 /** The menu a right-click in the explorer opens: on a file, on a folder, or on the empty space below the tree. */
+/** Deleting a board from its menu: asked once more in place, since the drawing cannot be had back. */
+function BoardDeleteItem({ t, name, onDelete }: { t: Translate; name: string; onDelete: () => void }) {
+  const [asking, setAsking] = useState(false);
+  return asking
+    ? <button className="menu-danger" role="menuitem" autoFocus onClick={onDelete} title={t("boardDeleteAsk").replace("{name}", name)}>{t("boardDeleteAsk").replace("{name}", name)}</button>
+    : <button className="menu-danger" role="menuitem" onClick={() => setAsking(true)}>{t("boardDelete")}</button>;
+}
+
 export const ExplorerContextMenu = memo(function ExplorerContextMenu(props: ExplorerProps) {
   const { t, newFile, fileCommand } = props;
   const menu = overlays.use((state) => state.menu);
@@ -509,10 +534,13 @@ export const ExplorerContextMenu = memo(function ExplorerContextMenu(props: Expl
   }, [menu]);
   if (!menu) return null;
   const { x, y } = placed?.menu === menu ? placed : menu;
-  const { file, directory } = menu;
+  const { file, directory, board } = menu;
   const command = (name: ExplorerFileCommand, filename: string) => { fileCommand(name, filename); closeMenu(); };
   return <div className="explorer-context-menu" ref={menuRef} style={{ left: x, top: y }} role="menu">
-    {file ? <>
+    {board ? <>
+      <button role="menuitem" onClick={() => { closeMenu(); props.openBoard(board); }}>{t("boardOpen")}</button>
+      <BoardDeleteItem t={t} onDelete={() => { closeMenu(); props.deleteBoard(board); }} name={explorerBasename(board)} />
+    </> : file ? <>
       <button role="menuitem" onClick={() => { closeMenu(); newFile(explorerParent(file)); }}>{t("newFile")}</button>
       <button role="menuitem" onClick={() => beginFolderCreation(explorerParent(file))}>{t("newFolder")}</button>
       <div className="explorer-menu-separator" />

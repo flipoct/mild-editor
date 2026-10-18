@@ -37,9 +37,13 @@ import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
-import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
-import { attachCollabEditor, collab, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
-import { CollabChip, CollabDialogs } from "./collab/CollabUi";
+import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
+import { BoardView } from "./board/BoardView";
+import { EMPTY_BOARD } from "./board/model";
+import { unpairAll } from "./board/pads";
+import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
+import { CollabChip, CollabDialogs, KeyboardBanner, KeyboardChip } from "./collab/CollabUi";
+import { DEVICES, openDevice, useDevice } from "./collab/devices";
 
 /** What the editor and the test panel read while no file is open. Constants, so nothing re-runs over them. */
 const NO_CODES: Record<Language, string> = { cpp: "", python: "" };
@@ -60,6 +64,9 @@ function App() {
   const workspacePath = useWorkspacePath();
   const savedFiles = useSavedFiles();
   const workspaceDirectories = useWorkspaceDirectories();
+  const workspaceBoards = useWorkspaceBoards();
+  // The drawing board shown in the editor's place, by workspace path (src/board).
+  const [openBoardPath, setOpenBoardPath] = useState<string | null>(null);
   const resizeRef = useRef<{
     axis: "x" | "y"; path: number[]; before: number; after: number; start: number; span: number;
     beforeWeight: number; afterWeight: number; expect: { before: string; after: string };
@@ -220,6 +227,11 @@ function App() {
   const sharedFiles = useCollab((room) => room.shared);
   const roomLive = useCollab((room) => room.phase === "live");
   const roomLink = useCollab((room) => room.link);
+  // Development only: which device this copy plays, when it is not the first (src/collab/devices.ts).
+  const device = useDevice();
+  // Under the ICPC rule, the teammate who has the keyboard while it is not this user's: shared code is read-only meanwhile.
+  const keyboardBusy = useCollab((room) => room.icpc && room.keyboard.holder !== null && room.keyboard.holder !== room.self
+    ? room.members.find((member) => member.id === room.keyboard.holder)?.name ?? "?" : null);
   const testSummary = useMemo(() => summarizeTests(tests), [tests]);
   // One function per language, so a memoised panel that is handed it is not redrawn for nothing.
   const t = useCallback((key: keyof typeof messages.en): string => messages[uiLocale][key], [uiLocale]);
@@ -481,6 +493,7 @@ function App() {
   // the tab that was in use before it.
   const tabHistoryRef = useRef<string[]>([]);
   const activateTab = (tab: ProblemTab) => {
+    setOpenBoardPath(null);
     tabHistoryRef.current = [tab.id, ...tabHistoryRef.current.filter((id) => id !== tab.id)];
     clearDiagnostics();
     setActiveTabId(tab.id);
@@ -553,6 +566,8 @@ function App() {
     if (!activeTab || next === language) return;
     // In a room the switch replaces the code on everyone's screen, so it is asked about first.
     const shared = collab.get().shared.has(activeTab.id);
+    const holder = shared ? keyboardTakenBy() : null;
+    if (holder !== null) { setFileStatus(t("collabKeyboardBusy").replace("{name}", holder)); return; }
     if (shared && !agreed) { setSharedLanguageConfirm(next); return; }
     const requestedFilename = filenameForLanguage(activeTab.filename, next);
     const occupied = [...tabs, ...savedFiles]
@@ -652,6 +667,9 @@ function App() {
     }
     // A bare name takes the default language, so `foo` becomes foo.py or foo.cpp.
     const requested = languageFromFilename(typed) ? typed : filenameForLanguage(`${typed}.cpp`, defaultLanguage);
+    // Another language is other code for everyone, which waits for the keyboard like typing does.
+    const holder = !fromRoom && languageFromFilename(requested) !== original.language && collab.get().shared.has(original.id) ? keyboardTakenBy() : null;
+    if (holder !== null) { setFileStatus(t("collabKeyboardBusy").replace("{name}", holder)); return null; }
     // A new extension is a new language, and with it this user's code for that language —
     // which, for a file in a room, is then everyone's.
     const switchShared = (filename: string) => {
@@ -760,6 +778,40 @@ function App() {
     const file = explorerFile(filename);
     if (file) openSavedFile(file);
   });
+  const openBoard = useStableCallback((path: string) => {
+    setOpenBoardPath(path);
+    setExplorerSelection({ kind: "file", filename: path });
+  });
+  const deleteBoard = useStableCallback(async (path: string) => {
+    const folderPath = workspace.get().workspacePath;
+    if (!folderPath) return;
+    try {
+      await invoke("delete_workspace_board", { request: { folderPath, filename: path } });
+      await refreshDirectories(setFileStatus, folderPath);
+    } catch (error) { setFileStatus(errorMessage(error)); }
+  });
+  /** A new board, in the shared folder while a room is open there, and otherwise beside the selected entry. */
+  const newBoard = async () => {
+    const folderPath = workspace.get().workspacePath;
+    if (!folderPath) return;
+    try {
+      let path = collab.get().phase === "live" ? await addSharedBoard("board.board") : null;
+      if (!path) {
+        const parent = explorerRef.current?.creationParent() ?? "";
+        path = mexFilename(parent ? `${parent}/board.board` : "board.board", workspace.get().workspaceBoards);
+        await invoke("write_workspace_board", { request: { folderPath, filename: path, text: EMPTY_BOARD } });
+        expandDirectories(explorerParent(path));
+        await refreshDirectories(setFileStatus, folderPath);
+      }
+      openBoard(path);
+    } catch (error) { setFileStatus(errorMessage(error)); }
+  };
+  // A board that is gone — deleted here or by a teammate, or with its folder — is not shown any more.
+  useEffect(() => {
+    if (openBoardPath && !workspaceBoards.some((board) => fileKey(board) === fileKey(openBoardPath))) setOpenBoardPath(null);
+  }, [workspaceBoards, openBoardPath]);
+  // Another workspace: its boards are other boards, and no tablet goes on drawing on the old ones.
+  useEffect(() => { setOpenBoardPath(null); unpairAll(); }, [workspacePath]);
   const renameExplorerFile = useStableCallback(async (filename: string, requested: string) => {
     const original = explorerFile(filename);
     return original ? commitWorkspaceRename(original, requested) : null;
@@ -798,6 +850,9 @@ function App() {
     onFolderRelocated: followRelocatedFolder,
     onFilesDeleted: closeDeletedFiles,
     showStatus: setFileStatus,
+    activeBoard: openBoardPath ?? "",
+    openBoard,
+    deleteBoard,
   };
 
   const createWorkspace = async () => {
@@ -1053,10 +1108,31 @@ function App() {
       else setWorkspaceDirectories((items) => items.filter((item) => item !== path));
       await refreshDirectories(setFileStatus, folderPath);
     },
+    readBoard: async (path) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) throw new Error("no workspace");
+      return invoke<string>("read_workspace_board", { request: { folderPath, filename: path } });
+    },
+    writeBoard: async (path, text) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) return;
+      await invoke("write_workspace_board", { request: { folderPath, filename: path, text } });
+      // A board that was not here before shows in the explorer.
+      if (!workspace.get().workspaceBoards.some((board) => fileKey(board) === fileKey(path))) {
+        expandDirectories(explorerParent(path));
+        await refreshDirectories(setFileStatus, folderPath);
+      }
+    },
+    removeBoard: async (path) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) return;
+      await invoke("delete_workspace_board", { request: { folderPath, filename: path } });
+      await refreshDirectories(setFileStatus, folderPath);
+    },
     report: (message) => setFileStatus(t(message)),
   });
   // The room is told the workspace as it now is; what changed in the shared folder goes to everyone.
-  useEffect(() => syncWorkspace({ path: workspacePath, files: [...tabs, ...savedFiles], directories: workspaceDirectories }), [tabs, savedFiles, workspaceDirectories, workspacePath]);
+  useEffect(() => syncWorkspace({ path: workspacePath, files: [...tabs, ...savedFiles], directories: workspaceDirectories, boards: workspaceBoards }), [tabs, savedFiles, workspaceDirectories, workspaceBoards, workspacePath]);
 
   /** Reopens the most recently closed tab, skipping any whose file has since gone. */
   const reopenClosedTab = () => {
@@ -1268,7 +1344,9 @@ function App() {
     if (rendered.cursorOffset !== undefined) pendingTemplateCursorRef.current = { tabId: activeTab.id, language: templateLanguage, offset: rendered.cursorOffset };
     // In a room the code is the room's document, and replacing it is an edit everyone gets.
     if (collab.get().shared.has(activeTab.id)) {
-      if (templateLanguage === activeTab.language) replaceSharedText(activeTab.id, rendered.code);
+      const holder = keyboardTakenBy();
+      if (holder !== null) setFileStatus(t("collabKeyboardBusy").replace("{name}", holder));
+      else if (templateLanguage === activeTab.language) replaceSharedText(activeTab.id, rendered.code);
       else setFileStatus(t("collabLocked"));
       setSettingsPage(null);
       return;
@@ -3080,6 +3158,13 @@ function App() {
         { id: "collab.show", label: t("cmdCollabShow"), keywords: "share collaborate room invite code address 공유 협업 방 초대 코드 주소", run: () => showCollabDialog("room") },
         { id: "collab.leave", label: t("cmdCollabLeave"), keywords: "share collaborate room leave close stop 공유 협업 방 나가기 닫기", run: () => { if (collab.get().local) showCollabDialog("room"); else void leaveRoom(); } },
       ]),
+      ...(DEVICES && !device ? [
+        { id: "dev.device", label: t("cmdDevDevice"), keywords: "dev device peer second window test room collaborate 개발 기기 창 테스트 공유 협업", run: () => {
+          openDevice().then((number) => setFileStatus(t("devDeviceOpened").replace("{n}", String(number))), (error) => setFileStatus(errorMessage(error)));
+        } },
+      ] : []),
+      { id: "board.new", label: t("cmdBoardNew"), keywords: "board draw drawing whiteboard sketch tablet pad 그림판 그림 화이트보드 태블릿 판서", disabled: !workspacePath, run: () => void newBoard() },
+      ...(openBoardPath ? [{ id: "board.close", label: t("cmdBoardClose"), keywords: "board close 그림판 닫기", run: () => setOpenBoardPath(null) }] : []),
       { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
       { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
       { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
@@ -3320,7 +3405,7 @@ function App() {
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="titlebar-logo"><AppMark /></span>
           <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
-          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev</span>}
+          {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev{device ? ` · ${t("devDevice").replace("{n}", String(device.number))}` : ""}</span>}
           <span className="titlebar-file" data-tauri-drag-region>
             {workspacePath ? <>
               <span className="crumb">{workspacePath.split(/[\\/]/).filter(Boolean).at(-1)}</span>
@@ -3357,7 +3442,7 @@ function App() {
         </div>}
       </div>
       <nav className="problem-tabs" aria-label="Open problems">
-        <div className="tab-strip">
+        <div className="tab-strip" onClickCapture={() => setOpenBoardPath(null)}>
           {tabs.map((tab) => (
             <div
               className={`problem-tab ${tab.id === activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`}
@@ -3555,6 +3640,8 @@ function App() {
               </div>;
             })}
           </div>}
+          <KeyboardBanner t={t} shared={!openBoardPath && sharedFiles.has(activeTabId)} />
+          {openBoardPath && <BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} onClose={() => setOpenBoardPath(null)} />}
           {tabs.length ? <>
           <Editor
             beforeMount={setupMonaco}
@@ -3595,6 +3682,9 @@ function App() {
               snippetSuggestions: "top",
               wordWrap: "off",
               tabSize: 4,
+              readOnly: keyboardBusy !== null && sharedFiles.has(activeTabId),
+              // A teammate's name, so nothing in it is read as markdown.
+              readOnlyMessage: { value: t("collabKeyboardBusy").replace("{name}", (keyboardBusy ?? "").replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&")) },
             }}
           />
           </> : <div className="welcome-screen">
@@ -3941,6 +4031,7 @@ function App() {
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">
           <CollabChip t={t} />
+          <KeyboardChip t={t} />
           <button className={`lsp-status ${companionStatus.listening ? "ready" : companionError ? "error" : "missing"}`} onClick={() => setSettingsPage("judge")} title={companionError || (companionStatus.listening ? `Competitive Companion · port ${companionStatus.port}` : "Competitive Companion")}><span />CC {companionStatus.listening ? t("companionListening") : companionError ? t("companionPortInUse") : t("companionOff")}</button>
           <button className={`lsp-status ${clangdStatus}`} onClick={() => setSettingsPage("language-server")} title={clangdInfo?.path || "Configure clangd"}><span />{language === "python" ? "python basic" : clangdStatus === "ready" ? "clangd ready" : clangdStatus === "connecting" ? "clangd…" : "clangd missing"}</button>
         </span>

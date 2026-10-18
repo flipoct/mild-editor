@@ -12,6 +12,9 @@ import { createStore } from "../store";
 import type { ProblemTab } from "../types";
 import { folderHooks, workspace } from "../workspaceStore";
 import { deriveRoom, fileJudge, fileMeta, fileTests, formatJoinCode, generateJoinCode, mergeJudge, normalizeRelayAddress, normalizeRelayAddresses, parseInvite, PEER_COLORS, peerName, pickPeerColor, safeFolderName, safePath, type FileJudge, type FileMeta, type FileTest } from "./protocol";
+import { BoardDoc } from "../board/boardDoc";
+import { EMPTY_BOARD, parseBoard, serializeBoard } from "../board/model";
+import { heardClaim, KEYBOARD_IDLE_MS, keyboardAt, nextRun, writeClaim, type Keyboard, type Writer } from "./keyboard";
 import { firstReachable, RelayProvider, type EndReason, type Link } from "./provider";
 
 /**
@@ -54,6 +57,19 @@ import { firstReachable, RelayProvider, type EndReason, type Link } from "./prov
  * Monaco's own undo stack replays ranges, and a teammate's edit in between makes them
  * wrong. While a shared file is in the editor, Ctrl+Z and Ctrl+Y go to a `Y.UndoManager`
  * of that file which tracks only what this editor typed.
+ *
+ * ── Boards ──
+ * A drawing board in the shared folder (a `.board` file, src/board) is in the document too,
+ * under `boards`: a map by random id with its `path` and its strokes (boardDoc.ts). Everyone
+ * draws on that map directly, and each member writes it to their own file a moment after it
+ * changes, so the folder holds the drawing when the room is over. Drawing is not writing
+ * code: the ICPC rule leaves boards alone.
+ *
+ * ── One keyboard ──
+ * A room opened under the ICPC rule lets one member write code at a time (keyboard.ts says
+ * how the members agree on whom without anybody deciding it). Everything this user writes
+ * into a shared file is noted as theirs; while the keyboard is somebody else's the editor
+ * is read-only for shared files (App.tsx), and undo, templates and language switches wait.
  */
 
 type Message = keyof typeof messages.en;
@@ -77,6 +93,8 @@ type CollabState = {
   local: boolean;
   /** The ids of this user's files that are in the room. A new set whenever that changes. */
   shared: ReadonlySet<string>;
+  /** The boards of this workspace that are in the room, by file key of their workspace path. */
+  boards: ReadonlySet<string>;
   /** Where the shared folder is in this user's workspace; "" is the workspace itself. */
   root: string;
   /** What the room calls the folder. */
@@ -91,12 +109,18 @@ type CollabState = {
   reach: Reach;
   code: string;
   members: Member[];
+  /** The room keeps the ICPC rule: one member writes code at a time. */
+  icpc: boolean;
+  /** This member's client id, the one `members` and `keyboard` know them by. */
+  self: number;
+  /** Who has the keyboard, under the ICPC rule. */
+  keyboard: Keyboard;
   /** Why opening or joining did not work, for the dialog: a message, and the backend's own words when it had any. */
   error: { message: Message; detail?: string } | null;
 };
 
 const NOBODY: ReadonlySet<string> = new Set();
-const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, shared: NOBODY, root: "", name: "", link: "offline", address: "", lanAddresses: [], publicAddress: "", reach: "none", code: "", members: [] };
+const IDLE: Omit<CollabState, "dialog" | "error"> = { phase: "idle", local: false, shared: NOBODY, boards: NOBODY, root: "", name: "", link: "offline", address: "", lanAddresses: [], publicAddress: "", reach: "none", code: "", members: [], icpc: false, self: 0, keyboard: { holder: null, until: 0 } };
 
 export const collab = createStore<CollabState>({ ...IDLE, dialog: null, error: null });
 
@@ -133,6 +157,10 @@ export type CollabBridge = {
   createDirectory: (path: string) => Promise<void>;
   /** Removes the folder if nothing is left in it. */
   removeDirectory: (path: string) => Promise<void>;
+  /** A board's file: read, written (made when it is not there), deleted. */
+  readBoard: (path: string) => Promise<string>;
+  writeBoard: (path: string, text: string) => Promise<void>;
+  removeBoard: (path: string) => Promise<void>;
   /** Something for the status line. */
   report: (message: Message) => void;
 };
@@ -151,6 +179,9 @@ export const useCollabBridge = (app: CollabBridge) => {
       remove: (id) => latest.current.remove(id),
       createDirectory: (path) => latest.current.createDirectory(path),
       removeDirectory: (path) => latest.current.removeDirectory(path),
+      readBoard: (path) => latest.current.readBoard(path),
+      writeBoard: (path, text) => latest.current.writeBoard(path, text),
+      removeBoard: (path) => latest.current.removeBoard(path),
       report: (message) => latest.current.report(message),
     };
     bridge = proxy;
@@ -192,6 +223,19 @@ type Entry = {
   undo: Y.UndoManager | null;
 };
 
+/** A board in the room, and in this workspace. */
+type BoardEntry = {
+  id: string;
+  /** Relative to the shared folder. */
+  path: string;
+  map: Y.Map<unknown>;
+  doc: BoardDoc;
+  /** It has been seen among the workspace's boards, so its absence now means it was deleted here. */
+  seen: boolean;
+  /** A write of the file waiting for the drawing to settle. */
+  saving: number | null;
+};
+
 type Session = {
   /** This member opened the room: it began with the folder instead of waiting for it. */
   opener: boolean;
@@ -216,22 +260,41 @@ type Session = {
   /** Files of the document that changed and have not been looked at yet. */
   dirty: Set<string>;
   scheduled: boolean;
+  boards: Y.Map<Y.Map<unknown>>;
+  boardEntries: Map<string, BoardEntry>;
+  /** Boards by file key of their workspace path. */
+  boardsByPath: Map<string, BoardEntry>;
+  /** Boards of this workspace being read to be brought into the room, by file key. */
+  boardsSharing: Set<string>;
+  /** Under the ICPC rule (see `keyboard`). */
+  icpc: boolean;
+  /** This member's writing, and everyone else's as heard, for the keyboard. */
+  writing: Writer;
+  writers: Map<number, Writer>;
+  /** When the keyboard is next looked at again: its holder's idle time running out. */
+  keyTimer: number | null;
+  /** Telling the others about this member's writing, at most every `CLAIM_EVERY`. */
+  claimTimer: number | null;
+  claimedAt: number;
 };
 
 let session: Session | null = null;
 
 /** What the app last showed of the workspace. */
-export type WorkspaceView = { path: string | null; files: ProblemTab[]; directories: string[] };
-let view: WorkspaceView = { path: null, files: [], directories: [] };
+export type WorkspaceView = { path: string | null; files: ProblemTab[]; directories: string[]; boards: string[] };
+let view: WorkspaceView = { path: null, files: [], directories: [], boards: [] };
 
 const newSession = (opener: boolean, name: string, color: string): Session => {
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
-  awareness.setLocalState({ user: { name, color } });
+  // Writing is announced from the start, so that a teammate's first keystroke is a change of it.
+  awareness.setLocalState({ user: { name, color }, write: { run: 0, n: 0 } });
   return {
     opener, local: false, ready: false, root: "", workspace: null, doc, awareness, provider: null,
     files: doc.getMap<Y.Map<unknown>>("files"), dirs: doc.getMap<boolean>("dirs"), info: doc.getMap<string>("room"),
+    boards: doc.getMap<Y.Map<unknown>>("boards"), boardEntries: new Map(), boardsByPath: new Map(), boardsSharing: new Set(),
     entries: new Map(), byLocal: new Map(), dirsSeen: new Map(), dirsBusy: new Set(), dirty: new Set(), scheduled: false,
+    icpc: false, writing: { id: doc.clientID, run: 0, n: 0, at: Number.NEGATIVE_INFINITY }, writers: new Map(), keyTimer: null, claimTimer: null, claimedAt: 0,
   };
 };
 
@@ -277,6 +340,7 @@ const cursorStyles = (members: Member[]) => {
 
 const watchMembers = (room: Session) => room.awareness.on("change", () => {
   if (session !== room) return;
+  hearWriters(room);
   const members = membersOf(room);
   // Two people with one colour: the one with the lower id keeps it. Both sides compute
   // that alike, so exactly one of them moves.
@@ -288,6 +352,86 @@ const watchMembers = (room: Session) => room.awareness.on("change", () => {
   cursorStyles(members);
   collab.set({ members });
 });
+
+// ── One keyboard ──
+
+/** The origin of a write into the document that is neither typing nor undo: a language switch, a template. */
+const WRITE = Symbol("write");
+
+/** How often this member's writing is announced at most; the last edit is always announced, at most this late. */
+const CLAIM_EVERY = 250;
+
+/** Somebody else has the keyboard, under the ICPC rule: this member may read, not write, shared code. */
+const blockedBy = (state: CollabState) => state.icpc && state.keyboard.holder !== null && state.keyboard.holder !== state.self ? state.keyboard.holder : null;
+
+/** Who has the keyboard right now, when it is not this member: the name to show, or null when this member may write. */
+export const keyboardTakenBy = () => {
+  const state = collab.get();
+  const holder = blockedBy(state);
+  return holder === null ? null : state.members.find((member) => member.id === holder)?.name ?? "?";
+};
+
+/** The keyboard as it now stands; looked at again when its holder's idle time runs out. */
+const judgeKeyboard = (room: Session) => {
+  if (room.keyTimer !== null) window.clearTimeout(room.keyTimer);
+  room.keyTimer = null;
+  if (session !== room || !room.icpc) return;
+  const now = Date.now();
+  const keyboard = keyboardAt([...room.writers.values(), room.writing], now);
+  const shown = collab.get().keyboard;
+  if (shown.holder !== keyboard.holder || shown.until !== keyboard.until) collab.set({ keyboard });
+  if (keyboard.holder !== null) room.keyTimer = window.setTimeout(() => judgeKeyboard(room), Math.max(0, keyboard.until - now) + 10);
+};
+
+/** What the others' awareness says of their writing, heard now. Who has left writes no more. */
+const hearWriters = (room: Session) => {
+  const now = Date.now();
+  const states = room.awareness.getStates();
+  for (const id of [...room.writers.keys()]) if (!states.has(id)) room.writers.delete(id);
+  states.forEach((state, id) => {
+    if (id === room.doc.clientID) return;
+    const claim = writeClaim(state);
+    if (claim) room.writers.set(id, heardClaim(room.writers.get(id), id, claim, now));
+  });
+  judgeKeyboard(room);
+};
+
+const announceWriting = (room: Session, immediately: boolean) => {
+  const send = () => {
+    room.claimTimer = null;
+    room.claimedAt = Date.now();
+    if (session === room) room.awareness.setLocalStateField("write", { run: room.writing.run, n: room.writing.n });
+  };
+  const since = Date.now() - room.claimedAt;
+  if (immediately || since >= CLAIM_EVERY) {
+    if (room.claimTimer !== null) window.clearTimeout(room.claimTimer);
+    send();
+  } else room.claimTimer ??= window.setTimeout(send, CLAIM_EVERY - since);
+};
+
+/**
+ * This member wrote into a shared file. Taking a free keyboard is a new turn, and is said at
+ * once — two members starting together should find out as soon as they can.
+ */
+const noteWriting = (room: Session) => {
+  const now = Date.now();
+  const fresh = !(now - room.writing.at < KEYBOARD_IDLE_MS);
+  room.writing = { ...room.writing, run: fresh ? nextRun([...room.writers.values(), room.writing]) : room.writing.run, n: room.writing.n + 1, at: now };
+  announceWriting(room, fresh);
+  judgeKeyboard(room);
+};
+
+const watchWriting = (room: Session) => room.doc.on("afterTransaction", (transaction: Y.Transaction) => {
+  const origin = transaction.origin;
+  if (!transaction.local || !(origin instanceof MonacoBinding || origin instanceof Y.UndoManager || origin === WRITE)) return;
+  if ([...transaction.changed.keys()].some((type) => type instanceof Y.Text)) noteWriting(room);
+});
+
+const stopKeyboard = (room: Session) => {
+  if (room.keyTimer !== null) window.clearTimeout(room.keyTimer);
+  if (room.claimTimer !== null) window.clearTimeout(room.claimTimer);
+  room.keyTimer = room.claimTimer = null;
+};
 
 // ── Paths and values ──
 
@@ -376,7 +520,7 @@ const bind = () => {
 const step = (back: boolean) => {
   const model = editor?.getModel();
   const undo = model && session?.byLocal.get(modelTab(model))?.undo;
-  if (!undo) return;
+  if (!undo || blockedBy(collab.get()) !== null) return;
   if (back) undo.undo(); else undo.redo();
 };
 
@@ -410,7 +554,7 @@ export const attachCollabEditor = (instance: Monaco.editor.IStandaloneCodeEditor
 export const replaceSharedText = (localId: string, next: string) => {
   const entry = session?.byLocal.get(localId);
   if (!entry) return false;
-  rewrite(entry, next, entry.binding);
+  if (blockedBy(collab.get()) === null) rewrite(entry, next, entry.binding ?? WRITE);
   return true;
 };
 
@@ -430,7 +574,7 @@ export const moveSharedFile = (localId: string, filename: string, next: string) 
     entry.map.set("path", path);
     entry.text.delete(0, entry.text.length);
     entry.text.insert(0, next);
-  });
+  }, WRITE);
   return true;
 };
 
@@ -712,7 +856,135 @@ export const syncWorkspace = (next: WorkspaceView) => {
     }
   });
   pullDirectories(room);
+  syncBoards(room, next.boards);
   if (membership) publishShared(room);
+};
+
+// ── Boards ──
+
+/** A board's path in the room: a path the workspace can take, ending in `.board`. */
+const boardPath = (path: unknown): string | null => {
+  const safe = safePath(path, false);
+  return safe && /\.board$/i.test(safe) ? safe : null;
+};
+
+/** How long a board is left to settle before its file is written. */
+const BOARD_SAVE_DELAY = 700;
+
+const publishBoards = (room: Session) => {
+  if (session === room) collab.set({ boards: new Set(room.boardsByPath.keys()) });
+};
+
+const writeBoard = (room: Session, entry: BoardEntry) => {
+  if (entry.saving !== null) window.clearTimeout(entry.saving);
+  entry.saving = null;
+  void bridge?.writeBoard(join(room.root, entry.path), serializeBoard(entry.doc.strokes())).catch(() => undefined);
+};
+
+const saveBoardSoon = (room: Session, entry: BoardEntry) => {
+  if (entry.saving !== null) return;
+  entry.saving = window.setTimeout(() => writeBoard(room, entry), BOARD_SAVE_DELAY);
+};
+
+const addBoardEntry = (room: Session, id: string, path: string, map: Y.Map<unknown>, seen: boolean): BoardEntry => {
+  const entry: BoardEntry = { id, path, map, doc: new BoardDoc(map), seen, saving: null };
+  room.boardEntries.set(id, entry);
+  room.boardsByPath.set(fileKey(join(room.root, path)), entry);
+  // Everyone's file follows the drawing, whoever drew.
+  entry.doc.observe(() => { if (session === room && room.ready) saveBoardSoon(room, entry); });
+  return entry;
+};
+
+const forgetBoard = (room: Session, entry: BoardEntry) => {
+  if (entry.saving !== null) window.clearTimeout(entry.saving);
+  entry.doc.destroy();
+  room.boardEntries.delete(entry.id);
+  const key = fileKey(join(room.root, entry.path));
+  if (room.boardsByPath.get(key) === entry) room.boardsByPath.delete(key);
+};
+
+/** Carries the room's boards into the workspace: a teammate's new board becomes a file here, a deleted one goes. */
+const pullBoards = (room: Session) => {
+  if (session !== room || !room.ready || !bridge) return;
+  const app = bridge;
+  let changed = false;
+  room.boards.forEach((map, id) => {
+    if (room.boardEntries.has(id) || !(map instanceof Y.Map)) return;
+    const path = boardPath(map.get("path"));
+    // Two members brought a board of one name at once: the second is not taken here.
+    if (!path || room.boardsByPath.has(fileKey(join(room.root, path)))) return;
+    const entry = addBoardEntry(room, id, path, map, false);
+    writeBoard(room, entry);
+    changed = true;
+  });
+  for (const entry of [...room.boardEntries.values()]) {
+    if (room.boards.has(entry.id)) continue;
+    forgetBoard(room, entry);
+    void app.removeBoard(join(room.root, entry.path)).catch(() => undefined);
+    changed = true;
+  }
+  if (changed) publishBoards(room);
+};
+
+const watchBoards = (room: Session) => room.boards.observe(() => pullBoards(room));
+
+/** Carries the workspace's boards into the room: a new one here is brought in, one deleted here is taken out. */
+const syncBoards = (room: Session, boards: string[]) => {
+  if (!bridge) return;
+  const app = bridge;
+  const here = new Map<string, string>();
+  for (const board of boards) {
+    const path = within(room.root, board);
+    if (path !== null && boardPath(path)) here.set(fileKey(board), path);
+  }
+  let changed = false;
+  for (const entry of [...room.boardEntries.values()]) {
+    const key = fileKey(join(room.root, entry.path));
+    if (here.has(key)) { entry.seen = true; continue; }
+    if (!entry.seen) continue;
+    // Deleted here: gone from the room.
+    room.boards.delete(entry.id);
+    forgetBoard(room, entry);
+    changed = true;
+  }
+  for (const [key, path] of here) {
+    if (room.boardsByPath.has(key) || room.boardsSharing.has(key)) continue;
+    room.boardsSharing.add(key);
+    void app.readBoard(join(room.root, path)).catch(() => EMPTY_BOARD).then((text) => {
+      room.boardsSharing.delete(key);
+      if (session !== room || !room.ready || room.boardsByPath.has(key)) return;
+      const id = crypto.randomUUID();
+      const map = new Y.Map<unknown>();
+      room.doc.transact(() => {
+        room.boards.set(id, map);
+        map.set("path", path);
+        // Made with the board: two members drawing a first stroke at once would each make their own list, and one would be lost.
+        map.set("strokes", new Y.Array());
+        const doc = new BoardDoc(map);
+        doc.replace(parseBoard(text));
+        doc.destroy();
+      });
+      addBoardEntry(room, id, path, map, true);
+      publishBoards(room);
+    });
+  }
+  if (changed) publishBoards(room);
+};
+
+/**
+ * The room's map of the board at `path` (a workspace path), for drawing on it; null when the
+ * board is not in a room, and is drawn on as a file of its own.
+ */
+export const sharedBoard = (path: string): Y.Map<unknown> | null => session?.ready ? session.boardsByPath.get(fileKey(path))?.map ?? null : null;
+
+/** Adds a new, empty board to the shared folder, named `name` or the next free name; resolves to its workspace path. */
+export const addSharedBoard = async (name = "share.board") => {
+  const room = session;
+  if (!room?.ready || !bridge) return null;
+  const taken = view.boards.map((board) => within(room.root, board)).filter((path): path is string => path !== null);
+  const path = join(room.root, mexFilename(name, taken));
+  await bridge.writeBoard(path, EMPTY_BOARD);
+  return path;
 };
 
 // ── Opening, joining, leaving ──
@@ -726,6 +998,8 @@ const ANSWER_TIMEOUT = 12_000;
 
 /** Puts `room` away. The relay inside the app goes with a room that was on it. */
 const dispose = (room: Session) => {
+  stopKeyboard(room);
+  room.boardEntries.forEach((entry) => forgetBoard(room, entry));
   room.entries.forEach((entry) => { unbind(entry); entry.undo?.destroy(); });
   room.provider?.destroy();
   room.awareness.destroy();
@@ -747,7 +1021,11 @@ const dispose = (room: Session) => {
 const finish = (room: Session, message?: Message, quiet = false) => {
   if (session !== room) return;
   if (room.ready && !quiet) room.entries.forEach((entry) => bridge?.setText(entry.localId, entry.text.toString()));
+  // A drawing that has not been written yet is, now: after this the file is the board.
+  if (room.ready && !quiet) room.boardEntries.forEach((entry) => { if (entry.saving !== null) writeBoard(room, entry); });
+  room.boardEntries.forEach((entry) => forgetBoard(room, entry));
   room.ready = false;
+  stopKeyboard(room);
   room.entries.forEach(unbind);
   session = null;
   liveKey?.set(false);
@@ -790,10 +1068,16 @@ type RelayStatus = { open: boolean; port: number | null; addresses: string[] };
 /** The folder is in place: the two directions start, and what is already on either side is carried across. */
 const goLive = (room: Session, shown: Partial<CollabState>) => {
   room.ready = true;
+  // The rule is the room's, set by whoever opened it, and the same for everyone in it.
+  room.icpc = room.info.get("icpc") === "1";
   watchDocument(room);
+  watchWriting(room);
+  watchBoards(room);
   room.files.forEach((_, id) => room.dirty.add(id));
-  collab.set({ phase: "live", local: room.local, root: room.root, link: "online", members: membersOf(room), ...shown });
+  collab.set({ phase: "live", local: room.local, root: room.root, link: "online", members: membersOf(room), icpc: room.icpc, self: room.doc.clientID, ...shown });
+  hearWriters(room);
   pull(room);
+  pullBoards(room);
   syncWorkspace(view);
 };
 
@@ -816,7 +1100,7 @@ const reachOutside = async (room: Session) => {
  * relay to open it on; null opens it on this computer, on `port`, which only the app can
  * do — and then the room lasts only as long as this member stays in it.
  */
-export const openRoom = async (request: { folder: string; name: string; relay: string | null; port: number }) => {
+export const openRoom = async (request: { folder: string; name: string; relay: string | null; port: number; icpc: boolean; board?: boolean }) => {
   if (session || collab.get().phase !== "idle") return;
   if (!view.path) { collab.set({ error: { message: "collabErrNoWorkspace" } }); return; }
   collab.set({ phase: "starting", error: null });
@@ -842,7 +1126,11 @@ export const openRoom = async (request: { folder: string; name: string; relay: s
     // What the room calls the folder: its own name, or the workspace's when all of it is shared.
     const name = safeFolderName(explorerBasename(room.root || view.path || ""));
     room.info.set("name", name);
+    if (request.icpc) room.info.set("icpc", "1");
     goLive(room, { name, address, lanAddresses, code: formatJoinCode(code), dialog: "room", reach: room.local ? "checking" : "none" });
+    // Asked for with the room: a board to plan on together, which the room then shares like any other.
+    // A folder that has a board already shares that one instead.
+    if (request.board && !view.boards.some((board) => within(room!.root, board) !== null)) await addSharedBoard().catch(() => null);
     if (room.local) void reachOutside(room);
   } catch (error) {
     failed(room, error);
