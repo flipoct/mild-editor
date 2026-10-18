@@ -69,6 +69,7 @@ function StartDialog({ t, activeFilename, joining }: { t: Translate; activeFilen
   const [invite, setInvite] = useState("");
   // Off unless asked for: a room is for writing together, and the rule is for contests that keep it.
   const [icpc, setIcpc] = useState(false);
+  const [board, setBoard] = useState(false);
   const shown = peerName(name, fallback);
   const workspaceName = workspacePath ? explorerBasename(workspacePath) : "";
   // A folder that has gone since it was picked is not one to share.
@@ -79,7 +80,7 @@ function StartDialog({ t, activeFilename, joining }: { t: Translate; activeFilen
   const start = () => {
     setStoredName(name.trim());
     if (joining) void joinRoom({ invite, name: shown, parent: known(parent) });
-    else void openRoom({ folder: known(folder), name: shown, relay: onRelay ? relay : null, port, icpc });
+    else void openRoom({ folder: known(folder), name: shown, relay: onRelay ? relay : null, port, icpc, board });
   };
   const ready = Boolean(workspacePath) && (joining ? Boolean(invite.trim()) : IS_TAURI || Boolean(relay.trim()));
 
@@ -98,6 +99,7 @@ function StartDialog({ t, activeFilename, joining }: { t: Translate; activeFilen
       </> : <>
         <Field label={t("collabFolder")}><FolderSelect value={known(folder)} onChange={setFolder} root={`${workspaceName} ${t("collabWholeWorkspace")}`} /></Field>
         <label className="collab-check"><input type="checkbox" checked={icpc} onChange={(event) => setIcpc(event.target.checked)} /><span>{t("collabIcpc")}<small>{t("collabIcpcHint")}</small></span></label>
+        <label className="collab-check"><input type="checkbox" checked={board} onChange={(event) => setBoard(event.target.checked)} /><span>{t("collabBoard")}<small>{t("collabBoardHint")}</small></span></label>
         {/* A relay remembered from last time is in use, so it is shown, not folded away. */}
         <details className="collab-advanced" open={onRelay || undefined}>
           <summary>{t("collabAdvanced")}</summary>

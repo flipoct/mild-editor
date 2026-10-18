@@ -31,6 +31,11 @@ portable-pty = "0.9"
 mild-relay = { path = "relay" }
 # Asks the router (UPnP) to let teammates outside the network reach a room opened here.
 igd-next = "0.18"
+# Drawing on a board from a tablet or phone (src/pad.rs): a small page and a WebSocket on
+# the local network. All three are already in the tree through Tauri and the relay.
+tokio = { version = "1", features = ["net", "rt", "sync", "time", "io-util", "macros"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 # Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
 # builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.

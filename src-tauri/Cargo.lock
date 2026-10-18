@@ -2312,6 +2312,7 @@ name = "mild-editor"
 version = "1.17.0"
 dependencies = [
  "cef",
+ "futures-util",
  "igd-next",
  "libc",
  "mild-relay",
@@ -2330,6 +2331,8 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
+ "tokio-tungstenite",
  "wait-timeout",
  "which",
  "windows-sys 0.59.0",

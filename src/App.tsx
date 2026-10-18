@@ -37,8 +37,11 @@ import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
-import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
-import { attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
+import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
+import { BoardView } from "./board/BoardView";
+import { EMPTY_BOARD } from "./board/model";
+import { unpairAll } from "./board/pads";
+import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
 import { CollabChip, CollabDialogs, KeyboardBanner, KeyboardChip } from "./collab/CollabUi";
 import { DEVICES, openDevice, useDevice } from "./collab/devices";
 
@@ -61,6 +64,9 @@ function App() {
   const workspacePath = useWorkspacePath();
   const savedFiles = useSavedFiles();
   const workspaceDirectories = useWorkspaceDirectories();
+  const workspaceBoards = useWorkspaceBoards();
+  // The drawing board shown in the editor's place, by workspace path (src/board).
+  const [openBoardPath, setOpenBoardPath] = useState<string | null>(null);
   const resizeRef = useRef<{
     axis: "x" | "y"; path: number[]; before: number; after: number; start: number; span: number;
     beforeWeight: number; afterWeight: number; expect: { before: string; after: string };
@@ -487,6 +493,7 @@ function App() {
   // the tab that was in use before it.
   const tabHistoryRef = useRef<string[]>([]);
   const activateTab = (tab: ProblemTab) => {
+    setOpenBoardPath(null);
     tabHistoryRef.current = [tab.id, ...tabHistoryRef.current.filter((id) => id !== tab.id)];
     clearDiagnostics();
     setActiveTabId(tab.id);
@@ -771,6 +778,40 @@ function App() {
     const file = explorerFile(filename);
     if (file) openSavedFile(file);
   });
+  const openBoard = useStableCallback((path: string) => {
+    setOpenBoardPath(path);
+    setExplorerSelection({ kind: "file", filename: path });
+  });
+  const deleteBoard = useStableCallback(async (path: string) => {
+    const folderPath = workspace.get().workspacePath;
+    if (!folderPath) return;
+    try {
+      await invoke("delete_workspace_board", { request: { folderPath, filename: path } });
+      await refreshDirectories(setFileStatus, folderPath);
+    } catch (error) { setFileStatus(errorMessage(error)); }
+  });
+  /** A new board, in the shared folder while a room is open there, and otherwise beside the selected entry. */
+  const newBoard = async () => {
+    const folderPath = workspace.get().workspacePath;
+    if (!folderPath) return;
+    try {
+      let path = collab.get().phase === "live" ? await addSharedBoard("board.board") : null;
+      if (!path) {
+        const parent = explorerRef.current?.creationParent() ?? "";
+        path = mexFilename(parent ? `${parent}/board.board` : "board.board", workspace.get().workspaceBoards);
+        await invoke("write_workspace_board", { request: { folderPath, filename: path, text: EMPTY_BOARD } });
+        expandDirectories(explorerParent(path));
+        await refreshDirectories(setFileStatus, folderPath);
+      }
+      openBoard(path);
+    } catch (error) { setFileStatus(errorMessage(error)); }
+  };
+  // A board that is gone — deleted here or by a teammate, or with its folder — is not shown any more.
+  useEffect(() => {
+    if (openBoardPath && !workspaceBoards.some((board) => fileKey(board) === fileKey(openBoardPath))) setOpenBoardPath(null);
+  }, [workspaceBoards, openBoardPath]);
+  // Another workspace: its boards are other boards, and no tablet goes on drawing on the old ones.
+  useEffect(() => { setOpenBoardPath(null); unpairAll(); }, [workspacePath]);
   const renameExplorerFile = useStableCallback(async (filename: string, requested: string) => {
     const original = explorerFile(filename);
     return original ? commitWorkspaceRename(original, requested) : null;
@@ -809,6 +850,9 @@ function App() {
     onFolderRelocated: followRelocatedFolder,
     onFilesDeleted: closeDeletedFiles,
     showStatus: setFileStatus,
+    activeBoard: openBoardPath ?? "",
+    openBoard,
+    deleteBoard,
   };
 
   const createWorkspace = async () => {
@@ -1064,10 +1108,31 @@ function App() {
       else setWorkspaceDirectories((items) => items.filter((item) => item !== path));
       await refreshDirectories(setFileStatus, folderPath);
     },
+    readBoard: async (path) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) throw new Error("no workspace");
+      return invoke<string>("read_workspace_board", { request: { folderPath, filename: path } });
+    },
+    writeBoard: async (path, text) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) return;
+      await invoke("write_workspace_board", { request: { folderPath, filename: path, text } });
+      // A board that was not here before shows in the explorer.
+      if (!workspace.get().workspaceBoards.some((board) => fileKey(board) === fileKey(path))) {
+        expandDirectories(explorerParent(path));
+        await refreshDirectories(setFileStatus, folderPath);
+      }
+    },
+    removeBoard: async (path) => {
+      const folderPath = workspace.get().workspacePath;
+      if (!folderPath) return;
+      await invoke("delete_workspace_board", { request: { folderPath, filename: path } });
+      await refreshDirectories(setFileStatus, folderPath);
+    },
     report: (message) => setFileStatus(t(message)),
   });
   // The room is told the workspace as it now is; what changed in the shared folder goes to everyone.
-  useEffect(() => syncWorkspace({ path: workspacePath, files: [...tabs, ...savedFiles], directories: workspaceDirectories }), [tabs, savedFiles, workspaceDirectories, workspacePath]);
+  useEffect(() => syncWorkspace({ path: workspacePath, files: [...tabs, ...savedFiles], directories: workspaceDirectories, boards: workspaceBoards }), [tabs, savedFiles, workspaceDirectories, workspaceBoards, workspacePath]);
 
   /** Reopens the most recently closed tab, skipping any whose file has since gone. */
   const reopenClosedTab = () => {
@@ -3098,6 +3163,8 @@ function App() {
           openDevice().then((number) => setFileStatus(t("devDeviceOpened").replace("{n}", String(number))), (error) => setFileStatus(errorMessage(error)));
         } },
       ] : []),
+      { id: "board.new", label: t("cmdBoardNew"), keywords: "board draw drawing whiteboard sketch tablet pad 그림판 그림 화이트보드 태블릿 판서", disabled: !workspacePath, run: () => void newBoard() },
+      ...(openBoardPath ? [{ id: "board.close", label: t("cmdBoardClose"), keywords: "board close 그림판 닫기", run: () => setOpenBoardPath(null) }] : []),
       { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
       { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
       { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
@@ -3375,7 +3442,7 @@ function App() {
         </div>}
       </div>
       <nav className="problem-tabs" aria-label="Open problems">
-        <div className="tab-strip">
+        <div className="tab-strip" onClickCapture={() => setOpenBoardPath(null)}>
           {tabs.map((tab) => (
             <div
               className={`problem-tab ${tab.id === activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`}
@@ -3573,7 +3640,8 @@ function App() {
               </div>;
             })}
           </div>}
-          <KeyboardBanner t={t} shared={sharedFiles.has(activeTabId)} />
+          <KeyboardBanner t={t} shared={!openBoardPath && sharedFiles.has(activeTabId)} />
+          {openBoardPath && <BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} onClose={() => setOpenBoardPath(null)} />}
           {tabs.length ? <>
           <Editor
             beforeMount={setupMonaco}

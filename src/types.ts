@@ -141,7 +141,7 @@ export type ImportCollision = { existing: ProblemTab; imported: ImportedAtCoderP
 export type ExplorerFile = Pick<ProblemTab, "id" | "title" | "filename" | "language" | "source" | "judgeStatus" | "submissionUrl" | "modifiedAt" | "order">;
 
 /** The context menu: the file (by name) or folder it was opened on, neither for the empty space, and where the pointer was. */
-export type ExplorerMenu = { file?: string; directory?: string; x: number; y: number };
+export type ExplorerMenu = { file?: string; directory?: string; board?: string; x: number; y: number };
 
 /** Explorer row the menu bar acts on. Files and folders share one slot. */
 export type ExplorerSelection = { kind: "file"; filename: string } | { kind: "directory"; path: string } | null;
@@ -158,7 +158,7 @@ export type ExplorerDropTarget =
 /** Explorer row whose name is being edited in place. */
 export type ExplorerRename = { kind: "file"; filename: string } | { kind: "directory"; path: string };
 
-export type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ExplorerFile };
+export type ExplorerTreeNode = { kind: "directory"; name: string; path: string; children: ExplorerTreeNode[] } | { kind: "file"; file: ExplorerFile } | { kind: "board"; name: string; path: string };
 
 export type WorkspaceFileResult = { filename: string; title: string; language: Language; code: string; tests: SavedTest[]; source?: ProblemSource; sourceUrl?: string; judgeStatus?: string; limits?: ProblemLimits; modifiedAt: number; order?: number; submissions?: SubmissionRecord[] };
 

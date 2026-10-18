@@ -6,6 +6,7 @@ pub mod browser;
 #[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
+mod boards;
 mod checker;
 mod clangd;
 mod collab;
@@ -17,6 +18,7 @@ mod interactive;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod memory;
+mod pad;
 mod pch;
 mod runner;
 mod sandbox;
@@ -134,6 +136,7 @@ pub fn run() {
         .manage(companion::CompanionState::default())
         .manage(collab::CollabState::default())
         .manage(devices::Devices::default())
+        .manage(pad::PadState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -206,6 +209,14 @@ pub fn run() {
             workspace::duplicate_workspace_file,
             workspace::rename_workspace_file,
             workspace::load_workspace,
+            boards::list_workspace_boards,
+            boards::read_workspace_board,
+            boards::write_workspace_board,
+            boards::delete_workspace_board,
+            pad::pad_open,
+            pad::pad_close,
+            pad::pad_send,
+            pad::pad_forward_port,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,
@@ -279,6 +290,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 devices::close_all(&app.state::<devices::Devices>());
+                pad::close(&app.state::<pad::PadState>(), None);
                 browser::shutdown(app);
             }
         });

@@ -610,7 +610,7 @@ fn workspace_source_filename(filename: &str) -> Result<(String, String), String>
     Ok((normalized, language.to_string()))
 }
 
-fn workspace_relative_filename(filename: &str) -> Result<String, String> {
+pub(crate) fn workspace_relative_filename(filename: &str) -> Result<String, String> {
     let normalized = filename.trim().replace('\\', "/");
     let path = Path::new(&normalized);
     if normalized.is_empty() || path.is_absolute() || path.components().any(|component| !matches!(component, std::path::Component::Normal(_))) {
@@ -639,7 +639,7 @@ fn workspace_relative_path(folder: &Path, path: &Path) -> Option<String> {
 
 /// Calls `visit` with the workspace-relative path of everything below `current`, and
 /// whether it is a folder. Ignored folders are neither reported nor entered.
-fn walk_workspace(folder: &Path, current: &Path, visit: &mut dyn FnMut(String, bool)) -> Result<(), String> {
+pub(crate) fn walk_workspace(folder: &Path, current: &Path, visit: &mut dyn FnMut(String, bool)) -> Result<(), String> {
     for entry in fs::read_dir(current).map_err(|error| format!("Could not read workspace folder: {error}"))?.flatten() {
         let path = entry.path();
         let is_directory = path.is_dir();
@@ -704,7 +704,7 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
     Ok(())
 }
 
-fn filename_key(filename: &str) -> String {
+pub(crate) fn filename_key(filename: &str) -> String {
     filename.trim().replace('\\', "/").to_lowercase()
 }
 

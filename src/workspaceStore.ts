@@ -22,6 +22,8 @@ type WorkspaceState = {
   workspacePath: string | null;
   savedFiles: ProblemTab[];
   workspaceDirectories: string[];
+  /** The drawing boards (`.board` files) in the workspace, by workspace path (src/board). */
+  workspaceBoards: string[];
   /** File keys of the folded folders, remembered per workspace. */
   collapsedDirectories: Set<string>;
   explorerSelection: ExplorerSelection;
@@ -45,6 +47,7 @@ export const workspace = createStore<WorkspaceState>({
   workspacePath: initialPath,
   savedFiles: demoTabs,
   workspaceDirectories: [],
+  workspaceBoards: [],
   collapsedDirectories: storedCollapsedDirectories(initialPath),
   explorerSelection: null,
 });
@@ -55,6 +58,7 @@ const setter = <K extends keyof WorkspaceState>(key: K) => (update: Update<Works
 
 export const setSavedFiles = setter("savedFiles");
 export const setWorkspaceDirectories = setter("workspaceDirectories");
+export const setWorkspaceBoards = setter("workspaceBoards");
 export const setExplorerSelection = setter("explorerSelection");
 
 /** Another folder is the workspace now; its folded folders come back with it, in the same step. */
@@ -84,6 +88,7 @@ const useWorkspace = <Part>(part: (state: WorkspaceState) => Part): Part => {
 export const useWorkspacePath = () => useWorkspace((state) => state.workspacePath);
 export const useSavedFiles = () => useWorkspace((state) => state.savedFiles);
 export const useWorkspaceDirectories = () => useWorkspace((state) => state.workspaceDirectories);
+export const useWorkspaceBoards = () => useWorkspace((state) => state.workspaceBoards);
 export const useCollapsedDirectories = () => useWorkspace((state) => state.collapsedDirectories);
 
 export const updateCollapsedDirectories = (update: (items: Set<string>) => Set<string>) => {
@@ -116,9 +121,13 @@ type Report = (message: string) => void;
 const stillOpen = (folderPath: string) => workspace.get().workspacePath === folderPath;
 
 export const refreshWorkspaceDirectories = async (folderPath = workspace.get().workspacePath) => {
-  if (!folderPath) { setWorkspaceDirectories([]); return; }
-  const directories = await invoke<string[]>("list_workspace_directories", { request: { folderPath } });
-  if (stillOpen(folderPath)) setWorkspaceDirectories(directories);
+  if (!folderPath) { workspace.set({ workspaceDirectories: [], workspaceBoards: [] }); return; }
+  // The boards are listed with the folders: whatever moves, makes or removes a folder may have moved a board with it.
+  const [directories, boards] = await Promise.all([
+    invoke<string[]>("list_workspace_directories", { request: { folderPath } }),
+    invoke<string[]>("list_workspace_boards", { request: { folderPath } }).catch(() => workspace.get().workspaceBoards),
+  ]);
+  if (stillOpen(folderPath)) workspace.set({ workspaceDirectories: directories, workspaceBoards: boards });
 };
 
 /** The same, for the callers that carry on whether it worked or not: a failure only goes to the status line. */

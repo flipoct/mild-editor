@@ -72,8 +72,10 @@ export const sortExplorerFiles = (files: ExplorerFile[], sort: ExplorerSort) => 
   });
 };
 
-/** The folders of the workspace with `files` (already sorted) hung in them: folders first and by name, files in the order given. */
-export const buildExplorerTree = (files: ExplorerFile[], workspaceDirectories: string[]): ExplorerTreeNode[] => {
+const KIND_ORDER = { directory: 0, file: 1, board: 2 } as const;
+
+/** The folders of the workspace with `files` (already sorted) hung in them: folders first and by name, files in the order given, then the drawing boards by name. */
+export const buildExplorerTree = (files: ExplorerFile[], workspaceDirectories: string[], boards: string[] = []): ExplorerTreeNode[] => {
   type DirectoryNode = Extract<ExplorerTreeNode, { kind: "directory" }>;
   const root: DirectoryNode = { kind: "directory", name: "", path: "", children: [] };
   const directories = new Map<string, DirectoryNode>([["", root]]);
@@ -95,12 +97,13 @@ export const buildExplorerTree = (files: ExplorerFile[], workspaceDirectories: s
   };
   workspaceDirectories.forEach(ensureDirectory);
   files.forEach((file) => ensureDirectory(explorerParent(file.filename)).children.push({ kind: "file", file }));
+  boards.forEach((path) => ensureDirectory(explorerParent(path)).children.push({ kind: "board", path, name: path.split("/").pop() || path }));
   const fileOrder = new Map(files.map((file, index) => [fileKey(file.filename), index]));
   const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   const sortChildren = (directory: DirectoryNode) => {
     directory.children.sort((left, right) => {
-      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
-      if (left.kind === "directory" && right.kind === "directory") return natural.compare(left.name, right.name);
+      if (left.kind !== right.kind) return KIND_ORDER[left.kind] - KIND_ORDER[right.kind];
+      if (left.kind !== "file" && right.kind !== "file") return natural.compare(left.name, right.name);
       if (left.kind === "file" && right.kind === "file") return (fileOrder.get(fileKey(left.file.filename)) || 0) - (fileOrder.get(fileKey(right.file.filename)) || 0);
       return 0;
     });
