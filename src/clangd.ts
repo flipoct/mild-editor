@@ -5,16 +5,56 @@ import type * as Monaco from "monaco-editor";
 type MonacoApi = typeof import("monaco-editor");
 type JsonObject = Record<string, any>;
 
-export type ClangdInfo = { available: boolean; path?: string; version?: string };
+export type ClangdInfo = { available: boolean; path?: string; version?: string; generation?: number };
+export type ClangdLiveStatus = "ready" | "connecting" | "error";
 
-const fileUri = (path: string) => `file:///${path.replace(/\\/g, "/").replace(/^\//, "")}`;
+/**
+ * A path as clangd spells it in a URI: percent-encoded UTF-8 except the characters it leaves
+ * as they are (clang-tools-extra/clangd/URI.cpp, `shouldEscape`). A folder with a space or
+ * Korean in its name came back from clangd encoded while the editor had sent it raw, and the
+ * diagnostics for it were dropped as being about some other file.
+ */
+export const fileUri = (path: string) => {
+  const clean = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  const encoded = [...new TextEncoder().encode(clean)]
+    .map((byte) => /[A-Za-z0-9\-_.~/:]/.test(String.fromCharCode(byte)) && byte < 0x80 ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`)
+    .join("");
+  return `file:///${encoded}`;
+};
+
+/** Two URIs for the same file: clangd may encode differently or change the drive letter's case. */
+export const sameFileUri = (left: string, right: string) => {
+  const plain = (uri: string) => {
+    let path = uri;
+    try { path = decodeURIComponent(uri); } catch { /* compare as given */ }
+    return path.replace(/^file:\/\/\/?/i, "").replace(/^([a-z]):/i, (_, drive: string) => `${drive.toLowerCase()}:`);
+  };
+  return plain(left) === plain(right);
+};
+
+/** How long a request may go unanswered before the feature asking gives up on it. */
+const REQUEST_TIMEOUT_MS = 10_000;
+/** Starting takes longer: clangd parses the standard library before it answers. */
+const INITIALIZE_TIMEOUT_MS = 60_000;
+/** A clangd that keeps dying is left down after this many restarts in `RESTART_WINDOW_MS`. */
+const MAX_RESTARTS = 3;
+const RESTART_WINDOW_MS = 60_000;
 
 export class ClangdClient {
   private monaco: MonacoApi;
   private editor: Monaco.editor.IStandaloneCodeEditor;
   private nextId = 1;
-  private pending = new Map<number, { resolve: (value: any) => void; reject: (reason: any) => void }>();
+  private pending = new Map<number, { resolve: (value: any) => void; reject: (reason: any) => void; timer: number }>();
   private unlisten?: UnlistenFn;
+  private unlistenExit?: UnlistenFn;
+  /** Which start of clangd this client talks to; an exit of an older one is not news. */
+  private generation = -1;
+  private disposed = false;
+  private restarts: number[] = [];
+  private launchArgs?: { configuredPath: string | null; workspacePath: string | null; atcoderLibraryPath: string | null };
+  private document = { workspacePath: null as string | null, filename: "" };
+  /** Told when clangd goes down and comes back by itself, for the status bar. */
+  onStatus?: (status: ClangdLiveStatus) => void;
   private disposables: Monaco.IDisposable[] = [];
   private modelDisposable?: Monaco.IDisposable;
   private uri = "";
@@ -29,7 +69,20 @@ export class ClangdClient {
 
   async start(configuredPath: string | null, workspacePath: string | null, filename: string, code: string, atcoderLibraryPath: string | null = null): Promise<ClangdInfo> {
     this.unlisten = await listen<string>("clangd-message", ({ payload }) => this.handleMessage(payload));
-    const info = await invoke<ClangdInfo>("start_clangd", { configuredPath: configuredPath || null, workspacePath, atcoderLibraryPath });
+    this.unlistenExit = await listen<number>("clangd-exit", ({ payload }) => this.handleExit(payload));
+    this.launchArgs = { configuredPath: configuredPath || null, workspacePath, atcoderLibraryPath };
+    const info = await this.launch();
+    this.registerProviders();
+    await this.setDocument(workspacePath, filename, code);
+    return info;
+  }
+
+  /** Starts clangd and introduces the editor to it; the providers and the document are the caller's. */
+  private async launch(): Promise<ClangdInfo> {
+    const { configuredPath, workspacePath, atcoderLibraryPath } = this.launchArgs!;
+    this.ready = false;
+    const info = await invoke<ClangdInfo>("start_clangd", { configuredPath, workspacePath, atcoderLibraryPath });
+    this.generation = info.generation ?? -1;
     const rootUri = workspacePath ? fileUri(workspacePath) : null;
     await this.request("initialize", {
       processId: null,
@@ -44,18 +97,50 @@ export class ClangdClient {
       },
       initializationOptions: { fallbackFlags: ["-std=gnu++20", "-xc++", ...(atcoderLibraryPath ? [`-I${atcoderLibraryPath}`] : [])] },
       workspaceFolders: rootUri ? [{ uri: rootUri, name: workspacePath?.split(/[\\/]/).at(-1) || "contest" }] : null,
-    });
+    }, INITIALIZE_TIMEOUT_MS);
     await this.notify("initialized", {});
     this.ready = true;
-    this.registerProviders();
-    await this.setDocument(workspacePath, filename, code);
     return info;
   }
 
+  /**
+   * clangd ended. One this client stopped or replaced is expected; any other exit (a crash on
+   * an odd header, the process killed) used to leave completion waiting on answers that would
+   * never come. Now what was asked is answered with an error, and clangd is started again
+   * with the open document — unless it keeps dying, which a restart will not fix.
+   */
+  private handleExit(generation: number) {
+    if (generation !== this.generation || this.disposed) return;
+    this.ready = false;
+    this.uri = "";
+    this.rejectPending(new Error("clangd stopped"));
+    const now = Date.now();
+    this.restarts = this.restarts.filter((at) => now - at < RESTART_WINDOW_MS);
+    if (this.restarts.length >= MAX_RESTARTS) { this.onStatus?.("error"); return; }
+    this.restarts.push(now);
+    this.onStatus?.("connecting");
+    window.setTimeout(() => {
+      if (this.disposed) return;
+      void this.launch()
+        .then(() => this.setDocument(this.document.workspacePath, this.document.filename, this.editor.getValue()))
+        .then(() => this.onStatus?.("ready"))
+        .catch(() => this.onStatus?.("error"));
+    }, 1000);
+  }
+
+  private rejectPending(reason: Error) {
+    for (const [id, pending] of this.pending) {
+      window.clearTimeout(pending.timer);
+      pending.reject(reason);
+      this.pending.delete(id);
+    }
+  }
+
   async setDocument(workspacePath: string | null, filename: string, code: string) {
+    this.document = { workspacePath, filename };
     if (!this.ready) return;
     if (this.uri) await this.notify("textDocument/didClose", { textDocument: { uri: this.uri } });
-    this.uri = workspacePath ? fileUri(`${workspacePath}/${filename}`) : `file:///mild-editor/${filename}`;
+    this.uri = fileUri(workspacePath ? `${workspacePath}/${filename}` : `mild-editor/${filename}`);
     this.version = 1;
     await this.notify("textDocument/didOpen", { textDocument: { uri: this.uri, languageId: "cpp", version: this.version, text: code } });
     this.modelDisposable?.dispose();
@@ -117,7 +202,7 @@ export class ClangdClient {
       message.error ? pending.reject(new Error(message.error.message)) : pending.resolve(message.result);
       return;
     }
-    if (message.method === "textDocument/publishDiagnostics" && message.params?.uri === this.uri) {
+    if (message.method === "textDocument/publishDiagnostics" && this.uri && sameFileUri(String(message.params?.uri || ""), this.uri)) {
       const model = this.editor.getModel();
       if (!model) return;
       this.monaco.editor.setModelMarkers(model, "clangd", (message.params.diagnostics || []).filter((diagnostic: JsonObject) => !String(diagnostic.message || "").startsWith("In included file:")).map((diagnostic: JsonObject) => ({
@@ -136,11 +221,22 @@ export class ClangdClient {
     return [kinds.Text, kinds.Method, kinds.Function, kinds.Constructor, kinds.Field, kinds.Variable, kinds.Class, kinds.Interface, kinds.Module, kinds.Property, kinds.Unit, kinds.Value, kinds.Enum, kinds.Keyword, kinds.Snippet, kinds.Color, kinds.File, kinds.Reference, kinds.Folder, kinds.EnumMember, kinds.Constant, kinds.Struct, kinds.Event, kinds.Operator, kinds.TypeParameter][Math.max(0, (kind || 1) - 1)] || kinds.Text;
   }
 
-  private request(method: string, params: JsonObject): Promise<any> {
+  private request(method: string, params: JsonObject, timeoutMs = REQUEST_TIMEOUT_MS): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      void this.send({ jsonrpc: "2.0", id, method, params }).catch(reject);
+      const timer = window.setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`clangd did not answer ${method}`));
+        // The request may still be running in clangd: ask it to stop wasting time on it.
+        void this.notify("$/cancelRequest", { id }).catch(() => {});
+      }, timeoutMs);
+      const settle = <T,>(done: (value: T) => void) => (value: T) => { window.clearTimeout(timer); done(value); };
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject), timer });
+      void this.send({ jsonrpc: "2.0", id, method, params }).catch((error) => {
+        this.pending.delete(id);
+        window.clearTimeout(timer);
+        reject(error);
+      });
     });
   }
 
@@ -149,9 +245,12 @@ export class ClangdClient {
 
   async dispose() {
     this.ready = false;
+    this.disposed = true;
+    this.rejectPending(new Error("clangd stopped"));
     this.modelDisposable?.dispose();
     this.disposables.forEach((disposable) => disposable.dispose());
     this.unlisten?.();
+    this.unlistenExit?.();
     await invoke("stop_clangd").catch(() => {});
   }
 }

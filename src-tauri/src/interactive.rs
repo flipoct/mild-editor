@@ -13,6 +13,7 @@ use std::{
 use tauri::{Emitter, Manager};
 
 use crate::runner::{prepare_program, BuildOptions, PreparedProgram, MAX_CODE};
+use crate::sandbox;
 use crate::tools::{tool_search_path, CommandExtHidden};
 
 const MAX_STREAM_OUTPUT: usize = 1_000_000;
@@ -59,7 +60,11 @@ pub struct Session {
     child: Arc<Mutex<std::process::Child>>,
     stdin: Option<std::process::ChildStdin>,
     stopped: Arc<Mutex<bool>>,
-    /// Keeps the compiled binary alive for as long as the process runs.
+    /// Holds the program and anything it starts, so stopping it stops all of them.
+    jail: Option<sandbox::Sandbox>,
+    /// Keeps the compiled binary alive for as long as the process runs. Declared last, so it
+    /// is removed only after the program has been stopped and waited for: Windows will not
+    /// delete an executable that is still running.
     _directory: tempfile::TempDir,
 }
 
@@ -70,8 +75,12 @@ fn kill(session: &Session) {
     if let Ok(mut flag) = session.stopped.lock() {
         *flag = true;
     }
+    if let Some(jail) = &session.jail {
+        jail.kill();
+    }
     if let Ok(mut child) = session.child.lock() {
         let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -172,7 +181,9 @@ fn spawn_session(app: tauri::AppHandle, request: StartInteractiveRequest) -> Res
     };
 
     let started = Instant::now();
-    let mut child = Command::new(&command)
+    let jail = sandbox::Sandbox::new(None);
+    let mut process = Command::new(&command);
+    process
         .args(&args)
         .current_dir(cwd)
         // The test runner widens PATH the same way; without it an interactive run
@@ -182,9 +193,10 @@ fn spawn_session(app: tauri::AppHandle, request: StartInteractiveRequest) -> Res
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .creation_flags(0x08000000);
+    sandbox::configure(&mut process);
+    let mut child = process.spawn().map_err(|error| error.to_string())?;
+    let jail = jail.filter(|jail| jail.attach(&child));
 
     let stdin = child.stdin.take();
     if let Some(stdout) = child.stdout.take() {
@@ -201,6 +213,7 @@ fn spawn_session(app: tauri::AppHandle, request: StartInteractiveRequest) -> Res
         child: child.clone(),
         stdin,
         stopped: stopped.clone(),
+        jail,
         _directory: directory,
     };
 

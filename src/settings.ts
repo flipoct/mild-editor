@@ -1,6 +1,6 @@
 import packageInfo from "../package.json";
 import { IS_TAURI, isMac } from "./platform";
-import { columnsFromOrder, completeLayout, type PanelLayout } from "./panelLayout";
+import { completeGrid, gridFromColumns, type Grid } from "./gridLayout";
 import type { CodeSnippet, CompileProfile, EditorFontOption, PanelId, PanelWeights, UiTheme, WallpaperLayout } from "./types";
 
 export const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
@@ -11,27 +11,37 @@ export const DEFAULT_WEIGHT: Record<PanelId, number> = { tests: 1, editor: 3.2, 
 /** Width of the strip a divider can be grabbed by, in CSS pixels (see .panel-resizer). */
 export const PANEL_DIVIDER_HIT = 10;
 
-export const storedPanelLayout = (): PanelLayout<PanelId> => {
+/** How close to the workspace's border a dragged panel docks along that whole side, in CSS pixels. */
+export const PANEL_DOCK_BAND = 18;
+
+/** Every panel side by side, in the order of PANEL_IDS, at its default width. */
+export const defaultPanelGrid = (order: PanelId[] = PANEL_IDS): Grid<PanelId> =>
+  completeGrid(gridFromColumns(order.map((id) => [id]), (id) => DEFAULT_WEIGHT[id]), PANEL_IDS)!;
+
+const isPanelId = (id: unknown): id is PanelId => PANEL_IDS.includes(id as PanelId);
+
+export const storedPanelGrid = (stored: string | null): Grid<PanelId> => {
   // VITE_PANEL_ORDER=problem,tests,editor,explorer (development only) overrides the layout.
-  const forced = String(import.meta.env.VITE_PANEL_ORDER || "").split(",").filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId));
-  if (forced.length) return completeLayout(columnsFromOrder(forced), PANEL_IDS);
+  const forced = String(import.meta.env.VITE_PANEL_ORDER || "").split(",").filter(isPanelId);
+  if (forced.length) return defaultPanelGrid(forced);
   try {
-    const saved = JSON.parse(localStorage.getItem("mild-panel-layout") || "null") as unknown;
-    if (Array.isArray(saved)) {
-      const columns = saved
-        .filter(Array.isArray)
-        .map((column) => (column as unknown[]).filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)));
-      return completeLayout(columns, PANEL_IDS);
-    }
-    // Layouts saved before panels could be stacked were a single left-to-right order.
+    const saved = completeGrid(JSON.parse(stored || "null"), PANEL_IDS);
+    if (saved) return saved;
+    // Before the grid, a layout was a row of columns with weights kept per panel, and before
+    // that a single left-to-right order.
+    const weights = storedPanelWeights();
+    const weightOf = (id: PanelId, axis: "width" | "height") => weights[id]?.[axis] ?? (axis === "width" ? DEFAULT_WEIGHT[id] : 1);
+    const columns = JSON.parse(localStorage.getItem("mild-panel-layout") || "null") as unknown;
     const legacy = JSON.parse(localStorage.getItem("mild-panel-order") || "[]") as unknown;
-    const order = Array.isArray(legacy) ? legacy.filter((id): id is PanelId => PANEL_IDS.includes(id as PanelId)) : [];
-    return completeLayout(columnsFromOrder(order), PANEL_IDS);
-  } catch { return columnsFromOrder(PANEL_IDS); }
+    const placed = Array.isArray(columns)
+      ? columns.filter(Array.isArray).map((column) => (column as unknown[]).filter(isPanelId))
+      : (Array.isArray(legacy) ? legacy.filter(isPanelId) : []).map((id) => [id]);
+    return completeGrid(gridFromColumns(placed, weightOf), PANEL_IDS) ?? defaultPanelGrid();
+  } catch { return defaultPanelGrid(); }
 };
 
-
-export const storedPanelWeights = (): PanelWeights => {
+/** Panel weights as they were kept before the grid held its own sizes; read only to carry them over. */
+const storedPanelWeights = (): PanelWeights => {
   try {
     const saved = JSON.parse(localStorage.getItem("mild-panel-weights") || "null");
     if (saved && typeof saved === "object") return saved as PanelWeights;

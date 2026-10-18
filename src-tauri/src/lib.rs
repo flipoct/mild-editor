@@ -18,6 +18,7 @@ mod macos_menu;
 mod memory;
 mod pch;
 mod runner;
+mod sandbox;
 mod stress;
 mod schedule;
 mod submissions;

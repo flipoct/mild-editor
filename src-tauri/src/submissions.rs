@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fs, path::Path, sync::Mutex, time::Duration};
 
 use crate::import::{doj_wants_login, is_cloudflare_challenge, session_get, SessionGet};
-use crate::workspace::{workspace_metadata_path, write_workspace_metadata, SubmissionRecord, WorkspaceMetadata};
+use crate::workspace::{metadata_lock, workspace_metadata_path, write_workspace_metadata, SubmissionRecord, WorkspaceMetadata};
 use crate::HTTP_CONNECT_TIMEOUT;
 
 #[derive(Deserialize)]
@@ -376,9 +376,11 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
+        let _metadata = metadata_lock();
         let metadata_path = workspace_metadata_path(&folder);
         if let Ok(json) = fs::read_to_string(&metadata_path) {
             if let Ok(mut metadata) = serde_json::from_str::<WorkspaceMetadata>(&json) {
+                let before = serde_json::to_string(&metadata).unwrap_or_default();
                 for problem in &mut metadata.problems {
                     let inferred_url = if problem.source.as_deref() == Some("doj") {
                         Path::new(&problem.filename)
@@ -401,7 +403,10 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                         }
                     }
                 }
-                write_workspace_metadata(&metadata_path, &metadata, "save submission statuses")?;
+                // Every twenty seconds otherwise, verdict or not: only a change is written.
+                if serde_json::to_string(&metadata).unwrap_or_default() != before {
+                    write_workspace_metadata(&metadata_path, &metadata, "save submission statuses")?;
+                }
             }
         }
     }

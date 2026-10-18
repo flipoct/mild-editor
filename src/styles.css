@@ -176,13 +176,11 @@ body.panel-resizing-y { cursor: row-resize !important; user-select: none; }
 body.panel-dragging { cursor: grabbing !important; user-select: none; }
 /* Shown only while a chip is being dragged; the bar marks the edge it would land against. */
 .panel-drop-zone { position: absolute; z-index: 40; pointer-events: none; outline: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: -1px; }
-.panel-drop-edge { position: absolute; background: color-mix(in srgb, var(--accent) 34%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
-.panel-drop-edge.edge-left, .panel-drop-edge.edge-right { top: 0; bottom: 0; width: 34%; }
-.panel-drop-edge.edge-left { left: 0; }
-.panel-drop-edge.edge-right { right: 0; }
-.panel-drop-edge.edge-top, .panel-drop-edge.edge-bottom { left: 0; right: 0; height: 34%; }
-.panel-drop-edge.edge-top { top: 0; }
-.panel-drop-edge.edge-bottom { bottom: 0; }
+/* The box a drop would fill, as VS Code's editor drop overlay draws it: it slides between
+   halves, the whole panel and the workspace border as the pointer moves. */
+.panel-drop-preview { position: absolute; z-index: 41; pointer-events: none; background: color-mix(in srgb, var(--accent) 30%, transparent); box-shadow: inset 0 0 0 1px var(--accent); transition: left 70ms ease-out, top 70ms ease-out, width 70ms ease-out, height 70ms ease-out; }
+.panel-drop-preview.drop-swap { background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 2px var(--accent); }
+.panel-drop-preview.drop-dock { background: color-mix(in srgb, var(--accent) 38%, transparent); }
 .panel-chip.dragging { opacity: .55; }
 /* A grip in every panel's top-left corner. It stays out of the way until the pointer is on
    the panel, because the editor has no header of its own to put it in. */
