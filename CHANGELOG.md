@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.18.0
+
+- **ICPC rule: one keyboard**, when opening a shared room. Everyone can read every file, but only one member writes code at a time, as at an ICPC contest. The keyboard is free again once its holder has typed nothing for 5 seconds; while a teammate has it, shared files are read-only, a banner over the editor names who is writing and counts down, and the status bar shows whose keyboard it is.
+- **Drawing boards.** A `.board` file (**New drawing board** in the command palette) opens as a canvas in the editor's place: a pen in six colours and three widths, an eraser that takes whole strokes, moving, zooming and showing everything. In a shared room, every board in the shared folder is drawn on by everyone at once; drawing is not writing code, so the ICPC rule leaves it alone.
+  - **Draw from a tablet or phone**, with nothing to install: the board shows a QR code, and a tablet on the same Wi-Fi opens a page served by this computer. From another network the router is asked to let it in (UPnP), or a VPN such as Tailscale works.
+- **Panels on a grid, as in VS Code.** Drag a panel by its grip: onto the outer third of another to split that panel on that side, onto its middle to swap the two, or against the border of the workspace to run it along that whole side. A hidden panel comes back where it was, double-clicking a divider evens out its neighbours, and Escape calls a drag off. The layout you have is carried over.
+- **Judging closer to the judges.**
+  - A space at the end of a line, as `cout << x << ' '` leaves, is no longer a WA.
+  - Tests of several megabytes run, and printing a lot is no longer a runtime error (input up to 32 MB, output up to 16 MB).
+  - On Windows a memory limit is a hard cap and going past it is an MLE at the limit; time is CPU time, so a virus scan of the freshly built program is no TLE (times shown are lower for it); and stopping a run stops everything it started.
+  - C++ programs get a 256 MB stack, as on Codeforces and AtCoder, so deep recursion they accept runs here too.
+- **Your work is kept safer.**
+  - `.mild-editor.json` is written whole or not at all, and a damaged one is kept as a backup instead of being replaced by an empty one.
+  - A file gone for a moment (a `git checkout`, an editor that saves by replacing) keeps its tests when it comes back.
+  - A file changed in another editor is no longer overwritten by its untouched tab here; the tab follows the file.
+  - A source file that is not UTF-8 no longer stops the workspace from loading.
+- clangd shows its diagnostics in folders with a space or Korean in the name, starts again if it stops, and keeps the `.clangd` it wrote up to date (a `.clangd` of your own is left alone).
+- The problem page stays over its panel when the panel moves without changing size, and the precompiled header is tried again after a failed build instead of being turned off for good.
+
 ## 1.17.0
 
 - **Shared rooms: work on a folder together** (**Share** in the status bar). Open a room on a folder of your workspace and send a teammate the invitation — one line. They get a copy of the folder in their own workspace, and from then on it is the same for everyone in the room: what is typed appears as it is typed, with each other's cursors, and new files, renames, moves, deletions, empty folders, test cases and a problem's source go both ways. Everyone saves their own copy; when the room ends, everyone simply has the folder.

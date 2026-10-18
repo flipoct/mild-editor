@@ -57,17 +57,16 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.17.0
+            ## What's changed in v1.18.0
 
-            - **Shared rooms: work on a folder together** (**Share** in the status bar). Open a room on a folder and send a teammate the one-line invitation: they get a copy of the folder, and typing, new files, renames, deletions and test cases go both ways from then on, with each other's cursors in the editor. The room runs on the opener's computer and what is sent is encrypted with the invitation.
-            - Teammates on another network can join where the router allows it (UPnP); the room says whether it does. Otherwise a shared VPN such as Tailscale works.
-            - **AC for one is AC for all** in a room, and a shared file's language can be switched for everyone.
-            - Old verdicts are no longer announced as news after start-up.
-            - Switching a file between C++ and Python no longer shows the template's placeholders as code.
+            - **ICPC rule: one keyboard** for a shared room: everyone reads every file, one member writes code at a time, and the keyboard is free again after 5 seconds without typing.
+            - **Drawing boards** (`.board` files), drawn on by the whole room at once — and from a tablet or phone by scanning the board's QR code, with nothing to install.
+            - **Panels on a grid, as in VS Code**: split any panel on any side, swap two, or dock one along a whole side of the window.
+            - **Judging closer to the judges**: a space at the end of a line is no longer a WA, tests of several megabytes run, C++ gets a 256 MB stack, and on Windows memory is a hard cap (MLE) and time is CPU time.
+            - **Your work is kept safer**: the workspace file is written whole, a damaged one is backed up, tests survive a file vanishing for a moment, and a file changed in another editor is no longer overwritten.
+            - clangd works in folders with Korean or spaces in the name and restarts if it stops.
 
-            Shared rooms are new: try them on a folder you can afford to lose first, since a deletion is a deletion for everyone in the room.
-
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.17.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.18.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
