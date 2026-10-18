@@ -9,6 +9,7 @@
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "test": "tsc -b && node --experimental-strip-types --no-warnings src/fileNaming.check.ts && node --experimental-strip-types --no-warnings src/submit.check.ts && node --experimental-strip-types --no-warnings src/workbench.check.ts && node --experimental-strip-types --no-warnings src/gridLayout.check.ts && node --experimental-strip-types --no-warnings src/judge.check.ts && node --experimental-strip-types --no-warnings src/clangd.check.ts && node --experimental-strip-types --no-warnings src/collab/protocol.check.ts",
+    "clean:build": "node scripts/clean-build.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
