@@ -326,3 +326,107 @@ mod tests {
         assert_eq!(unique.len(), addresses.len());
     }
 }
+
+// ── Reaching a room from macOS ──
+//
+// WebKit, the webview on macOS, will not let the app's page open a plain `ws://` socket to
+// another computer: the page is a secure context (`tauri://localhost`), and an unencrypted
+// socket from it is mixed content, allowed to loopback only. WebView2 on Windows lets it
+// through, which is why joining worked there and not from a Mac — over the same network, the
+// same Tailscale. So on macOS the page connects to a port on 127.0.0.1 instead, and this side
+// passes the bytes to the room and back unchanged. What goes over it is already encrypted
+// with the invitation, so nothing is lost by the detour.
+
+/// Loopback ports by the room address they lead to, kept for the app's lifetime so that a
+/// reconnecting room finds its way again.
+static TUNNELS: Mutex<Option<std::collections::HashMap<String, u16>>> = Mutex::new(None);
+/// How long reaching the room may take before the page's socket is closed.
+const TUNNEL_CONNECT: Duration = Duration::from_secs(8);
+
+/// A loopback port that leads to `address` (`host:port`), opened on first use.
+#[tauri::command]
+pub(crate) fn collab_tunnel(address: String) -> Result<u16, String> {
+    let address = address.trim().trim_start_matches("ws://").trim_end_matches('/').to_string();
+    if address.to_socket_addrs().map(|mut found| found.next().is_none()).unwrap_or(true) {
+        return Err(format!("Not an address: {address}"));
+    }
+    let mut tunnels = TUNNELS.lock().map_err(|_| "Tunnels are unavailable.".to_string())?;
+    let tunnels = tunnels.get_or_insert_with(Default::default);
+    if let Some(port) = tunnels.get(&address) {
+        return Ok(*port);
+    }
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| error.to_string())?;
+    let port = listener.local_addr().map_err(|error| error.to_string())?.port();
+    let target = address.clone();
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(page) = incoming else { continue };
+            let target = target.clone();
+            std::thread::spawn(move || relay_through(page, &target));
+        }
+    });
+    tunnels.insert(address, port);
+    Ok(port)
+}
+
+/// Joins one socket from the page to a fresh connection to the room, both ways, until either
+/// side ends. A room that cannot be reached closes the page's socket, which is how the page
+/// learns it.
+fn relay_through(page: std::net::TcpStream, target: &str) {
+    let room = target.to_socket_addrs().ok().into_iter().flatten()
+        .find_map(|address| std::net::TcpStream::connect_timeout(&address, TUNNEL_CONNECT).ok());
+    let Some(room) = room else { return };
+    let _ = page.set_nodelay(true);
+    let _ = room.set_nodelay(true);
+    let (Ok(page_back), Ok(room_back)) = (page.try_clone(), room.try_clone()) else { return };
+    let pipe = |mut from: std::net::TcpStream, mut to: std::net::TcpStream| {
+        let _ = std::io::copy(&mut from, &mut to);
+        let _ = to.shutdown(std::net::Shutdown::Both);
+        let _ = from.shutdown(std::net::Shutdown::Both);
+    };
+    let upward = std::thread::spawn(move || pipe(page, room));
+    pipe(room_back, page_back);
+    let _ = upward.join();
+}
+
+#[cfg(test)]
+mod tunnel_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn a_tunnel_carries_bytes_both_ways_and_is_reused() {
+        let room = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("room");
+        let address = format!("127.0.0.1:{}", room.local_addr().expect("addr").port());
+        let echo = std::thread::spawn(move || {
+            let (mut socket, _) = room.accept().expect("accept");
+            let mut buffer = [0u8; 5];
+            socket.read_exact(&mut buffer).expect("read");
+            socket.write_all(&buffer.map(|byte| byte.to_ascii_uppercase())).expect("write");
+        });
+        let port = collab_tunnel(format!("ws://{address}/")).expect("tunnel");
+        assert_eq!(collab_tunnel(address.clone()).expect("again"), port, "the same address reuses its port");
+        let mut page = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect");
+        page.write_all(b"hello").expect("send");
+        let mut reply = [0u8; 5];
+        page.read_exact(&mut reply).expect("reply");
+        assert_eq!(&reply, b"HELLO");
+        echo.join().expect("echo");
+    }
+
+    #[test]
+    fn a_room_out_of_reach_closes_the_pages_socket() {
+        // A port nothing listens on: taken and released again.
+        let free = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind").local_addr().expect("addr").port();
+        let port = collab_tunnel(format!("127.0.0.1:{free}")).expect("tunnel");
+        let mut page = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect");
+        page.set_read_timeout(Some(Duration::from_secs(10))).expect("timeout");
+        let mut buffer = [0u8; 1];
+        assert_eq!(page.read(&mut buffer).unwrap_or(0), 0, "closed rather than left hanging");
+    }
+
+    #[test]
+    fn not_an_address_is_refused() {
+        assert!(collab_tunnel("no such host:abc".into()).is_err());
+    }
+}

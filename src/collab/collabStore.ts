@@ -7,7 +7,7 @@ import * as Y from "yjs";
 import { explorerBasename, fileKey, mexFilename, normalizedExplorerPath } from "../fileNaming";
 import { useLatest } from "../hooks";
 import type { messages } from "../i18n";
-import { errorMessage } from "../platform";
+import { errorMessage, IS_TAURI, isMac } from "../platform";
 import { createStore } from "../store";
 import type { ProblemTab } from "../types";
 import { folderHooks, workspace } from "../workspaceStore";
@@ -1138,6 +1138,26 @@ export const openRoom = async (request: { folder: string; name: string; relay: s
 };
 
 /**
+ * The addresses the page itself can open, each with the room address it stands for. On macOS
+ * WebKit will not let the page open a plain `ws://` socket to another computer (mixed content
+ * from a secure page), so each one goes through a loopback port the app passes on to the room
+ * (`collab_tunnel` in collab.rs); elsewhere they are used as they are. An address the tunnel
+ * cannot take is left out, as an unreachable one would be.
+ */
+const openableAddresses = async (addresses: string[]): Promise<Map<string, string>> => {
+  if (!isMac || !IS_TAURI) return new Map(addresses.map((address) => [address, address]));
+  const pairs = await Promise.all(addresses.map(async (address): Promise<readonly [string, string] | null> => {
+    try {
+      const port = await invoke<number>("collab_tunnel", { address });
+      return [`ws://127.0.0.1:${port}`, address] as const;
+    } catch {
+      return null;
+    }
+  }));
+  return new Map(pairs.filter((pair): pair is readonly [string, string] => pair !== null));
+};
+
+/**
  * Joins the room an invitation leads to. Once somebody there has sent the folder, a copy of
  * it is made under `parent` in this workspace — a new folder, by the room's name for it or
  * the next free one, so nothing this user has is ever written over.
@@ -1152,13 +1172,17 @@ export const joinRoom = async (request: { invite: string; name: string; parent: 
   let room: Session | null = null;
   try {
     const keys = await deriveRoom(invite.code);
-    const address = addresses.length > 1 ? await firstReachable(addresses, keys.roomId) : addresses[0];
-    if (!address) throw "unreachable";
+    const openable = await openableAddresses(addresses);
+    const candidates = [...openable.keys()];
+    const opened = candidates.length > 1 ? await firstReachable(candidates, keys.roomId) : candidates[0];
+    if (!opened) throw "unreachable";
+    // What the page connects to, and what the room's address is called on screen.
+    const address = openable.get(opened) ?? opened;
     if (session || collab.get().phase !== "starting") return;
     // A first guess at a colour; `watchMembers` settles it once the others' are known.
     room = session = newSession(false, request.name, PEER_COLORS[1]);
     watchMembers(room);
-    await connect(room, address, keys);
+    await connect(room, opened, keys);
     if (session !== room || !bridge) return;
     const name = safeFolderName(room.info.get("name"));
     const parent = normalizedExplorerPath(request.parent);

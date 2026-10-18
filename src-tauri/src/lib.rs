@@ -232,6 +232,7 @@ pub fn run() {
             collab::collab_close_relay,
             collab::collab_relay_status,
             collab::collab_forward_port,
+            collab::collab_tunnel,
             browser::browser_status,
             browser::browser_open,
             browser::browser_set_bounds,
