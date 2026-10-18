@@ -61,6 +61,16 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
 
+# Development builds: line numbers for this project's own code, so a panic still says where,
+# and no debug information for the seven hundred crates it depends on. Cargo's default is
+# full debug information for all of them, which nobody steps through and which made the
+# build cache several times larger. Release builds carry none either way.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [[bin]]
 name = "mild-editor"
 path = "src/main.rs"
