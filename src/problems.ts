@@ -23,6 +23,8 @@ export const judge = (result: NativeRunResult, expected: string, tolerance: numb
   if (result.verdict === "limit") return "re";
   if (result.verdict !== "ok") return result.verdict;
   if (checker) return checkerStatus(checker);
+  // Only the beginning of it came: it ran far past the length of the expected output.
+  if (result.stdoutBytes !== undefined) return "wa";
   return outputsMatch(expected, result.stdout, tolerance) ? "ac" : "wa";
 };
 
@@ -61,6 +63,29 @@ export const DEFAULT_TIME_LIMIT_MS = 2000;
 export const DEBUG_TIME_FACTOR = 3;
 
 export const visibleWhitespace = (value: string) => value.replace(/ /g, "·").replace(/\t/g, "⇥");
+
+/**
+ * How much of a run's output the panel shows. A program may print up to 16 MB before the
+ * runner stops reading, and a text box holding all of it froze the window, Stop included.
+ * A text box lays out every line it holds, so it is the lines that are counted as well as the
+ * characters. The comparison with the expected output still reads the whole of it.
+ */
+export const OUTPUT_SHOWN = 64 * 1024;
+const OUTPUT_SHOWN_LINES = 2000;
+
+/**
+ * The beginning of a long output, and `note` — given the full size — in place of the rest.
+ * `size` is the whole output's, when what the run sent was already only its beginning.
+ */
+export const shownOutput = (output: string, note: (size: string) => string, size = output.length) => {
+  let end = Math.min(output.length, OUTPUT_SHOWN);
+  for (let line = 1, at = output.indexOf("\n"); at >= 0 && at < end; at = output.indexOf("\n", at + 1), line += 1) {
+    if (line === OUTPUT_SHOWN_LINES) end = at + 1;
+  }
+  if (end >= output.length && size <= output.length) return output;
+  const whole = size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)} MB` : `${Math.round(size / 1024)} KB`;
+  return `${output.slice(0, end)}\n… ${note(whole)}\n`;
+};
 
 export const combinedRunOutput = (output: string, error: string) => error
   ? `${output}${output && !output.endsWith("\n") ? "\n" : ""}${error.replace(/^\s+/, "")}`

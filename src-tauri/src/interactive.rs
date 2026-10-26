@@ -17,6 +17,8 @@ use crate::sandbox;
 use crate::tools::{tool_search_path, CommandExtHidden};
 
 const MAX_STREAM_OUTPUT: usize = 1_000_000;
+/** The most output one message to the window carries while a program floods its pipe. */
+const BURST: usize = 64 * 1024;
 const MAX_SEND: usize = 100_000;
 
 #[derive(Deserialize)]
@@ -93,8 +95,9 @@ pub fn stop_session(state: &InteractiveState) {
     }
 }
 
-/// Streams one output pipe to the frontend, holding back only the bytes that split a UTF-8
-/// character so that a prompt without a trailing newline still shows up immediately.
+/// Streams one output pipe to the frontend. What a program prints before it pauses goes out
+/// at once, so a prompt without a trailing newline still shows up immediately; a flood goes
+/// out in bursts (see `BURST`), and only the bytes that split a UTF-8 character wait.
 fn pump<R: Read + Send + 'static>(
     reader: R,
     app: tauri::AppHandle,
@@ -105,6 +108,7 @@ fn pump<R: Read + Send + 'static>(
         let mut reader = reader;
         let mut buffer = [0u8; 4096];
         let mut pending: Vec<u8> = Vec::new();
+        let mut burst = String::new();
         let mut total = 0usize;
         loop {
             let read = match reader.read(&mut buffer) {
@@ -133,13 +137,24 @@ fn pump<R: Read + Send + 'static>(
                     text
                 }
             };
-            if !text.is_empty() {
+            burst.push_str(&text);
+            // A read that filled the buffer means more is already waiting: the program is
+            // printing faster than it can be shown, and the text is sent as one message once
+            // the pipe runs dry or enough has gathered. A short read is the program pausing —
+            // a prompt, waiting for input — which goes out at once, as before.
+            if !burst.is_empty() && (read < buffer.len() || burst.len() >= BURST) {
                 let _ = app.emit(
                     "interactive-output",
-                    InteractiveOutputEvent { session_id: session_id.clone(), stream, text },
+                    InteractiveOutputEvent { session_id: session_id.clone(), stream, text: std::mem::take(&mut burst) },
                 );
             }
             if total > MAX_STREAM_OUTPUT {
+                if !burst.is_empty() {
+                    let _ = app.emit(
+                        "interactive-output",
+                        InteractiveOutputEvent { session_id: session_id.clone(), stream, text: std::mem::take(&mut burst) },
+                    );
+                }
                 let _ = app.emit(
                     "interactive-output",
                     InteractiveOutputEvent {
@@ -150,6 +165,10 @@ fn pump<R: Read + Send + 'static>(
                 );
                 break;
             }
+        }
+        // The last burst, when the program ended on a full read.
+        if !burst.is_empty() {
+            let _ = app.emit("interactive-output", InteractiveOutputEvent { session_id, stream, text: burst });
         }
     });
 }

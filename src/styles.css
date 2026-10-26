@@ -282,6 +282,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .diff-row.different .diff-cell:nth-child(2) { color: var(--success); }
 .diff-row.whitespace { background: color-mix(in srgb, var(--warning) 10%, transparent); }
 .diff-row.whitespace .diff-cell { color: var(--warning); }
+.diff-row.diff-more { display: block; padding: 3px 8px; color: var(--muted); font-style: italic; }
 
 .interactive-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
 /* The built-in terminal: xterm.js fills the pane; its colours come from the theme's tokens. */
