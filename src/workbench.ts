@@ -7,6 +7,22 @@
 
 /** The statuses a finished test can carry; `ac` is the only passing one. */
 const FAILED = new Set(["wa", "tle", "mle", "re", "ce"]);
+export const isFailedVerdict = (status: string) => FAILED.has(status);
+
+/** The headline over a run's results: the first failure's kind, or that everything passed. */
+export type RunOutcome = { kind: "running" | "passed" | "partial" | "wa" | "tle" | "mle" | "re" | "ce"; passed: number; total: number; failed: { name: string; status: string }[] };
+export const runOutcome = (tests: { name: string; status: string }[], running: boolean): RunOutcome | null => {
+  const failed = tests.filter((test) => FAILED.has(test.status));
+  const passed = tests.filter((test) => test.status === "ac").length;
+  if (running) return { kind: "running", passed, total: tests.length, failed };
+  if (!failed.length && !passed) return null;
+  const kind = failed.length ? failed[0].status as RunOutcome["kind"] : passed === tests.length ? "passed" : "partial";
+  return { kind, passed, total: tests.length, failed: failed.map(({ name, status }) => ({ name, status })) };
+};
+
+/** After a run the failures come first, in their own order; everything else keeps its place. */
+export const failuresFirst = <T extends { status: string }>(tests: T[]): T[] =>
+  [...tests.filter((test) => FAILED.has(test.status)), ...tests.filter((test) => !FAILED.has(test.status))];
 
 /**
  * What the panel heading shows once tests have verdicts: how many passed out of all of them,

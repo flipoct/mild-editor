@@ -69,7 +69,7 @@ The listener is on by default and is confined to the loopback interface. Toggle 
 
 Each test reports a competitive-programming verdict: `AC`, `WA`, `TLE`, `RE`, or `CE`. A wrong answer shows a line-by-line comparison of expected versus actual output instead of a plain text box, with mismatched lines highlighted and whitespace-only differences called out separately. Press `raw output` to switch back to the unformatted stream.
 
-The panel heading counts passed tests out of all of them once any has a verdict — green only when every test passed, amber while some were added or edited since the run.
+After a run the panel leads with its outcome in words — *Wrong answer*, *Time limit exceeded*, *All passed* — with how many of the tests passed and which ones failed. Failed tests move to the top and the first of them opens on its own: a wrong answer at the diff, with its input and expected output folded beneath it. A test added or edited since the run says *not run*.
 
 ### Checkers for problems with more than one answer
 
@@ -85,7 +85,7 @@ It exits 0 to accept the output and any other code to reject it; whatever it pri
 
 The time and memory limits that Competitive Companion reports are saved with the file and used by the runner; the two fields above the test cases edit them, and an empty field means the default (2 s, no memory limit). Every test shows its running time and peak memory, and a run past the memory limit is an `MLE`. Peak memory is exact on Windows and sampled every 15 ms on Linux and macOS, so a run shorter than that shows none there.
 
-The status bar switches between two compile profiles. **Release** is `-O2`, the condition the judge runs under. **Debug** adds checked containers, warnings and `-DLOCAL` — and AddressSanitizer and UBSan outside Windows, where MinGW ships no sanitizer runtimes — and runs with three times the time limit. **Settings → build & judging** edits the flags of both. With *precompile bits/stdc++.h* on, the header is built once per compiler and profile (under the system temp directory) and reused.
+The title bar, beside **Run**, switches between two compile profiles. **Release** is `-O2`, the condition the judge runs under. **Debug** adds checked containers, warnings and `-DLOCAL` — and AddressSanitizer and UBSan outside Windows, where MinGW ships no sanitizer runtimes — and runs with three times the time limit. **Settings → build & judging** edits the flags of both. With *precompile bits/stdc++.h* on, the header is built once per compiler and profile (under the system temp directory) and reused.
 
 When the expected output holds a decimal, an answer within an absolute or relative error of 1e-6 is accepted. Integers, words and spacing are always compared exactly. The same settings page changes the tolerance or turns it off.
 
@@ -105,7 +105,7 @@ Outputs are compared by the same rule the test cases use, float tolerance includ
 
 ## Contest mode
 
-The timer in the status bar starts a countdown of the length you give it and opens a board of the problems in the current folder. The status bar keeps the remaining time in view, turning amber in the last ten minutes. On the board a problem shows the judge's verdict when there is one and the local test results otherwise, and is marked solved with its time when the judge reports AC. The contest is remembered per workspace until you end it.
+**Contest** in the status bar starts a countdown of the length you give it and opens a board of the problems in the current folder. While it runs, the remaining time sits in the title bar beside **Run**, turning amber in the last ten minutes, and opens the board. On the board a problem shows the judge's verdict when there is one and the local test results otherwise, and is marked solved with its time when the judge reports AC. The contest is remembered per workspace until you end it.
 
 ## Snippets
 
@@ -113,7 +113,7 @@ Open **Settings → Snippets**, create a snippet name, select C++ or Python, wri
 
 There are two ways to insert a snippet into a file:
 
-- Select it from the snippet menu in the title bar, then press **Insert**.
+- Run *Insert snippet: name* from the command palette.
 - Type `snippet::name` in an editor using the same language, then accept the completion with Tab or Enter.
 
 Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first editable field, repeated placeholder numbers stay synchronized, and `${0}` marks the final cursor position after tabbing through the fields. Place the editor caret and press **Set cursor here** to insert or move `${0}` automatically.
@@ -123,6 +123,8 @@ Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first
 Templates are stored separately by judge and language. Besides filename, platform, date, and time variables, `${cursor}` controls the initial caret position in a newly created file. Use **Set cursor here** in the template editor to place it without typing the marker.
 
 The full interface and Monaco Editor share the selected palette. Mild Editor includes Pastel Dusk, Catppuccin Mocha, Rosé Pine Dawn, Dracula, Gruvbox Dark, Nord, and Tokyo Night.
+
+A style, chosen beside the theme in **Settings → appearance**, sets the interface's form while the theme keeps its colours: **Mild** (the default) is soft and rounded, **Instrument** is square and dense with labels in the code face, and **Paper** sets headings in a serif and rules the lists instead of shading them. Any style works with any theme.
 
 ## IntelliSense
 
@@ -169,7 +171,7 @@ The macOS build uses the system window chrome: native traffic lights sit over th
 | `⌘,` | Settings |
 | `⌃⌘F` | Full screen |
 
-The interface scale is also in **Settings → appearance**, next to a code font size in px that sizes only the editor text, and the same `Ctrl` shortcuts work on Windows and Linux. The default language for imported problems and new files is in **Settings → online judge**; while no file is open, the language menu in the status bar changes it too.
+The interface scale is also in **Settings → appearance**, next to a code font size in px that sizes only the editor text, and the same `Ctrl` shortcuts work on Windows and Linux. The default language for imported problems and new files is in **Settings → online judge**; while no file is open, the language menu in the title bar changes it too.
 
 Inside the interactive panel, `↩` sends a line, `⇧↩` adds one, and `⌃D` closes the program's input the way it would in a terminal.
 

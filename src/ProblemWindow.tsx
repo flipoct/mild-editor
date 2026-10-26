@@ -37,6 +37,7 @@ const messages = {
 const readPreferences = () => ({
   locale: localStorage.getItem("mild-ui-locale") === "ko" ? "ko" as const : "en" as const,
   theme: localStorage.getItem("mild-ui-theme") || "pastel",
+  style: localStorage.getItem("mild-ui-style") || "mild",
   zoom: Math.min(200, Math.max(50, Number(localStorage.getItem("mild-ui-zoom")) || 100)),
 });
 
@@ -66,7 +67,8 @@ export default function ProblemWindow() {
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = preferences.theme;
-  }, [preferences.theme]);
+    document.documentElement.dataset.style = preferences.style;
+  }, [preferences.theme, preferences.style]);
   useEffect(() => {
     // The macOS title bar counter-scales with this, as in the app window.
     document.documentElement.style.setProperty("--ui-zoom-inverse", String(100 / preferences.zoom));

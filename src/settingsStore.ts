@@ -1,9 +1,9 @@
 import { DEMO_MODE } from "./demo";
 import { DEFAULT_FLOAT_TOLERANCE } from "./judge";
 import { IS_TAURI } from "./platform";
-import { boundedNumber, clampEditorFontSize, clampUiZoom, defaultEditorFontId, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, loadCustomFonts, loadSnippets, parseWallpaperLayout, storedPanelGrid, storedProfileFlags, UI_ZOOM_MAX, UI_ZOOM_MIN } from "./settings";
+import { boundedNumber, clampEditorFontSize, clampUiZoom, defaultEditorFontId, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, isUiStyle, loadCustomFonts, loadSnippets, parseWallpaperLayout, storedPanelGrid, storedProfileFlags, UI_ZOOM_MAX, UI_ZOOM_MIN } from "./settings";
 import { createStore } from "./store";
-import type { CompileProfile, EditorFont, ExplorerSort, Language, ProblemBrowserMode, ProblemSource, UiLocale, UiTheme } from "./types";
+import type { CompileProfile, EditorFont, ExplorerSort, Language, ProblemBrowserMode, ProblemSource, UiLocale, UiStyle, UiTheme } from "./types";
 import { autoSaveEnabled } from "./workbench";
 
 /**
@@ -36,6 +36,8 @@ const definitions = {
   uiLocale: text<UiLocale>("mild-ui-locale", "en"),
   // `?demo&theme=…` (development only) shows the preview in a theme without a click.
   uiTheme: stored<UiTheme>("mild-ui-theme", (value) => (DEMO_MODE !== null && new URLSearchParams(window.location.search).get("theme") as UiTheme) || (value as UiTheme) || "pastel"),
+  // `?demo&style=…` does the same for the interface style.
+  uiStyle: stored<UiStyle>("mild-ui-style", (value) => { const asked = DEMO_MODE !== null ? new URLSearchParams(window.location.search).get("style") : null; return isUiStyle(asked) ? asked : isUiStyle(value) ? value : "mild"; }),
   uiZoom: bounded("mild-ui-zoom", 100, UI_ZOOM_MIN, UI_ZOOM_MAX),
   // Independent of the interface zoom: that scales every panel, this only sizes the code.
   editorFontSize: stored("mild-editor-font-size", (value) => clampEditorFontSize(boundedNumber(value, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MIN, EDITOR_FONT_SIZE_MAX))),

@@ -15,6 +15,9 @@ export type CompileProfile = "release" | "debug";
 
 export type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
 
+/** The interface's form, independent of the theme's palette: shape, density and type. */
+export type UiStyle = "mild" | "instrument" | "paper";
+
 export type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
 
 export type UiLocale = "en" | "ko";
