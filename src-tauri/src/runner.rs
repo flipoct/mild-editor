@@ -138,6 +138,9 @@ pub(crate) struct RunResult {
     /// Peak resident memory in KiB, where the platform reports it.
     memory_kb: Option<u64>,
     pub(crate) verdict: Verdict,
+    /// The size of the whole output, when `stdout` is only its beginning (see `trim_for_window`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdout_bytes: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -146,6 +149,33 @@ pub(crate) struct RunResponse {
     results: Vec<RunResult>,
     /// Compiler warnings from a successful build, for the editor to mark.
     compile_warnings: String,
+}
+
+/// What of a run's output goes to the window. A program may print up to `MAX_OUTPUT` before
+/// the run stops reading, and every byte of it crossed into the window twice — with the
+/// test's result and with the run's — which froze it for seconds, Stop included. An output
+/// much longer than the expected one cannot be the expected one, so past
+/// `max(1 MiB, 2 × expected + 64 KiB)` only its beginning goes, with its full size; the
+/// checker has already read the whole of it.
+fn trim_for_window(mut result: RunResult, expected_len: usize) -> RunResult {
+    let limit = (1 << 20).max(expected_len * 2 + (64 << 10));
+    if result.stdout.len() > limit {
+        result.stdout_bytes = Some(result.stdout.len());
+        result.stdout.truncate(char_boundary(&result.stdout, limit));
+    }
+    // A runaway on stderr: its beginning, and its end, which says how the run ended.
+    const STDERR_HEAD: usize = 256 << 10;
+    if result.stderr.len() > STDERR_HEAD + 4096 {
+        let tail = char_boundary(&result.stderr, result.stderr.len() - 2048);
+        let head = char_boundary(&result.stderr, STDERR_HEAD);
+        result.stderr = format!("{}\n…\n{}", &result.stderr[..head], &result.stderr[tail..]);
+    }
+    result
+}
+
+/// The largest index no greater than `at` that does not split a character.
+fn char_boundary(text: &str, at: usize) -> usize {
+    (0..=at.min(text.len())).rev().find(|&index| text.is_char_boundary(index)).unwrap_or(0)
 }
 
 fn read_limited<R: Read>(reader: R) -> Vec<u8> {
@@ -196,6 +226,7 @@ pub(crate) fn execute_with_cancel(
                 time_ms: started.elapsed().as_millis(),
                 memory_kb: None,
                 verdict: Verdict::Re,
+                stdout_bytes: None,
             }
         }
     };
@@ -339,6 +370,7 @@ pub(crate) fn execute_with_cancel(
         time_ms: cpu.unwrap_or_else(|| started.elapsed()).as_millis(),
         memory_kb,
         verdict,
+        stdout_bytes: None,
     }
 }
 
@@ -501,6 +533,7 @@ fn run_tests(request: &RunRequest, cancelled: &AtomicBool, report: &dyn Fn(TestR
             .filter(|_| result.verdict == Verdict::Ok)
             .map(|checker| checker.check(&test.input, &result.stdout, &test.expected, Some(cancelled)));
         let stopped = cancelled.load(Ordering::Relaxed);
+        let result = trim_for_window(result, test.expected.len());
         report(TestResultEvent { run_id: request.run_id.clone(), index, result: result.clone(), checker: verdict });
         results.push(result);
         if stopped { break; }
@@ -531,6 +564,31 @@ mod tests {
         let shell = which::which("sh").expect("a POSIX shell");
         let directory = tempfile::tempdir().expect("temporary directory");
         execute(&shell, &["-c".into(), script.into()], directory.path(), "", timeout)
+    }
+
+    fn printed(stdout: String, stderr: String) -> RunResult {
+        RunResult { ok: true, code: Some(0), stdout, stderr, time_ms: 1, memory_kb: None, verdict: Verdict::Ok, stdout_bytes: None }
+    }
+
+    #[test]
+    fn an_output_far_longer_than_the_expected_one_reaches_the_window_cut_short() {
+        let flood = printed("7\n".repeat(1 << 20), String::new());
+        let sent = trim_for_window(flood.clone(), 2);
+        assert_eq!(sent.stdout_bytes, Some(2 << 20));
+        assert_eq!(sent.stdout.len(), 1 << 20);
+        // Against an expected output as long, it could still be the answer, and goes whole.
+        let kept = trim_for_window(flood, 1 << 20);
+        assert_eq!((kept.stdout_bytes, kept.stdout.len()), (None, 2 << 20));
+        // An ordinary output is left as it is.
+        assert_eq!(trim_for_window(printed("3\n".into(), String::new()), 2).stdout, "3\n");
+    }
+
+    #[test]
+    fn a_cut_never_splits_a_character_and_a_long_stderr_keeps_its_end() {
+        let sent = trim_for_window(printed("가".repeat(400_000), format!("{}Error: TLE (2s)", "x".repeat(1 << 20))), 0);
+        assert!(sent.stdout.len() <= 1 << 20 && sent.stdout.chars().all(|c| c == '가'));
+        assert!(sent.stderr.len() < 300 << 10);
+        assert!(sent.stderr.ends_with("Error: TLE (2s)"));
     }
 
     #[test]
