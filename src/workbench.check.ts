@@ -3,7 +3,7 @@
  * `node --experimental-strip-types src/workbench.check.ts`.
  */
 import { isHelperFile, findStressCompanion, stressCompanionName, stressStem } from "./fileNaming.ts";
-import { autoSaveEnabled, checkerStarter, checkerStatus, matchCommands, matchLabel, summarizeTests, terminalKeyIsEditors, verdictAccepted, verdictView, contestPlan, commonFolder } from "./workbench.ts";
+import { autoSaveEnabled, checkerStarter, checkerStatus, failuresFirst, matchCommands, matchLabel, runOutcome, summarizeTests, terminalKeyIsEditors, verdictAccepted, verdictView, contestPlan, commonFolder } from "./workbench.ts";
 
 let failed = 0;
 const eq = (label: string, got: unknown, want: unknown) => {
@@ -116,6 +116,15 @@ eq("but never past the contest's end", contestPlan(windowed, windowed.endMs - 30
 eq("one contest folder", commonFolder(["AtCoder/abc300/A.py", "AtCoder/abc300/B.py"]), "AtCoder/abc300");
 eq("files at the root: no folder of its own", commonFolder(["A.py", "B.py"]), null);
 eq("spread over folders", commonFolder(["x/A.py", "y/B.py"]), null);
+
+// The run's outcome and the order its cases are shown in
+const cases = [{ name: "s1", status: "ac" }, { name: "s2", status: "wa" }, { name: "s3", status: "tle" }, { name: "t4", status: "idle" }];
+eq("nothing run, no outcome", runOutcome([{ name: "s1", status: "idle" }], false), null);
+eq("the first failure names the outcome", runOutcome(cases, false), { kind: "wa", passed: 1, total: 4, failed: [{ name: "s2", status: "wa" }, { name: "s3", status: "tle" }] });
+eq("all passed", runOutcome([{ name: "s1", status: "ac" }], false)?.kind, "passed");
+eq("passing, with a case not run", runOutcome([{ name: "s1", status: "ac" }, { name: "s2", status: "idle" }], false)?.kind, "partial");
+eq("while it runs", runOutcome(cases, true)?.kind, "running");
+eq("failures first, the rest in place", failuresFirst(cases).map((test) => test.name), ["s2", "s3", "s1", "t4"]);
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 if (failed) process.exit(1);

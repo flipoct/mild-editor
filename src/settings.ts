@@ -1,12 +1,13 @@
 import packageInfo from "../package.json";
 import { IS_TAURI, isMac } from "./platform";
 import { completeGrid, gridFromColumns, type Grid } from "./gridLayout";
-import type { CodeSnippet, CompileProfile, EditorFontOption, PanelId, PanelWeights, UiTheme, WallpaperLayout } from "./types";
+import type { CodeSnippet, CompileProfile, EditorFontOption, PanelId, PanelWeights, UiStyle, UiTheme, WallpaperLayout } from "./types";
 
-export const PANEL_IDS: PanelId[] = ["tests", "editor", "problem", "explorer"];
+/** Also the default order, left to right: the files, the code, what the code did, the problem. */
+export const PANEL_IDS: PanelId[] = ["explorer", "editor", "tests", "problem"];
 
 /** Relative size a panel takes before anyone drags a divider, roughly the old fixed widths. */
-export const DEFAULT_WEIGHT: Record<PanelId, number> = { tests: 1, editor: 3.2, problem: 2, explorer: 0.75 };
+export const DEFAULT_WEIGHT: Record<PanelId, number> = { tests: 1.7, editor: 3.2, problem: 2, explorer: 0.85 };
 
 /** Width of the strip a divider can be grabbed by, in CSS pixels (see .panel-resizer). */
 export const PANEL_DIVIDER_HIT = 10;
@@ -36,6 +37,8 @@ export const storedPanelGrid = (stored: string | null): Grid<PanelId> => {
     const placed = Array.isArray(columns)
       ? columns.filter(Array.isArray).map((column) => (column as unknown[]).filter(isPanelId))
       : (Array.isArray(legacy) ? legacy.filter(isPanelId) : []).map((id) => [id]);
+    // Nothing saved in any form: a first start gets the default widths, not panels split in turn.
+    if (!placed.flat().length) return defaultPanelGrid();
     return completeGrid(gridFromColumns(placed, weightOf), PANEL_IDS) ?? defaultPanelGrid();
   } catch { return defaultPanelGrid(); }
 };
@@ -134,6 +137,9 @@ export const wallpaperCss = (layout: WallpaperLayout, scale: number, positionX: 
 export const shortcutLabel = (key: string, modifiers: { shift?: boolean; alt?: boolean } = {}) => isMac
   ? `⌘${modifiers.shift ? "⇧" : ""}${modifiers.alt ? "⌥" : ""}${key === "Enter" ? "↵" : key}`
   : `Ctrl+${modifiers.shift ? "Shift+" : ""}${modifiers.alt ? "Alt+" : ""}${key}`;
+
+export const UI_STYLES: Array<[UiStyle, string]> = [["mild", "Mild"], ["instrument", "Instrument"], ["paper", "Paper"]];
+export const isUiStyle = (value: unknown): value is UiStyle => UI_STYLES.some(([style]) => style === value);
 
 export const UI_THEMES: Array<[UiTheme, string]> = [["pastel", "Pastel Dusk"], ["midnight", "Catppuccin Mocha"], ["latte", "Rosé Pine Dawn"], ["sakura", "Dracula"], ["blossom", "Gruvbox Dark"], ["nord", "Nord"], ["tokyo", "Tokyo Night"]];
 

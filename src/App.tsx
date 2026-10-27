@@ -24,14 +24,14 @@ import { applyDrop, distributeSiblings, dropPreview, dropTargetAt, layoutGrid, n
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
 import { BuiltinTerminal, terminalHost, terminalKeyIsEditors, typedInTerminal, useTerminalStatus, type TerminalStatus } from "./BuiltinTerminal";
-import { COMMAND_PREFIX, checkerStarter, matchCommands, summarizeTests, type PaletteCommand } from "./workbench";
+import { COMMAND_PREFIX, checkerStarter, failuresFirst, isFailedVerdict, matchCommands, runOutcome, summarizeTests, type PaletteCommand, type RunOutcome } from "./workbench";
 import type { AvailableUpdate, ClangdStatus, CompanionProblem, CompanionStatus, ContestState, EditorFontOption, ImportCollision, ImportedAtCoderProblem, InteractiveEntry, InteractiveExitEvent, InteractiveOutputEvent, Language, LoadedWorkspace, NativeRunResult, PanelId, PanelMode, ProblemLimits, ProblemSource, ProblemTab, SettingsPage, StressChoice, StressOutcome, SubmissionStatusResult, TestCase, TestResultEvent, UpdateStatus, VerdictNotice, WorkspaceFileResult } from "./types";
 import { messages, updateStatusLine } from "./i18n";
 import { createThemeWindowIcon } from "./themeIcon";
 import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
 import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isPendingVerdict, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
-import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
+import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_STYLES, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
 import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
@@ -72,6 +72,11 @@ const interactiveTail = (text: string) => {
 
 /** When this run of the editor began; a submission older than that was not made "just now". */
 const APP_STARTED_AT = Date.now();
+
+/** The words over a run's results, by what the first failure was. */
+const OUTCOME_HEADS: Record<RunOutcome["kind"], keyof typeof messages.en> = {
+  running: "outcomeRunning", passed: "outcomePassed", partial: "outcomePartial", wa: "outcomeWa", tle: "outcomeTle", mle: "outcomeMle", re: "outcomeRe", ce: "outcomeCe",
+};
 
 function App() {
   // Defaults, legacy keys and clamped values become the stored ones as soon as the app is up.
@@ -158,6 +163,7 @@ function App() {
   const [atcoderLibraryPath] = useSetting("atcoderLibraryPath");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
   const [uiTheme, setUiTheme] = useSetting("uiTheme");
+  const [uiStyle, setUiStyle] = useSetting("uiStyle");
   const [acrylicOpacity] = useSetting("acrylicOpacity");
   const [acrylicBlur] = useSetting("acrylicBlur");
   const [uiZoom, setUiZoom] = useSetting("uiZoom");
@@ -170,7 +176,8 @@ function App() {
   const [systemFonts, setSystemFonts] = useState<EditorFontOption[]>([]);
   const [customFonts] = useSetting("customFonts");
   const [snippets] = useSetting("snippets");
-  const [insertSnippetId, setInsertSnippetId] = useState("");
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const fileMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const pendingTemplateCursorRef = useRef<{ tabId: string; language: Language; offset: number } | null>(null);
   const runRef = useRef<() => void>(() => {});
@@ -254,6 +261,7 @@ function App() {
   const keyboardBusy = useCollab((room) => room.icpc && room.keyboard.holder !== null && room.keyboard.holder !== room.self
     ? room.members.find((member) => member.id === room.keyboard.holder)?.name ?? "?" : null);
   const testSummary = useMemo(() => summarizeTests(tests), [tests]);
+  const outcome = useMemo(() => runOutcome(tests, running), [tests, running]);
   // One function per language, so a memoised panel that is handed it is not redrawn for nothing.
   const t = useCallback((key: keyof typeof messages.en): string => messages[uiLocale][key], [uiLocale]);
   const monacoTheme = `mild-${uiTheme}`;
@@ -324,6 +332,10 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = uiTheme;
   }, [uiTheme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.style = uiStyle;
+  }, [uiStyle]);
 
   // Single hook every macOS-only rule in styles.css keys off.
   useEffect(() => {
@@ -1348,13 +1360,12 @@ function App() {
 
   const openSettings = () => setSettingsPage("appearance");
 
-  const insertSnippet = () => {
-    const snippet = snippets.find((item) => item.id === insertSnippetId && item.language === language);
+  const insertSnippet = (id: string) => {
+    const snippet = snippets.find((item) => item.id === id && item.language === language);
     const editor = editorRef.current;
     if (!snippet || !editor) return;
     editor.trigger("mild-snippet", "editor.action.insertSnippet", { snippet: snippet.code });
     editor.focus();
-    setInsertSnippetId("");
   };
 
   /** Settings → template → "Apply to editor": the template as it stands in the dialog replaces the open file's code. */
@@ -2062,7 +2073,12 @@ function App() {
       setTests((items) => items.map((test) => ({ ...test, status: "re", error: message })));
     } finally {
       unlisten();
-      setTests((items) => items.map((test) => test.status === "running" ? { ...test, status: "idle" } : test));
+      setTests((items) => {
+        const settled = items.map((test) => test.status === "running" ? { ...test, status: "idle" as const } : test);
+        if (settled.some((test) => test.open && isFailedVerdict(test.status))) return settled;
+        const first = settled.find((test) => isFailedVerdict(test.status));
+        return first ? settled.map((test) => test.id === first.id ? { ...test, open: true } : test) : settled;
+      });
       setRunning(false);
     }
   };
@@ -2258,13 +2274,23 @@ function App() {
     // Code likewise keeps webviews out of the way while a group is dragged.
     setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .quick-open"))
       || document.body.classList.contains("panel-dragging")
-      || [...document.querySelectorAll(".explorer-context-menu, .contest-popover")].some(reachesPage));
+      || [...document.querySelectorAll(".explorer-context-menu, .contest-popover, .file-menu-list")].some(reachesPage));
   });
   /**
    * The contest board opens at the left edge, above its button. A problem page docked there
    * would have to be hidden for as long as the board is up, and the board is read beside the
    * problem: so it opens just past the page instead, whenever there is room for it there.
    */
+  const contestPopoverPlace = (): CSSProperties => {
+    if (!contestSpan) return { left: contestPopoverLeft() };
+    const margin = 10;
+    const width = Math.min(420, window.innerWidth - 2 * margin);
+    const top = (document.querySelector(".problem-tabs")?.getBoundingClientRect().top ?? 40) + 6;
+    // The problem browser is a native view no HTML can float over, so the board keeps clear of it.
+    const host = showProblemPanel ? problemHostRef.current?.getBoundingClientRect() : undefined;
+    const blocked = host && host.right > window.innerWidth - width - 2 * margin && host.bottom > top;
+    return { top, bottom: "auto", left: "auto", right: blocked ? Math.max(margin, window.innerWidth - host.left + margin) : margin };
+  };
   const contestPopoverLeft = () => {
     const host = showProblemPanel ? problemHostRef.current?.getBoundingClientRect() : undefined;
     const margin = 10;
@@ -3204,6 +3230,8 @@ function App() {
       { id: "contest.board", label: t("cmdContest"), keywords: "contest timer board 컨테스트 대회", run: () => setContestOpen(true) },
       { id: "autosave", label: autoSave ? t("cmdAutoSaveOff") : t("cmdAutoSaveOn"), keywords: "auto save 자동 저장", run: () => setAutoSave((value) => !value) },
       ...UI_THEMES.map(([theme, name]): PaletteEntry => ({ id: `theme.${theme}`, label: `${t("cmdTheme")}${name}`, keywords: "theme colour color 테마 색", disabled: uiTheme === theme, run: () => setUiTheme(theme) })),
+      ...UI_STYLES.map(([style, name]): PaletteEntry => ({ id: `style.${style}`, label: `${t("cmdStyle")}${name}`, keywords: "style shape density look 스타일 모양", disabled: uiStyle === style, run: () => setUiStyle(style) })),
+      ...snippets.filter((snippet) => snippet.language === language && snippet.name.trim()).map((snippet): PaletteEntry => ({ id: `snippet.${snippet.id}`, label: `${t("cmdInsertSnippet")}${snippet.name.trim()}`, keywords: "snippet insert 스니펫 삽입", disabled: noFile, run: () => insertSnippet(snippet.id) })),
       { id: "locale", label: `${t("cmdLocale")}${uiLocale === "en" ? "한국어" : "English"}`, keywords: "language locale korean english 언어 한국어 영어", run: () => setUiLocale((locale) => locale === "en" ? "ko" : "en") },
       { id: "settings", label: t("cmdSettings"), keywords: "preferences options 설정", shortcut: shortcutLabel(","), run: openSettings },
       { id: "updates", label: t("cmdUpdates"), keywords: "update version 업데이트", disabled: !UPDATES_SUPPORTED, run: () => { openSettings(); setSettingsPage("updates"); void checkForUpdates(); } },
@@ -3331,12 +3359,13 @@ function App() {
       else if (explorerOverlays.menu) dismissExplorerOverlay("menu");
       else if (releaseNotes) setReleaseNotes(null);
       else if (contestOpen) setContestOpen(false);
+      else if (fileMenuOpen) { setFileMenuOpen(false); fileMenuButtonRef.current?.focus(); }
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmFile, explorerOverlays.deleteDirectory, explorerOverlays.menu, explorerOverlays.moveEntry, explorerOverlays.newFolder, explorerOverlays.rename, hasFileStatusError, importCollision, quickOpen, releaseNotes, settingsPage, sourceFile, stressOpen]);
+  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmFile, fileMenuOpen, explorerOverlays.deleteDirectory, explorerOverlays.menu, explorerOverlays.moveEntry, explorerOverlays.newFolder, explorerOverlays.rename, hasFileStatusError, importCollision, quickOpen, releaseNotes, settingsPage, sourceFile, stressOpen]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3425,9 +3454,35 @@ function App() {
     >
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
-          <span className="titlebar-logo"><AppMark /></span>
-          <span className="titlebar-name" data-tauri-drag-region>Mild Editor</span>
+          <span className="titlebar-logo" title="Mild Editor"><AppMark /></span>
           {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev{device ? ` · ${t("devDevice").replace("{n}", String(device.number))}` : ""}</span>}
+          {!isMac && <div className="file-menu">
+            <button ref={fileMenuButtonRef} className={`file-menu-button ${fileMenuOpen ? "active" : ""}`} onClick={() => setFileMenuOpen((open) => !open)} aria-haspopup="menu" aria-expanded={fileMenuOpen}>{t("fileMenu")}</button>
+            {fileMenuOpen && <>
+              <div className="popover-dismiss" onMouseDown={() => setFileMenuOpen(false)} />
+              <div className="file-menu-list" role="menu" aria-label={t("fileMenu")} style={{ left: fileMenuButtonRef.current?.getBoundingClientRect().left, top: (fileMenuButtonRef.current?.getBoundingClientRect().bottom ?? 30) + 6 }} onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+                const at = items.indexOf(document.activeElement as HTMLButtonElement);
+                items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+              }}>
+                {([
+                  [t("newWorkspace"), shortcutLabel("N"), newProblem, false],
+                  [t("openWorkspace"), shortcutLabel("O"), () => void openProblem(), false],
+                  [t("save"), shortcutLabel("S"), () => void saveProblem(), !activeTab],
+                  null,
+                  [t("cmdImport"), shortcutLabel("T"), beginImport, !workspacePath],
+                  [t("cmdNewFile"), "", () => beginBlankFile(explorerRef.current?.creationParent()), !workspacePath],
+                  [t("cmdNewFolder"), shortcutLabel("N", { shift: true }), () => explorerRef.current?.newFolder(), !workspacePath],
+                  null,
+                  [t("cmdSettings"), shortcutLabel(","), openSettings, false],
+                ] as const).map((item, index) => item === null
+                  ? <div className="file-menu-separator" role="separator" key={index} />
+                  : <button key={index} role="menuitem" autoFocus={index === 0} disabled={item[3]} onClick={() => { setFileMenuOpen(false); item[2](); }}><span>{item[0]}</span>{item[1] && <kbd>{item[1]}</kbd>}</button>)}
+              </div>
+            </>}
+          </div>}
           <span className="titlebar-file" data-tauri-drag-region>
             {workspacePath ? <>
               <span className="crumb">{workspacePath.split(/[\\/]/).filter(Boolean).at(-1)}</span>
@@ -3435,20 +3490,19 @@ function App() {
             </> : <span className="crumb">{t("noWorkspace")}</span>}
           </span>
         </div>
+        <button className="command-field" onClick={() => { setQuickOpen(""); setQuickOpenIndex(0); }} title={`${t("cmdGoToFile")} (${shortcutLabel("P")})`}>
+          <Icon name="search" size={14} /><span>{t("commandField")}</span><kbd>{shortcutLabel("P")}</kbd>
+        </button>
         <div className="titlebar-tools">
-          <div className="file-actions">
-            <button onClick={newProblem} title={`${t("new")} (${modLabel}N)`}><Icon name="filePlus" /><span>{t("new")}</span></button>
-            <button onClick={() => void openProblem()} title={`${t("open")} (${modLabel}O)`}><Icon name="folderOpen" /><span>{t("open")}</span></button>
-            <button onClick={() => void saveProblem()} title={`${t("save")} (${modLabel}S)`}><Icon name="save" /><span>{t("save")}</span></button>
-            <button className="atcoder-button" onClick={beginImport} title={`${t("import")} (${modLabel}T)`}><Icon name="download" /><span>{t("import")}</span></button>
-          </div>
-          <div className="snippet-insert">
-            <select value={insertSnippetId} onChange={(event) => setInsertSnippetId(event.target.value)} aria-label="Select a code snippet">
-              <option value="">{t("snippetPlaceholder")}</option>
-              {snippets.filter((snippet) => snippet.language === language).map((snippet) => <option value={snippet.id} key={snippet.id}>{snippet.name}</option>)}
-            </select>
-            <button onClick={insertSnippet} disabled={!insertSnippetId}>{t("insert")}</button>
-          </div>
+          {contestSpan && <ContestStatusButton span={contestSpan} open={contestOpen} onToggle={() => setContestOpen((open) => !open)} title={t("contest")} overLabel={t("contestOver")} />}
+          <span className="run-target">
+            <select className="run-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
+              const next = event.target.value as Language;
+              if (activeTab) void changeActiveLanguage(next);
+              else setDefaultLanguage(next);
+            }} aria-label="Select language" title={activeTab ? "language of the open file" : t("defaultLanguage")}><option value="cpp">C++</option><option value="python">Python 3</option></select>
+            {(activeTab ? language : defaultLanguage) === "cpp" && <select className={`run-profile ${compileProfile}`} value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")} aria-label={t("compileProfile")} title={`${t("compileProfile")}: ${profileFlags[compileProfile]}`}><option value="release">Release</option><option value="debug">Debug</option></select>}
+          </span>
           <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : () => void run()} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
             <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
           </button>
@@ -3467,7 +3521,7 @@ function App() {
         <div className="tab-strip" onClickCapture={() => setOpenBoardPath(null)}>
           {tabs.map((tab) => (
             <div
-              className={`problem-tab ${tab.id === activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`}
+              className={`problem-tab ${tab.id === activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""} ${tab.dirty ? "dirty" : ""}`}
               key={tab.id}
               data-tab-id={tab.id}
             >
@@ -3495,12 +3549,13 @@ function App() {
               {sharedFiles.has(tab.id) && <span className={`tab-shared ${roomLink === "online" ? "" : "ended"}`} title={roomLink === "online" ? t("collabTabLive") : t("collabOffline")}><Icon name="users" size={12} /></span>}
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
-                : <button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}</div>
-                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} /><span className="tab-title">{explorerBasename(tab.filename)}</span></button>}
-              <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab`}><Icon name="close" size={12} /></button>
+                : <span className="tab-label"><button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span>}</div>
+                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} /><span className="tab-label"><span className="tab-title">{explorerBasename(tab.filename)}</span>{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span></button>}
+              <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab${tab.dirty ? " (unsaved)" : ""}`}><Icon name="close" size={12} /></button>
             </div>
           ))}
         </div>
+        <button className="tab-import" onClick={beginImport} disabled={!workspacePath} title={`${t("cmdImport")} (${shortcutLabel("T")})`}><Icon name="download" size={14} /><span>{t("cmdImport")}</span></button>
       </nav>
       <section className="workspace" ref={workspaceRef}>
         {sashes.map((sash) => (
@@ -3533,11 +3588,9 @@ function App() {
                 <button className={panelMode === "terminal" ? "active" : ""} aria-pressed={panelMode === "terminal"} onClick={() => setPanelMode("terminal")} title={`${t("terminal")} (${isMac ? "⌃`" : "Ctrl+`"})`}>{t("terminal")}</button>
               </div>
               {panelMode === "tests" ? <>
-                {testSummary.judged > 0
-                  ? <span className={`test-summary ${testSummary.tone}`} title={`${testSummary.passed}/${testSummary.total} ${t("testsPassed")}${testSummary.slowestMs !== null ? ` · max ${testSummary.slowestMs} ms` : ""}`}>{testSummary.passed}/{testSummary.total}</span>
-                  : <span className="count">{tests.length}</span>}
-                <button className="panel-run" onClick={() => void run()} disabled={running} aria-label="run all tests" title={`${t("cmdRunAll")} (${shortcutLabel("Enter")})`}>
-                  {running ? <span className="spinner" /> : <Icon name="play" size={14} />}
+                {testSummary.judged === 0 && <span className="count">{tests.length}</span>}
+                <button className="panel-run labelled" onClick={() => void run()} disabled={running} title={`${t("cmdRunAll")} (${shortcutLabel("Enter")})`}>
+                  {running ? <span className="spinner" /> : <Icon name="play" size={13} />}<span>{t("runAll")}</span>
                 </button>
                 {running && <button className="panel-stop" onClick={stopRun} aria-label="stop running" title="stop running"><Icon name="stop" size={14} /></button>}
               </> : panelMode === "terminal" ? <>
@@ -3553,6 +3606,11 @@ function App() {
               </>}
             </div>
             {panelMode === "tests" ? <>
+            {outcome && <div className={`test-outcome ${outcome.kind}`} role="status">
+              <strong>{t(OUTCOME_HEADS[outcome.kind])}</strong>
+              <span>{t("outcomeCount").replace("{passed}", String(outcome.passed)).replace("{total}", String(outcome.total))}</span>
+              {outcome.failed.length > 0 && <small>{outcome.failed.slice(0, 3).map((test) => `${test.name} (${verdictLabels[test.status as keyof typeof verdictLabels] ?? test.status})`).join(", ")}{outcome.failed.length > 3 ? ` ${t("outcomeMore").replace("{n}", String(outcome.failed.length - 3))}` : ""}</small>}
+            </div>}
             <div className="limits-bar">
               <label title={t("timeLimit")}><Icon name="clock" size={13} /><input type="number" min={100} max={60000} step={100} placeholder={String(DEFAULT_TIME_LIMIT_MS)} value={activeTab?.limits?.timeLimitMs ?? ""} onChange={(event) => updateLimits({ timeLimitMs: limitInput(event.target.value, 100, 60000) })} aria-label={t("timeLimit")} /><span>ms</span></label>
               <label title={t("memoryLimit")}><Icon name="chip" size={13} /><input type="number" min={1} max={16384} step={16} placeholder="—" value={activeTab?.limits?.memoryLimitMb ?? ""} onChange={(event) => updateLimits({ memoryLimitMb: limitInput(event.target.value, 1, 16384) })} aria-label={t("memoryLimit")} /><span>MB</span></label>
@@ -3565,22 +3623,29 @@ function App() {
               {language === "cpp" && compileProfile === "debug" && <span className="limits-note" title={t("debugTimeNote")}>Debug ×{DEBUG_TIME_FACTOR}</span>}
             </div>
             <div className="test-list">
-              {tests.map((test) => (
+              {(running ? tests : failuresFirst(tests)).map((test) => (
                 <article className={`test-card ${test.open ? "open" : ""}`} key={test.id}>
                   <div className="test-row">
                     <button className="test-toggle" onClick={() => updateTest(test.id, { open: !test.open })}>
                       <Icon name={test.open ? "chevronDown" : "chevronRight"} size={12} className="test-chevron" />
                       <span className={`signal ${test.status}`} aria-label={test.status} />
-                      <span className="test-name">{test.name}</span>
+                      <span className="test-label">
+                        <span className="test-name">{test.name}</span>
+                        {finalVerdicts.includes(test.status) && <span className={`verdict ${test.status}`}>{verdictLabels[test.status]}</span>}
+                        {test.status === "idle" && testSummary.judged > 0 && <span className="test-notrun">{t("notRun")}</span>}
+                      </span>
                       {test.timeMs !== undefined && <span className="time">{test.timeMs} ms{test.memoryKb ? ` · ${formatMemory(test.memoryKb)}` : ""}</span>}
                     </button>
-                    {finalVerdicts.includes(test.status) && <span className={`verdict ${test.status}`}>{verdictLabels[test.status]}</span>}
                     <button className="delete-test" onClick={() => removeTest(test.id)} aria-label={`Delete ${test.name}`}><Icon name="close" size={12} /></button>
                   </div>
-                  {test.open && (
-                    <div className="test-fields">
+                  {test.open && (() => {
+                    const given = <>
                       <label>{t("input")}<textarea value={test.input} onChange={(event) => updateTest(test.id, { input: event.target.value, status: "idle" })} spellCheck={false} /></label>
-                      <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error) || test.outputBytes !== undefined}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
+                      <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
+                    </>;
+                    const outputFirst = test.status === "wa" || test.status === "re";
+                    return <div className="test-fields">
+                      {!outputFirst && given}
                       <label>
                         <span className="field-label">{t("output")}{test.status === "wa" && <button className="accept-output" onClick={() => toggleRawOutput(test.id)}>{rawOutputTests.includes(test.id) ? t("showDiff") : t("showRaw")}</button>}</span>
                         {test.checkerMessage !== undefined && test.checkerMessage !== "" && <pre className={`checker-message ${test.status}`}><b>{t("checkerSays")}</b> {test.checkerMessage}</pre>}
@@ -3605,8 +3670,9 @@ function App() {
                             </div>
                           : <textarea value={combinedRunOutput(shownOutput(test.output, (size) => t("outputClipped").replace("{size}", size), test.outputBytes), test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} />}
                       </label>
-                    </div>
-                  )}
+                      {outputFirst && <details className="test-given"><summary>{t("inputAndExpected")}</summary><div className="test-fields">{given}</div></details>}
+                    </div>;
+                  })()}
                 </article>
               ))}
             </div>
@@ -3719,8 +3785,8 @@ function App() {
           />
           </> : <div className="welcome-screen">
             <div className="welcome-mark"><AppMark /></div>
-            <p className="eyebrow">{t("welcomeTagline")}</p>
             <h1>Mild Editor</h1>
+            <p className="welcome-tagline">{t("welcomeTagline")}</p>
             <p>{t("welcomeBody")}</p>
             <div className="welcome-actions"><button className="primary-button" onClick={newProblem}>{t("newWorkspace")} <kbd>{modLabel}N</kbd></button><button className="subtle-button" onClick={() => void openProblem()}>{t("openWorkspace")} <kbd>{modLabel}O</kbd></button></div>
           </div>}
@@ -4004,7 +4070,7 @@ function App() {
 
       {contestOpen && <>
         <div className="popover-dismiss" onMouseDown={() => setContestOpen(false)} />
-        <section className="contest-popover" style={{ left: contestPopoverLeft() }} role="dialog" aria-label={t("contest")} onKeyDown={(event) => { if (event.key === "Escape") setContestOpen(false); }}>
+        <section className="contest-popover" style={contestPopoverPlace()} role="dialog" aria-label={t("contest")} onKeyDown={(event) => { if (event.key === "Escape") setContestOpen(false); }}>
           {contest && contestSpan ? <>
             <ContestHeader span={contestSpan} remainingLabel={t("contestRemaining")} overLabel={t("contestOver")} elapsedLabel={t("contestElapsed")} />
             <div className="contest-board">
@@ -4054,9 +4120,8 @@ function App() {
       </>}
 
       <footer className="statusbar">
-        <span className="wordmark">v{appVersion}</span>
         {updateStatus.phase === "available" && <button className="status-update" onClick={() => setSettingsPage("updates")} title={`${t("updatesAvailable")} v${updateStatus.version}`}>↑ v{updateStatus.version}</button>}
-        <ContestStatusButton span={contestSpan} open={contestOpen} onToggle={() => setContestOpen((open) => !open)} title={t("contest")} overLabel={t("contestOver")} />
+        {!contestSpan && <ContestStatusButton span={null} open={contestOpen} onToggle={() => setContestOpen((open) => !open)} title={t("contest")} overLabel={t("contestOver")} />}
         <span className="status-copy">{summary}</span>
         <span className="file-status">{fileStatus}</span>
         <span className="status-services">
@@ -4073,13 +4138,7 @@ function App() {
             ><Icon name={id === "tests" ? "flask" : id === "problem" ? "globe" : "files"} size={13} />{chipLabel(id)}</button>
           ))}
         </div>
-        <button className="status-settings" onClick={openSettings} aria-label="settings" title={t("preferences")}><Icon name="settings" size={15} /></button>
-        {(activeTab ? language : defaultLanguage) === "cpp" && <select className={`status-language status-profile ${compileProfile}`} value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")} aria-label={t("compileProfile")} title={`${t("compileProfile")}: ${profileFlags[compileProfile]}`}><option value="release">Release</option><option value="debug">Debug</option></select>}
-        <select className="status-language" value={activeTab ? language : defaultLanguage} onChange={(event) => {
-          const next = event.target.value as Language;
-          if (activeTab) void changeActiveLanguage(next);
-          else setDefaultLanguage(next);
-        }} aria-label="Select language" title={activeTab ? "language of the open file" : t("defaultLanguage")}><option value="cpp">C++</option><option value="python">Python 3</option></select>
+        <button className="status-settings" onClick={openSettings} aria-label="settings" title={`${t("preferences")} (v${appVersion})`}><Icon name="settings" size={15} /></button>
       </footer>
     </main>
   );

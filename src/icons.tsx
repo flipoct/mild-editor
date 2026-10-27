@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 /** One stroke icon set for the whole interface: 16px grid, 1.4px round strokes, currentColor. */
 const paths = {
   plus: <path d="M8 3.5v9M3.5 8h9" />,
+  search: <path d="M7 2.4a4.6 4.6 0 1 0 0 9.2 4.6 4.6 0 0 0 0-9.2ZM10.4 10.4l3.2 3.2" />,
+  filter: <path d="M2.4 3.4h11.2M4.6 8h6.8M6.8 12.6h2.4" />,
   close: <path d="m4 4 8 8M12 4l-8 8" />,
   play: <path d="M5 3.2v9.6L12.8 8Z" fill="currentColor" stroke="none" />,
   stop: <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />,

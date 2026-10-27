@@ -280,6 +280,9 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
   const collapsedDirectories = useCollapsedDirectories();
   const [explorerSort, setExplorerSort] = useSetting("explorerSort");
   const [explorerSource, setExplorerSource] = useSetting("explorerSource");
+  // The sort and source menus fold into the header; a filter that hides files keeps them in view.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtering = explorerSort !== "problem" || explorerSource !== "all";
   const rename = overlays.use((state) => state.rename);
   /** The folder a drag would drop into ("" is the workspace root); undefined while there is none. */
   const dragInto = overlays.use((state) => state.drag?.target?.kind === "into" ? state.drag.target.directory : undefined);
@@ -481,12 +484,13 @@ export const Explorer = memo(function Explorer(props: ExplorerProps) {
         <button onClick={() => newFile("")} title={t("newFile")} aria-label={t("newFile")}><Icon name="filePlus" /></button>
         <button onClick={() => beginFolderCreation()} title={t("newFolder")} aria-label={t("newFolder")}><Icon name="folderPlus" /></button>
         {workspacePath && <button onClick={() => void rescanWorkspace(showStatus, t("explorerRescanned"))} title={t("explorerRefresh")} aria-label={t("explorerRefresh")}><Icon name="refresh" /></button>}
+        <button className={filtering ? "active" : ""} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen || filtering} title={t("explorerFilters")} aria-label={t("explorerFilters")}><Icon name="filter" /></button>
       </span>
     </div>
-    <div className="explorer-controls">
+    {(filtersOpen || filtering) && <div className="explorer-controls">
       <label title="sort files"><span>{t("sort")}</span><select value={explorerSort} onChange={(event) => setExplorerSort(event.target.value as ExplorerSort)} aria-label="Explorer sort order"><option value="modified">{t("latestModified")}</option><option value="problem">{t("problemNumber")}</option><option value="name">{t("name")}</option><option value="custom">{t("customOrder")}</option></select></label>
       <label title="filter by source"><span>{t("show")}</span><select value={explorerSource} onChange={(event) => setExplorerSource(event.target.value as ProblemSource | "all")} aria-label="Explorer source filter"><option value="all">{t("allSources")}</option><option value="atcoder">AtCoder</option><option value="codeforces">Codeforces</option><option value="doj">DOJ</option><option value="other">{t("local")}</option></select></label>
-    </div>
+    </div>}
     <div className={`explorer-files ${dragInto === "" ? "drop-target" : ""}`} data-drop-directory="" onContextMenu={(event) => {
       if (!workspacePath || (event.target instanceof Element && event.target.closest(".explorer-file, .explorer-metadata"))) return;
       event.preventDefault();

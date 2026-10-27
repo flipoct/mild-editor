@@ -13,9 +13,9 @@ import { setupMonaco } from "./monacoSetup";
 import { errorMessage, IS_TAURI } from "./platform";
 import { loadTemplateDrafts, templates, templateSources, templateStorageKey } from "./problems";
 import type { BrowserStatus } from "./ProblemWindow";
-import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
+import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
-import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
+import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiStyle, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
 
 /** The pages in the order the navigation lists them, each with the message that names it. */
 const PAGES: Array<[SettingsPage, keyof typeof messages.en]> = [
@@ -27,6 +27,8 @@ const THEME_NOTES: Record<UiTheme, string> = {
   pastel: "Muted, Sublime-inspired", midnight: "Soft pastel dark", latte: "Warm, quiet light", sakura: "Purple, pink and cyan",
   blossom: "Warm retro contrast", nord: "Calm arctic blue", tokyo: "Electric city blue",
 };
+
+const STYLE_NOTES: Record<UiStyle, keyof typeof messages.en> = { mild: "styleMildNote", instrument: "styleInstrumentNote", paper: "stylePaperNote" };
 
 /**
  * What the dialog needs from the app around it. Preferences are not here: every page reads
@@ -124,6 +126,7 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
   const [uiLocale, setUiLocale] = useSetting("uiLocale");
   const [uiZoom, setUiZoom] = useSetting("uiZoom");
   const [uiTheme, setUiTheme] = useSetting("uiTheme");
+  const [uiStyle, setUiStyle] = useSetting("uiStyle");
   const [wallpaperLayout, setWallpaperLayout] = useSetting("wallpaperLayout");
   const [wallpaperScale, setWallpaperScale] = useSetting("wallpaperScale");
   const [wallpaperPositionX, setWallpaperPositionX] = useSetting("wallpaperPositionX");
@@ -188,6 +191,9 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
     <p className="settings-help">{t("appearanceHelp")}</p>
     <div className="appearance-group"><span>{t("theme")}</span><div className="theme-options">
       {UI_THEMES.map(([theme, name]) => <button key={theme} className={`theme-option ${theme} ${uiTheme === theme ? "active" : ""}`} onClick={() => setUiTheme(theme)}><i /><strong>{name}</strong><small>{THEME_NOTES[theme]}</small></button>)}
+    </div></div>
+    <div className="appearance-group"><span>{t("uiStyle")}</span><div className="theme-options">
+      {UI_STYLES.map(([style, name]) => <button key={style} className={`theme-option style-option ${uiStyle === style ? "active" : ""}`} data-preview={style} aria-pressed={uiStyle === style} onClick={() => setUiStyle(style)}><i>Aa</i><strong>{name}</strong><small>{t(STYLE_NOTES[style])}</small></button>)}
     </div></div>
     <div className="appearance-group wallpaper-settings">
       <span>{t("backgroundImage")}</span>
