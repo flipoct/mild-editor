@@ -2,7 +2,7 @@ import { VerdictBadge } from "./VerdictBadge";
 import { commonFolder, contestPlan, verdictView, type ContestSchedule } from "./workbench";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { AppMark, Icon, LanguageIcon } from "./icons";
-import { diffLines, splitFlags } from "./judge";
+import { diffView, splitFlags } from "./judge";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
@@ -48,6 +48,27 @@ import { DEVICES, openDevice, useDevice } from "./collab/devices";
 /** What the editor and the test panel read while no file is open. Constants, so nothing re-runs over them. */
 const NO_CODES: Record<Language, string> = { cpp: "", python: "" };
 const NO_TESTS: TestCase[] = [];
+
+/**
+ * The end of a stretch of interactive output, as much of it as the transcript keeps. The
+ * transcript lays out all of its text again whenever more arrives, so a program printing in a
+ * loop froze the window for tens of seconds; a few screens are what anyone reads of it.
+ */
+const INTERACTIVE_KEPT = 32 * 1024;
+const INTERACTIVE_KEPT_LINES = 1000;
+const interactiveTail = (text: string) => {
+  let start = Math.max(0, text.length - INTERACTIVE_KEPT);
+  // Back from the end, newline by newline, until the lines kept are all there may be.
+  let at = text.length;
+  for (let line = 0; line < INTERACTIVE_KEPT_LINES && at >= start; line += 1) at = text.lastIndexOf("\n", at - 1);
+  if (at >= start) start = at + 1;
+  else if (start > 0) {
+    // Cut by size: from the next whole line, unless a single line is longer than all that is kept.
+    const next = text.indexOf("\n", start);
+    if (next >= 0 && next < text.length - 1) start = next + 1;
+  }
+  return start === 0 ? text : `…\n${text.slice(start)}`;
+};
 
 /** When this run of the editor began; a submission older than that was not made "just now". */
 const APP_STARTED_AT = Date.now();
@@ -2008,7 +2029,7 @@ function App() {
     const runId = crypto.randomUUID();
     const snapshot = tests;
     const checker = checkerProgram();
-    setTests((items) => items.map((test, index) => ({ ...test, status: index === 0 ? "running" : "idle", output: "", error: "", checkerMessage: undefined })));
+    setTests((items) => items.map((test, index) => ({ ...test, status: index === 0 ? "running" : "idle", output: "", outputBytes: undefined, error: "", checkerMessage: undefined })));
     const unlisten = await listen<TestResultEvent>("test-result", (event) => {
       if (event.payload.runId !== runId) return;
       const { index, result, checker: checked } = event.payload;
@@ -2019,6 +2040,7 @@ function App() {
         ? {
           ...test,
           output: hasEditorDiagnostics ? "" : result.stdout,
+          outputBytes: hasEditorDiagnostics ? undefined : result.stdoutBytes,
           error: hasEditorDiagnostics ? "" : result.stderr,
           timeMs: result.timeMs,
           memoryKb: result.memoryKb ?? undefined,
@@ -2068,8 +2090,8 @@ function App() {
       // Output arrives in chunks that rarely line up with lines, so a run of the same
       // stream is kept as one entry and the transcript stays readable.
       const merged = last && last.kind === kind && kind !== "info"
-        ? [...entries.slice(0, -1), { ...last, text: last.text + text }]
-        : [...entries, { id: interactiveEntryIdRef.current++, kind, text }];
+        ? [...entries.slice(0, -1), { ...last, text: interactiveTail(last.text + text) }]
+        : [...entries, { id: interactiveEntryIdRef.current++, kind, text: interactiveTail(text) }];
       return merged.length > 400 ? merged.slice(merged.length - 400) : merged;
     });
   };
@@ -3630,15 +3652,23 @@ function App() {
                         {test.status === "wa" && !rawOutputTests.includes(test.id)
                           ? <div className="test-diff">
                               <div className="diff-row diff-head"><span className="diff-line" /><span>{t("diffExpected")}</span><span>{t("diffActual")}</span></div>
-                              {diffLines(test.expected, test.output, floatTolerance).map((row) => (
+                              {(() => {
+                                const view = diffView(test.expected, test.output, floatTolerance);
+                                const more = (count: number, key: "diffMoreAbove" | "diffMoreBelow") => count > 0 && <div className="diff-row diff-more">{t(key).replace("{count}", count.toLocaleString())}</div>;
+                                return <>
+                                  {more(view.above, "diffMoreAbove")}
+                                  {view.rows.map((row) => (
                                 <div className={`diff-row ${row.same ? "same" : row.whitespaceOnly ? "whitespace" : "different"}`} key={row.line} title={row.whitespaceOnly ? t("diffWhitespace") : undefined}>
                                   <span className="diff-line">{row.line}</span>
                                   <span className="diff-cell">{row.expected === null ? "" : row.whitespaceOnly ? visibleWhitespace(row.expected) : row.expected}</span>
                                   <span className="diff-cell">{row.actual === null ? "" : row.whitespaceOnly ? visibleWhitespace(row.actual) : row.actual}</span>
                                 </div>
-                              ))}
+                                  ))}
+                                  {more(view.below, "diffMoreBelow")}
+                                </>;
+                              })()}
                             </div>
-                          : <textarea value={combinedRunOutput(test.output, test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} />}
+                          : <textarea value={combinedRunOutput(shownOutput(test.output, (size) => t("outputClipped").replace("{size}", size), test.outputBytes), test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} />}
                       </label>
                       {outputFirst && <details className="test-given"><summary>{t("inputAndExpected")}</summary><div className="test-fields">{given}</div></details>}
                     </div>;

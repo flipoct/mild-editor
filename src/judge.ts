@@ -58,11 +58,33 @@ export const outputsMatch = (expected: string, actual: string, tolerance: number
   return left.length === right.length && left.every((line, index) => linesMatch(line, right[index], tolerance));
 };
 
+/** How many rows of a diff are drawn. A runaway loop prints millions of lines, and a row each froze the window. */
+export const DIFF_ROWS = 400;
+
+/**
+ * The lines of a diff worth drawing: at most `limit` rows, starting a little before the
+ * first line that differs, and how many lines are left out above and below them.
+ */
+export const diffView = (expected: string, actual: string, tolerance: number, limit = DIFF_ROWS) => {
+  const left = normalize(expected).split("\n");
+  const right = normalize(actual).split("\n");
+  const total = Math.max(left.length, right.length);
+  let first = 0;
+  while (first < Math.min(left.length, right.length) && linesMatch(left[first], right[first], tolerance)) first += 1;
+  const start = Math.max(0, Math.min(first - 20, total - limit));
+  const end = Math.min(total, start + limit);
+  return { rows: diffRows(left, right, tolerance, start, end), above: start, below: total - end };
+};
+
 export const diffLines = (expected: string, actual: string, tolerance: number): DiffRow[] => {
   const left = normalize(expected).split("\n");
   const right = normalize(actual).split("\n");
+  return diffRows(left, right, tolerance, 0, Math.max(left.length, right.length));
+};
+
+const diffRows = (left: string[], right: string[], tolerance: number, start: number, end: number) => {
   const rows: DiffRow[] = [];
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+  for (let index = start; index < end; index += 1) {
     const expectedLine = index < left.length ? left[index] : null;
     const actualLine = index < right.length ? right[index] : null;
     const same = expectedLine !== null && actualLine !== null && linesMatch(expectedLine, actualLine, tolerance);

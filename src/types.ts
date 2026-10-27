@@ -44,6 +44,8 @@ export type TestCase = {
   memoryKb?: number;
   /** What the problem's checker said about the last run, when it has one. */
   checkerMessage?: string;
+  /** The size of the whole output of the last run, when `output` holds only its beginning. */
+  outputBytes?: number;
 };
 
 
@@ -55,6 +57,8 @@ export type NativeRunResult = {
   timeMs: number;
   memoryKb?: number | null;
   verdict: Verdict;
+  /** The size of the whole output, when `stdout` is only its beginning: the program printed far more than the expected output. */
+  stdoutBytes?: number;
 };
 
 

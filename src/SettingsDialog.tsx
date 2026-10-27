@@ -260,8 +260,24 @@ function useTemplateDrafts(activeLanguage: Language, dialogOpen: boolean) {
   return { language, setLanguage, source, setSource, draft: drafts[key], setDraft, editorRef, setCursor, save };
 }
 
+/**
+ * One editor shows each draft in turn, and switching writes the next one into the same text
+ * model — as an edit, which joins its undo history. Ctrl+Z after a switch then brought the
+ * draft that was shown before back into the one shown now, and Save kept it there: a C++
+ * template holding Python. Starting the history afresh on every switch keeps each draft to
+ * the edits made to it. Effects of the editor run before this one, so the new draft is in
+ * the model by now, and the change this reports is that draft, unchanged.
+ */
+const useHistoryPerDraft = (editorRef: { current: Monaco.editor.IStandaloneCodeEditor | null }, draftKey: string) => {
+  useEffect(() => {
+    const model = editorRef.current?.getModel();
+    if (model) model.setValue(model.getValue());
+  }, [editorRef, draftKey]);
+};
+
 function TemplatePage({ t, drafts, monaco, applyTemplate, close }: Pick<SettingsDialogProps, "t" | "applyTemplate"> & { drafts: ReturnType<typeof useTemplateDrafts>; monaco: MonacoLook; close: () => void }) {
   const { language, source } = drafts;
+  useHistoryPerDraft(drafts.editorRef, `${source}/${language}`);
   return <>
     <div className="template-tabs" role="tablist" aria-label="Template language">
       <button className={language === "cpp" ? "active" : ""} onClick={() => drafts.setLanguage("cpp")}>C++</button>
@@ -328,6 +344,8 @@ function useSnippetEditor(activeLanguage: Language) {
 
 function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { editor: ReturnType<typeof useSnippetEditor>; monaco: MonacoLook }) {
   const { draft, setDraft } = editor;
+  // Each snippet keeps its own undo history too: the editor is shared in the same way.
+  useHistoryPerDraft(editor.editorRef, draft.id);
   return <div className="snippet-settings">
     <aside className="snippet-list">
       <button className="new-snippet" onClick={editor.startNew}><Icon name="plus" size={13} />New snippet</button>
