@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.19.0
+
+- **The workbench is laid out around a run.** The title bar holds where you are, one field that opens quick open and the command palette, and beside **Run** everything that decides a run: the language, the compile profile and **Submit**. New, open, save and import are in a **File** menu on Windows and Linux; macOS keeps them in its menu bar. During a contest the clock sits in the title bar and the board opens beneath it.
+- **Results lead with the outcome.** After a run the test panel says in words how many passed and which failed. Failures come first and the first one opens by itself, a wrong answer at its diff with the input and expected output folded beneath. Each case shows its verdict beside its name, and a case not yet run says so.
+- **A Style setting**, beside the theme: the theme sets the colours, the style sets the form. **Mild**, the default, is soft and rounded; **Instrument** is square and dense, with labels in the code face; **Paper** sets headings in a serif and rules the lists.
+  - Every control shows a focus outline, verdict colours read on the light theme too, no text is smaller than 11px, and animation stops when the system asks for less motion.
+- Tabs show the judge's verdict, and an unsaved tab shows a dot in place of its close cross. Import closes the tab row. **Insert snippet** is in the command palette, and the explorer's sort and filter fold behind a button in its header.
+- A first start lays the panels out as files, code, results at their default widths. It used to split them in turn.
+- **A program that floods its output no longer freezes the window**, nor Stop with it. An output far longer than the expected one arrives cut short, with its full size: it is a wrong answer either way, and a checker still reads all of it. The output box shows the first 2000 lines, the diff 400 rows from just before the first difference, and the interactive transcript its last 1000 lines, each saying how much it leaves out.
+- In the template and snippet editors, Ctrl+Z after switching drafts no longer brings the previous draft back into the one shown. Saved, that could leave a C++ template holding Python.
+
 ## 1.18.1
 
 - A Mac can join a shared room on another computer. It could not before, over the same Wi-Fi or Tailscale, and said the room could not be reached: the Mac app now connects through a loopback tunnel of its own.

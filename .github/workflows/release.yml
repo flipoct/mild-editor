@@ -57,11 +57,16 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.18.1
+            ## What's changed in v1.19.0
 
-            - **A Mac can join a shared room** on another computer, over the same Wi-Fi or Tailscale. It could not before and said the room could not be reached.
+            - **The workbench is laid out around a run**: the language, compile profile and Submit sit beside Run in the title bar, with one field for quick open and the command palette, and a File menu on Windows and Linux.
+            - **Results lead with the outcome**: how many passed in words, failures first, and the first wrong answer opened at its diff.
+            - **A Style setting** beside the theme: Mild (soft and rounded), Instrument (square and dense) or Paper (serif headings, ruled lists).
+            - Tabs show the judge's verdict, and an unsaved tab a dot.
+            - **A program that floods its output no longer freezes the window**, nor Stop with it.
+            - Ctrl+Z after switching drafts in the template editor no longer brings the previous draft back.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.18.1/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.19.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
