@@ -26,6 +26,7 @@ const PAGES: Array<[SettingsPage, keyof typeof messages.en]> = [
 const THEME_NOTES: Record<UiTheme, string> = {
   pastel: "Muted, Sublime-inspired", midnight: "Soft pastel dark", latte: "Warm, quiet light", sakura: "Purple, pink and cyan",
   blossom: "Warm retro contrast", nord: "Calm arctic blue", tokyo: "Electric city blue",
+  "one-dark": "Atom's dark, a soft blue-grey", "github-dimmed": "GitHub's dark, contrast turned down", everforest: "Soft green-grey, easy on the eyes",
 };
 
 const STYLE_NOTES: Record<UiStyle, keyof typeof messages.en> = { mild: "styleMildNote", instrument: "styleInstrumentNote", paper: "stylePaperNote" };

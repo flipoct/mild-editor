@@ -13,7 +13,7 @@ export type ProblemLimits = { timeLimitMs?: number; memoryLimitMb?: number };
 
 export type CompileProfile = "release" | "debug";
 
-export type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo";
+export type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "nord" | "tokyo" | "one-dark" | "github-dimmed" | "everforest";
 
 /** The interface's form, independent of the theme's palette: shape, density and type. */
 export type UiStyle = "mild" | "instrument" | "paper";

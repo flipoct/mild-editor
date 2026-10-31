@@ -141,7 +141,7 @@ export const shortcutLabel = (key: string, modifiers: { shift?: boolean; alt?: b
 export const UI_STYLES: Array<[UiStyle, string]> = [["mild", "Mild"], ["instrument", "Instrument"], ["paper", "Paper"]];
 export const isUiStyle = (value: unknown): value is UiStyle => UI_STYLES.some(([style]) => style === value);
 
-export const UI_THEMES: Array<[UiTheme, string]> = [["pastel", "Pastel Dusk"], ["midnight", "Catppuccin Mocha"], ["latte", "Rosé Pine Dawn"], ["sakura", "Dracula"], ["blossom", "Gruvbox Dark"], ["nord", "Nord"], ["tokyo", "Tokyo Night"]];
+export const UI_THEMES: Array<[UiTheme, string]> = [["pastel", "Pastel Dusk"], ["midnight", "Catppuccin Mocha"], ["latte", "Rosé Pine Dawn"], ["sakura", "Dracula"], ["blossom", "Gruvbox Dark"], ["nord", "Nord"], ["tokyo", "Tokyo Night"], ["one-dark", "One Dark Pro"], ["github-dimmed", "GitHub Dark Dimmed"], ["everforest", "Everforest Dark"]];
 
 /** MinGW ships no sanitizer runtimes, so the Windows default stops at the checked containers. */
 export const DEFAULT_PROFILE_FLAGS: Record<CompileProfile, string> = {

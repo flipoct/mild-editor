@@ -25,7 +25,7 @@ export const terminalKeyIsEditors = (event: TerminalKey) => keyIsEditors(event, 
 /** Whether a key event was typed into the terminal, where the editor's shortcuts stand aside. */
 export const typedInTerminal = (event: Event) => event.target instanceof Element && Boolean(event.target.closest(".builtin-terminal"));
 
-/** The terminal's colours from the theme's own tokens, so all seven themes reach it. */
+/** The terminal's colours from the theme's own tokens, so every theme reaches it. */
 const themeFromPage = () => {
   const style = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;

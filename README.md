@@ -122,7 +122,7 @@ Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first
 
 Templates are stored separately by judge and language. Besides filename, platform, date, and time variables, `${cursor}` controls the initial caret position in a newly created file. Use **Set cursor here** in the template editor to place it without typing the marker.
 
-The full interface and Monaco Editor share the selected palette. Mild Editor includes Pastel Dusk, Catppuccin Mocha, Rosé Pine Dawn, Dracula, Gruvbox Dark, Nord, and Tokyo Night.
+The full interface and Monaco Editor share the selected palette. Mild Editor includes Pastel Dusk, Catppuccin Mocha, Rosé Pine Dawn, Dracula, Gruvbox Dark, Nord, Tokyo Night, One Dark Pro, GitHub Dark Dimmed, and Everforest Dark.
 
 A style, chosen beside the theme in **Settings → appearance**, sets the interface's form while the theme keeps its colours: **Mild** (the default) is soft and rounded, **Instrument** is square and dense with labels in the code face, and **Paper** sets headings in a serif and rules the lists instead of shading them. Any style works with any theme.
 
@@ -243,6 +243,8 @@ Native bundles are generated under `src-tauri/target/release/bundle`. GitHub Act
 ## Credits
 
 The C++ and Python marks beside a filename come from [Devicon](https://devicon.dev), MIT licensed, Copyright (c) 2015 konpa, in the colours the two languages are known by rather than the theme's. Each is cropped to its own artwork so the pair line up with a filename and come out the same size — Devicon's Python is drawn with a drop shadow, which is dropped here, and the snakes would otherwise hang above centre. The marks remain trademarks of their respective owners and are used here only to say which language a file is in. Every other icon is drawn for this project.
+
+One Dark Pro, GitHub Dark Dimmed and Everforest Dark are adapted from their VS Code themes, all MIT licensed: [OneDark-Pro](https://github.com/Binaryify/OneDark-Pro), Copyright (c) 2013-2022 Binaryify; [github-vscode-theme](https://github.com/primer/github-vscode-theme), Copyright (c) 2020 Primer; [everforest-vscode](https://github.com/sainnhe/everforest-vscode), Copyright (c) 2020 sainnhe. The code colours are theirs; a few interface colours are adjusted so small text and buttons stay readable.
 
 The terminal is drawn by [xterm.js](https://xtermjs.org), MIT licensed, Copyright (c) 2017-2019 The xterm.js authors, (c) 2014-2016 SourceLair and (c) 2012-2013 Christopher Jeffrey, and runs on [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty) from WezTerm, MIT licensed, Copyright (c) 2018 Wez Furlong.
 
