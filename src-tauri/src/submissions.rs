@@ -38,10 +38,14 @@ pub(crate) struct SubmissionStatus {
     #[serde(default)]
     submissions: Vec<SubmissionRecord>,
     /// The judge was asked and this is its whole answer. False when it could not be reached,
-    /// or when asking about this problem was put off to a later poll: `status` is then
-    /// empty for want of an answer, not because there is no submission — and the verdict
-    /// that turns up next is an old one, which the editor must not announce as news.
+    /// when no handle is set for it, or when asking about this problem was put off to a later
+    /// poll: `status` is then empty for want of an answer, not because there is no submission
+    /// — and the verdict that turns up next is an old one, which the editor must not announce
+    /// as news.
     settled: bool,
+    /// Which view of an undated judge this came from, and for whom. Two views list different
+    /// submissions, so a difference between their answers says nothing about a new one.
+    answered_by: Option<String>,
 }
 
 pub(crate) fn codeforces_problem_key(url: &str) -> Option<(i64, String)> {
@@ -304,6 +308,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
         let mut submission_url = None;
         let mut submitted_at = 0u64;
         let mut settled = true;
+        let mut answered_by = None;
         match problem.source.as_str() {
             "codeforces" if !request.codeforces_handle.trim().is_empty() => {
                 if let Some((contest, index)) = codeforces_problem_key(&problem.source_url) {
@@ -354,13 +359,17 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                         Some(session) => {
                             let verdict = session.verdict(&problem_id);
                             settled = !session.unsettled;
+                            answered_by = Some(format!("session:{doj_handle}"));
                             verdict
                         }
                         None => {
                             let mut url = reqwest::Url::parse("https://doj.kr/ko/status").unwrap();
                             url.query_pairs_mut().append_pair("user", &doj_handle).append_pair("problem", &problem_id);
                             let page = client.get(url).send().and_then(|response| response.error_for_status()).and_then(|response| response.text()).ok();
+                            // With no submissions the table is still there; without it, this is some other page.
+                            let page = page.filter(|html| html.contains("<table"));
                             settled = page.is_some();
+                            answered_by = Some(format!("public:{doj_handle}"));
                             page.and_then(|html| doj_verdict(&html, &problem_id, &doj_handle))
                         }
                     };
@@ -370,9 +379,10 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                     }
                 }
             }
-            _ => {}
+            // No handle for this judge: it was not asked.
+            _ => settled = false,
         }
-        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new(), settled });
+        statuses.push(SubmissionStatus { source_url: problem.source_url, status, submission_url, submitted_at, submissions: Vec::new(), settled, answered_by });
     }
     if let Some(folder_path) = folder_path {
         let folder = std::path::PathBuf::from(folder_path);
@@ -536,6 +546,20 @@ mod tests {
     }
 
     #[test]
+    fn a_judge_with_no_handle_is_not_an_answer() {
+        let problem = |source: &str, url: &str| SubmissionProblem { source: source.into(), source_url: url.into() };
+        let statuses = refresh_submission_statuses_sync(SubmissionStatusRequest {
+            folder_path: None,
+            problems: vec![problem("doj", "https://doj.kr/ko/problems/286"), problem("atcoder", "https://atcoder.jp/contests/abc400/tasks/abc400_a"), problem("codeforces", "https://codeforces.com/contest/1/problem/A")],
+            atcoder_handle: " ".into(),
+            codeforces_handle: String::new(),
+            doj_handle: String::new(),
+        }, None).unwrap();
+        assert_eq!(statuses.len(), 3);
+        assert!(statuses.iter().all(|status| !status.settled && status.status.is_none() && status.answered_by.is_none()));
+    }
+
+    #[test]
     #[ignore = "requires access to doj.kr and the public submissions of one of its users"]
     fn reads_doj_verdicts_from_the_live_status_page() {
         let client = reqwest::blocking::Client::builder().user_agent("MildEditor/test").timeout(Duration::from_secs(30)).build().unwrap();
@@ -570,6 +594,7 @@ mod tests {
             submitted_at: at,
             submissions: Vec::new(),
             settled: true,
+            answered_by: None,
         };
         let mut history = Vec::new();
 
@@ -594,7 +619,7 @@ mod tests {
 
         // Nothing to report leaves the history alone, and it never grows without bound.
         let mut empty = Vec::new();
-        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new(), settled: true });
+        record_submission(&mut empty, &SubmissionStatus { source_url: String::new(), status: None, submission_url: None, submitted_at: 0, submissions: Vec::new(), settled: true, answered_by: None });
         assert!(empty.is_empty());
         let mut long = Vec::new();
         for index in 0..60 {

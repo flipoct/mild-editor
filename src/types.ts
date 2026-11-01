@@ -174,7 +174,7 @@ export type WorkspaceFileResult = { filename: string; title: string; language: L
 export type SubmissionRecord = { status: string; url?: string; at: number };
 
 /** `settled` is false when the judge was not asked this time: no status then means "not known yet", not "no submission". */
-export type SubmissionStatusResult = { sourceUrl: string; status?: string; submissionUrl?: string; submittedAt?: number; submissions?: SubmissionRecord[]; settled?: boolean };
+export type SubmissionStatusResult = { sourceUrl: string; status?: string | null; submissionUrl?: string | null; submittedAt?: number; submissions?: SubmissionRecord[]; settled?: boolean; answeredBy?: string | null };
 
 export type BackgroundImageFile = { bytes: number[]; mime: string };
 
