@@ -30,7 +30,8 @@ import { messages, updateStatusLine } from "./i18n";
 import { createThemeWindowIcon } from "./themeIcon";
 import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
-import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isPendingVerdict, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
+import { isPendingVerdict, newVerdicts, type SeenVerdict } from "./verdictNotice";
+import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
 import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_STYLES, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
 import { useLatest, useNextRender, useStableCallback } from "./hooks";
@@ -123,7 +124,7 @@ function App() {
   const closedTabsRef = useRef<string[]>([]);
   const [verdictNotices, setVerdictNotices] = useState<VerdictNotice[]>([]);
   /** Latest submission the poll has seen per problem URL; a change from it is what gets announced. */
-  const seenSubmissionsRef = useRef(new Map<string, { status?: string; submissionUrl?: string }>());
+  const seenSubmissionsRef = useRef(new Map<string, SeenVerdict>());
   const [explorerSort] = useSetting("explorerSort");
   const [sourceFile, setSourceFile] = useState<ProblemTab | null>(null);
   const [sourceValue, setSourceValue] = useState<ProblemSource>("other");
@@ -1920,25 +1921,10 @@ function App() {
       };
       setTabs((items) => items.map(update));
       setSavedFiles((items) => items.map(update));
-      // A verdict is news when it is of a submission made while the editor was running. A
-      // judge that dates its submissions says so itself; one that does not is believed when
-      // the verdict differs from what it answered before — and only an answer counts for
-      // that, so a problem it had not been asked about yet, or could not be reached for,
-      // has no "before" and its old verdict is taken in silently when it does arrive.
-      const seen = seenSubmissionsRef.current;
       const fresh: VerdictNotice[] = [];
-      for (const result of results) {
-        if (result.settled === false) continue;
-        const before = seen.get(result.sourceUrl);
-        const status = result.status || undefined;
-        const submissionUrl = result.submissionUrl || undefined;
-        const changed = Boolean(before) && (before?.status !== status || before?.submissionUrl !== submissionUrl);
-        const recent = result.submittedAt ? result.submittedAt * 1000 >= APP_STARTED_AT - 60_000 && (changed || !before) : changed;
-        if (status && !isPendingVerdict(status) && recent) {
-          const file = files.find((item) => item.sourceUrl === result.sourceUrl);
-          if (file) fresh.push({ id: Date.now() + fresh.length, filename: file.filename, status, submissionUrl });
-        }
-        seen.set(result.sourceUrl, { status, submissionUrl });
+      for (const { sourceUrl, status, submissionUrl } of newVerdicts(results, seenSubmissionsRef.current, APP_STARTED_AT)) {
+        const file = files.find((item) => item.sourceUrl === sourceUrl);
+        if (file) fresh.push({ id: Date.now() + fresh.length, filename: file.filename, status, submissionUrl });
       }
       if (fresh.length) {
         setVerdictNotices((items) => [...items.filter((item) => !fresh.some((notice) => fileKey(notice.filename) === fileKey(item.filename))), ...fresh].slice(-4));

@@ -51,9 +51,6 @@ export const formatClock = (ms: number) => {
 /** Accepted, a full score included. */
 export const isAccepted = verdictAccepted;
 
-/** The judge is still working on it: `WJ`, `TESTING`, or AtCoder's running count `12/34`. */
-export const isPendingVerdict = (status: string) => /^(WJ|WR|JUDGING|TESTING|IN QUEUE)$/i.test(status.trim()) || /^\d+\s*\/\s*\d+/.test(status.trim());
-
 export const VERDICT_NOTICE_MS = 15_000;
 
 
