@@ -1,4 +1,4 @@
-/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand (the seven palettes are the user's) · redesign: restyle
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand (the palettes are the user's) · redesign: restyle
  * paper: the theme's --bg-1 · accent: the theme's --accent · display: the style's --font-head · body: system UI face
  * nav: kept (title bar, tabs, status bar) · signature: the test list, soft rows in Mild and ruled in Instrument and Paper, a state mark by each name and the verdict set in type (struck as a block in Instrument) · states: idle, running, judged, empty, error
  * axes: theme/style/accent · posture: workbench · contrast: pass · v2.0.0 */
@@ -67,6 +67,9 @@
 :root[data-theme="blossom"] { --bg-0: #1d2021; --bg-1: #282828; --bg-2: #32302f; --bg-3: #3c3836; --bg-editor: #282828; --border: #504945; --text: #ebdbb2; --muted: #a89984; --accent: #fabd2f; --accent-soft: #504721; --selection: #665c54aa; --success: #b8bb26; --warning: #fabd2f; --danger: #fb4934; --field: #242321; --idle: #928374; --cpp: #83a598; --python: #fabd2f; --json: #fe8019; --overlay: #141515cc; --shadow: #00000099; }
 :root[data-theme="nord"] { --bg-0: #242933; --bg-1: #2e3440; --bg-2: #343b49; --bg-3: #3b4252; --bg-editor: #2e3440; --border: #4c566a; --text: #e5e9f0; --muted: #a7b0c0; --accent: #88c0d0; --accent-soft: #3d5260; --selection: #434c5eaa; --success: #a3be8c; --warning: #ebcb8b; --danger: #bf616a; --field: #292e38; --idle: #616e88; --cpp: #81a1c1; --python: #ebcb8b; --json: #d08770; --overlay: #1d2129cc; --shadow: #10131999; }
 :root[data-theme="tokyo"] { --bg-0: #15161e; --bg-1: #1a1b26; --bg-2: #202230; --bg-3: #292e42; --bg-editor: #1a1b26; --border: #3b4261; --text: #c0caf5; --muted: #9aa5ce; --accent: #7aa2f7; --accent-soft: #293b63; --selection: #33467c88; --success: #9ece6a; --warning: #e0af68; --danger: #f7768e; --field: #161720; --idle: #565f89; --cpp: #7dcfff; --python: #e0af68; --json: #ff9e64; --overlay: #0d0e14cc; --shadow: #05060a99; }
+:root[data-theme="one-dark"] { --bg-0: #21252b; --bg-1: #21252b; --bg-2: #282c32; --bg-3: #30353b; --bg-editor: #282c34; --border: #3e4452; --text: #abb2bf; --muted: #8f94a0; --accent: #61afef; --accent-soft: #2e4152; --selection: #67769660; --success: #8cc265; --warning: #d18f52; --danger: #e05561; --field: #1d1f23; --idle: #797e89; --cpp: #4aa5f0; --python: #d18f52; --json: #c162de; --overlay: #00000099; --shadow: #00000088; --on-accent: #21252b; --tone-pull: #abb2bf; --tone-share: 54%; }
+:root[data-theme="github-dimmed"] { --bg-0: #1c2128; --bg-1: #1c2128; --bg-2: #2d333b; --bg-3: #2c3239; --bg-editor: #22272e; --border: #444c56; --text: #adbac7; --muted: #8794a1; --accent: #316dca; --accent-soft: #203048; --selection: #316dca44; --success: #57ab5a; --warning: #c69026; --danger: #f47067; --field: #22272e; --idle: #727d89; --cpp: #539bf5; --python: #c69026; --json: #b083f0; --overlay: #00000099; --shadow: #00000088; --on-accent: #ffffff; --tone-pull: #adbac7; --tone-share: 62%; }
+:root[data-theme="everforest"] { --bg-0: #2d353b; --bg-1: #2d353b; --bg-2: #353c41; --bg-3: #3f4547; --bg-editor: #2d353b; --border: #4e5251; --text: #d3c6aa; --muted: #a4aa92; --accent: #a7c080; --accent-soft: #455149; --selection: #475258c0; --success: #a7c080; --warning: #dbbc7f; --danger: #e67e80; --field: #2d353b; --idle: #8c9381; --cpp: #7fbbb3; --python: #dbbc7f; --json: #d699b6; --overlay: #00000099; --shadow: #00000088; --on-accent: #2d353b; --tone-pull: #d3c6aa; --tone-share: 62%; }
 /* Instrument: square, dense, labels and heads in the code face. A tool for the clock. */
 :root[data-style="instrument"] {
   --font-head: var(--font-mono); --font-label: var(--font-mono);
@@ -102,6 +105,9 @@
   --swatch-blossom-a: #fabd2f; --swatch-blossom-b: #83a598; --swatch-blossom-c: #282828;
   --swatch-nord-a: #88c0d0; --swatch-nord-b: #a3be8c; --swatch-nord-c: #2e3440;
   --swatch-tokyo-a: #7aa2f7; --swatch-tokyo-b: #9ece6a; --swatch-tokyo-c: #1a1b26;
+  --swatch-one-dark-a: #61afef; --swatch-one-dark-b: #8cc265; --swatch-one-dark-c: #282c34;
+  --swatch-github-dimmed-a: #316dca; --swatch-github-dimmed-b: #57ab5a; --swatch-github-dimmed-c: #22272e;
+  --swatch-everforest-a: #a7c080; --swatch-everforest-b: #a7c080; --swatch-everforest-c: #2d353b;
 }
 :root[data-platform="mac"] { --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif; --font-mono: "SF Mono", Menlo, Monaco, ui-monospace, monospace; }
 
@@ -678,6 +684,9 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .theme-option.blossom i { --a: var(--swatch-blossom-a); --b: var(--swatch-blossom-b); --c: var(--swatch-blossom-c); }
 .theme-option.nord i { --a: var(--swatch-nord-a); --b: var(--swatch-nord-b); --c: var(--swatch-nord-c); }
 .theme-option.tokyo i { --a: var(--swatch-tokyo-a); --b: var(--swatch-tokyo-b); --c: var(--swatch-tokyo-c); }
+.theme-option.one-dark i { --a: var(--swatch-one-dark-a); --b: var(--swatch-one-dark-b); --c: var(--swatch-one-dark-c); }
+.theme-option.github-dimmed i { --a: var(--swatch-github-dimmed-a); --b: var(--swatch-github-dimmed-b); --c: var(--swatch-github-dimmed-c); }
+.theme-option.everforest i { --a: var(--swatch-everforest-a); --b: var(--swatch-everforest-b); --c: var(--swatch-everforest-c); }
 /* A style's tile is a letter set in its face, on its corner. */
 .style-option i { display: grid; place-items: center; border-radius: var(--r-m); background: var(--bg-3); color: var(--text); font: 600 var(--fs-s) var(--font-ui); font-style: normal; }
 .style-option[data-preview="instrument"] i { border-radius: 0; font-family: var(--font-mono); }

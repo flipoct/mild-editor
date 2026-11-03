@@ -82,6 +82,21 @@ export const setupMonaco: BeforeMount = (monaco) => {
     rules: [{ token: "comment", foreground: "565f89", fontStyle: "italic" }, { token: "keyword", foreground: "bb9af7" }, { token: "string", foreground: "9ece6a" }, { token: "number", foreground: "ff9e64" }, { token: "type", foreground: "7dcfff" }],
     colors: { ...monacoChrome("#202230", "#161720", "#3b4261", "#292e42", "#7aa2f7"), "editor.background": "#1a1b26", "editor.foreground": "#c0caf5", "editorLineNumber.foreground": "#3b4261", "editorLineNumber.activeForeground": "#a9b1d6", "editorCursor.foreground": "#7aa2f7", "editor.selectionBackground": "#33467c88", "editor.lineHighlightBackground": "#202230", "editorIndentGuide.background1": "#292e42", "editorIndentGuide.activeBackground1": "#515c7e" },
   });
+  monaco.editor.defineTheme("mild-one-dark", {
+    base: "vs-dark", inherit: true,
+    rules: [{ token: "comment", foreground: "7f848e", fontStyle: "italic" }, { token: "keyword", foreground: "c678dd" }, { token: "string", foreground: "98c379" }, { token: "number", foreground: "d19a66" }, { token: "type", foreground: "e5c07b" }, { token: "identifier.function", foreground: "61afef" }],
+    colors: { ...monacoChrome("#282c32", "#1d1f23", "#3e4452", "#30353b", "#61afef"), "editor.background": "#282c34", "editor.foreground": "#abb2bf", "editorLineNumber.foreground": "#495162", "editorLineNumber.activeForeground": "#abb2bf", "editorCursor.foreground": "#528bff", "editor.selectionBackground": "#67769660", "editor.lineHighlightBackground": "#2c313c", "editorIndentGuide.background1": "#3b4048", "editorIndentGuide.activeBackground1": "#c8c8c859", "editorBracketMatch.background": "#515a6b", "editorBracketMatch.border": "#515a6b" },
+  });
+  monaco.editor.defineTheme("mild-github-dimmed", {
+    base: "vs-dark", inherit: true,
+    rules: [{ token: "comment", foreground: "768390", fontStyle: "italic" }, { token: "keyword", foreground: "f47067" }, { token: "string", foreground: "96d0ff" }, { token: "number", foreground: "6cb6ff" }, { token: "type", foreground: "8ddb8c" }, { token: "identifier.function", foreground: "dcbdfb" }],
+    colors: { ...monacoChrome("#2d333b", "#22272e", "#444c56", "#2c3239", "#316dca"), "editor.background": "#22272e", "editor.foreground": "#adbac7", "editorLineNumber.foreground": "#636e7b", "editorLineNumber.activeForeground": "#adbac7", "editorCursor.foreground": "#539bf5", "editor.selectionBackground": "#316dca44", "editor.lineHighlightBackground": "#636e7b1a", "editorIndentGuide.background1": "#adbac71f", "editorIndentGuide.activeBackground1": "#adbac73d", "editorBracketMatch.background": "#57ab5a40", "editorBracketMatch.border": "#57ab5a99" },
+  });
+  monaco.editor.defineTheme("mild-everforest", {
+    base: "vs-dark", inherit: true,
+    rules: [{ token: "comment", foreground: "859289", fontStyle: "italic" }, { token: "keyword", foreground: "e69875" }, { token: "string", foreground: "dbbc7f" }, { token: "number", foreground: "d699b6" }, { token: "type", foreground: "7fbbb3" }, { token: "identifier.function", foreground: "a7c080" }],
+    colors: { ...monacoChrome("#353c41", "#2d353b", "#4e5251", "#3f4547", "#a7c080"), "editor.background": "#2d353b", "editor.foreground": "#d3c6aa", "editorLineNumber.foreground": "#7f897da0", "editorLineNumber.activeForeground": "#9aa79de0", "editorCursor.foreground": "#d3c6aa", "editor.selectionBackground": "#475258c0", "editor.lineHighlightBackground": "#3d484d90", "editorIndentGuide.background1": "#9aa79d20", "editorIndentGuide.activeBackground1": "#9aa79d50", "editorBracketMatch.background": "#4f585e", "editorBracketMatch.border": "#2d353b00" },
+  });
   if (!completionsRegistered) {
     completionsRegistered = true;
     const register = (languageId: string, entries: Array<[string, string, string?]>) => monaco.languages.registerCompletionItemProvider(languageId, {
