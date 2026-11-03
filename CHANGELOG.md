@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.19.1
+
+- **Three more themes**, from their VS Code themes: **One Dark Pro**, **GitHub Dark Dimmed** and **Everforest Dark**. They colour the interface and the code, and work with any style. The code colours are the themes' own; a few interface colours are moved only as far as small text, buttons and verdicts need to stay readable.
+- The C++ mark beside a file has white letters standing on its hexagon. Its letters were cut out, so the panel showed through them and the mark changed with the theme.
+- Opening the editor no longer announces an old DOJ verdict as if it had just been judged. DOJ does not date its submissions, and its public status page leaves out contest submissions that the logged-in page lists: an AC read from one after nothing was found on the other looked new. Only answers from the same page are now compared.
+
 ## 1.19.0
 
 - **The workbench is laid out around a run.** The title bar holds where you are, one field that opens quick open and the command palette, and beside **Run** everything that decides a run: the language, the compile profile and **Submit**. New, open, save and import are in a **File** menu on Windows and Linux; macOS keeps them in its menu bar. During a contest the clock sits in the title bar and the board opens beneath it.
