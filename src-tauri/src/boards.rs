@@ -47,7 +47,7 @@ fn board_path(folder: &str, filename: &str) -> Result<PathBuf, String> {
 }
 
 /// Every board in the workspace, by workspace path, in the explorer's order.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_workspace_boards(request: BoardsRequest) -> Result<Vec<String>, String> {
     let folder = PathBuf::from(&request.folder_path);
     let mut boards = Vec::new();
@@ -60,7 +60,7 @@ pub(crate) fn list_workspace_boards(request: BoardsRequest) -> Result<Vec<String
     Ok(boards)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_workspace_board(request: BoardRequest) -> Result<String, String> {
     let path = board_path(&request.folder_path, &request.filename)?;
     let size = fs::metadata(&path).map_err(|error| format!("Could not read the board: {error}"))?.len();
@@ -71,7 +71,7 @@ pub(crate) fn read_workspace_board(request: BoardRequest) -> Result<String, Stri
 }
 
 /// Writes beside the board and moves it over, so a board is never left half written.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_workspace_board(request: WriteBoardRequest) -> Result<(), String> {
     if request.text.len() as u64 > MOST_BYTES {
         return Err("The board is too large to save.".into());
@@ -90,7 +90,7 @@ pub(crate) fn write_workspace_board(request: WriteBoardRequest) -> Result<(), St
     fs::write(&path, &request.text).map_err(|error| format!("Could not save the board: {error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_workspace_board(request: BoardRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let path = board_path(&request.folder_path, &request.filename)?;

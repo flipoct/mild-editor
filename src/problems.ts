@@ -240,6 +240,13 @@ export const savedProblem = (tab: ProblemTab) => ({
   source: tab.source, sourceUrl: tab.sourceUrl, judgeStatus: tab.judgeStatus, limits: tab.limits, modifiedAt: tab.modifiedAt,
 });
 
+/** Where `savedTestsRef` keeps a tab's last saved tests: a tab is only ever saved into its own workspace. */
+export const savedTestsKey = (folderPath: string, tabId: string) => `${folderPath}\n${tabId}`;
+
+/** Whether two lists of tests save the same: only the name, input and expected output reach the disk. */
+export const sameSavedTests = (a: readonly TestCase[], b: readonly TestCase[]) =>
+  a === b || (a.length === b.length && a.every((test, index) => test.name === b[index].name && test.input === b[index].input && test.expected === b[index].expected));
+
 /** The contest board knows a problem by its path; a rename or a move keeps its solve time. */
 export const rekeyContest = (contest: ContestState, rekey: (key: string) => string): ContestState => ({
   ...contest,
