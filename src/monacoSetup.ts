@@ -4,7 +4,12 @@ import type { CodeSnippet } from "./types";
 
 let completionsRegistered = false;
 let snippetCompletionSource: CodeSnippet[] = [];
-/** The user's snippets, offered as `snippet::name` completions next to the built-in ones. */
+/**
+ * The user's snippets, offered by name among the completions. They are the only items of the
+ * Snippet kind, so the editor's `snippetSuggestions: "top"` puts them above everything else
+ * (the built-in templates, clangd, words in the file); among themselves, the order of the list
+ * in Settings → Snippets decides when two match what was typed equally well.
+ */
 export const setSnippetCompletions = (snippets: CodeSnippet[]) => { snippetCompletionSource = snippets; };
 
 /** Defines the editor themes that go with each interface theme, and registers the completions once. */
@@ -103,21 +108,19 @@ export const setupMonaco: BeforeMount = (monaco) => {
       provideCompletionItems(model: Monaco.editor.ITextModel, position: Monaco.Position) {
         const word = model.getWordUntilPosition(position);
         const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
-        const linePrefix = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
-        const snippetPrefix = /snippet::[\w-]*$/.exec(linePrefix)?.[0];
-        const snippetRange = snippetPrefix
-          ? { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: position.column - snippetPrefix.length, endColumn: position.column }
-          : range;
         const language = languageId === "cpp" ? "cpp" : "python";
-        const builtIns = entries.map(([label, insertText, detail]) => ({ label, insertText, detail, range, kind: monaco.languages.CompletionItemKind.Snippet, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet }));
+        // Templates, not the user's own: an ordinary item, ranked with the rest by how well it matches.
+        const builtIns = entries.map(([label, insertText, detail]) => ({ label, insertText, detail, range, sortText: `1${label}`, kind: monaco.languages.CompletionItemKind.Function, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet }));
         const snippets = snippetCompletionSource
           .filter((snippet) => snippet.language === language && snippet.name.trim())
-          .map((snippet) => ({
-            label: `snippet::${snippet.name.trim()}`,
-            filterText: `snippet::${snippet.name.trim()}`,
+          .map((snippet, order) => ({
+            label: { label: snippet.name.trim(), description: "snippet" },
+            filterText: snippet.name.trim(),
+            // The list's order, among snippets that match equally well.
+            sortText: `0${String(order).padStart(4, "0")}`,
             insertText: snippet.code,
-            detail: "Mild Editor snippet",
-            range: snippetRange,
+            documentation: { value: `\`\`\`${language}\n${snippet.code.replace(/\$\{\d+(?::([^}]*))?\}/g, "$1")}\n\`\`\`` },
+            range,
             kind: monaco.languages.CompletionItemKind.Snippet,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           }));

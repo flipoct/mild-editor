@@ -12,6 +12,7 @@ mod clangd;
 mod collab;
 mod companion;
 mod devices;
+mod discord;
 mod files;
 mod import;
 mod interactive;
@@ -138,6 +139,7 @@ pub fn run() {
         .manage(collab::CollabState::default())
         .manage(devices::Devices::default())
         .manage(pad::PadState::default())
+        .manage(discord::DiscordState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -224,6 +226,8 @@ pub fn run() {
             toolchains::install_python,
             toolchains::remove_python,
             toolchains::warm_python,
+            discord::discord_set_activity,
+            discord::discord_status,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,

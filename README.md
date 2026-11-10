@@ -114,7 +114,7 @@ Open **Settings → Snippets**, create a snippet name, select C++ or Python, wri
 There are two ways to insert a snippet into a file:
 
 - Run *Insert snippet: name* from the command palette.
-- Type `snippet::name` in an editor using the same language, then accept the completion with Tab or Enter.
+- Type the snippet's name in an editor using the same language, then accept the completion with Tab or Enter. Snippets come before every other completion (Settings → Snippets can turn that off), and the arrows beside each snippet set their order among themselves.
 
 Snippet bodies support Monaco placeholder syntax. `${1:value}` creates the first editable field, repeated placeholder numbers stay synchronized, and `${0}` marks the final cursor position after tabbing through the fields. Place the editor caret and press **Set cursor here** to insert or move `${0}` automatically.
 

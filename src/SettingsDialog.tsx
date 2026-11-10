@@ -15,13 +15,14 @@ import { loadTemplateDrafts, templates, templateSources, templateStorageKey } fr
 import type { BrowserStatus } from "./ProblemWindow";
 import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
+import { DISCORD_APPLICATION_ID } from "./discord";
 import { chosenToolchain, ensureToolchains, rescanToolchains, toolchainLabel, toolchains, type PythonDownload, type Toolchain } from "./toolchains";
 import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiStyle, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
 
 /** The pages in the order the navigation lists them, each with the message that names it. */
 const PAGES: Array<[SettingsPage, keyof typeof messages.en]> = [
   ["appearance", "appearance"], ["template", "template"], ["snippets", "snippets"], ["judge", "judge"],
-  ["build", "buildSettings"], ["languages", "languagesSettings"], ["language-server", "languageServer"], ["browser", "browserSettings"], ["updates", "updates"],
+  ["build", "buildSettings"], ["languages", "languagesSettings"], ["language-server", "languageServer"], ["discord", "discordSettings"], ["browser", "browserSettings"], ["updates", "updates"],
 ];
 
 const THEME_NOTES: Record<UiTheme, string> = {
@@ -113,6 +114,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
           : page === "judge" ? <JudgePage t={t} companionStatus={props.companionStatus} companionError={props.companionError} refreshingJudge={props.refreshingJudge} refreshSubmissionStatuses={props.refreshSubmissionStatuses} />
           : page === "build" ? <BuildPage t={t} />
           : page === "languages" ? <LanguagesPage t={t} />
+          : page === "discord" ? <DiscordPage t={t} />
           : page === "browser" ? <BrowserPage t={t} extensions={extensions} browserStatus={props.browserStatus} installUserscript={props.installUserscript} />
           : page === "updates" ? <UpdatesPage t={t} appVersion={props.appVersion} updateStatus={props.updateStatus} updateRetryable={props.updateRetryable} checkForUpdates={props.checkForUpdates} installUpdate={props.installUpdate} exportSettings={props.exportSettings} importSettings={props.importSettings} />
           : <LanguageServerPage t={t} clangdPath={clangdPath} setClangdPath={setClangdPath} clangdStatus={props.clangdStatus} clangdInfo={props.clangdInfo} connectClangd={props.connectClangd} />}
@@ -342,11 +344,24 @@ function useSnippetEditor(activeLanguage: Language) {
     if (draft.id === id) startNew();
   };
 
-  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove };
+  /** Moves a snippet past the next one of its language, up or down: the order is its rank among the completions. */
+  const move = (id: string, step: -1 | 1) => setSnippets((current) => {
+    const at = current.findIndex((snippet) => snippet.id === id);
+    if (at < 0) return current;
+    let other = at + step;
+    while (other >= 0 && other < current.length && current[other].language !== current[at].language) other += step;
+    if (other < 0 || other >= current.length) return current;
+    const next = [...current];
+    [next[at], next[other]] = [next[other], next[at]];
+    return next;
+  });
+
+  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove, move };
 }
 
 function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { editor: ReturnType<typeof useSnippetEditor>; monaco: MonacoLook }) {
   const { draft, setDraft } = editor;
+  const [snippetsFirst, setSnippetsFirst] = useSetting("snippetsFirst");
   // Each snippet keeps its own undo history too: the editor is shared in the same way.
   useHistoryPerDraft(editor.editorRef, draft.id);
   return <div className="snippet-settings">
@@ -354,8 +369,13 @@ function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { 
       <button className="new-snippet" onClick={editor.startNew}><Icon name="plus" size={13} />New snippet</button>
       {editor.snippets.map((snippet) => <div className={`snippet-item ${snippet.id === draft.id ? "active" : ""}`} key={snippet.id}>
         <button onClick={() => setDraft(snippet)}><span>{snippet.name}</span><small>{snippet.language}</small></button>
+        <span className="snippet-order">
+          <button onClick={() => editor.move(snippet.id, -1)} aria-label={t("snippetUp")} title={t("snippetUp")}><Icon name="chevronDown" size={11} className="flip" /></button>
+          <button onClick={() => editor.move(snippet.id, 1)} aria-label={t("snippetDown")} title={t("snippetDown")}><Icon name="chevronDown" size={11} /></button>
+        </span>
         <button className="snippet-delete" onClick={() => editor.remove(snippet.id)} aria-label={`Delete ${snippet.name}`}><Icon name="close" size={12} /></button>
       </div>)}
+      <label className="companion-toggle snippet-first"><input type="checkbox" checked={snippetsFirst} onChange={(event) => setSnippetsFirst(event.target.checked)} />{t("snippetsFirst")}</label>
     </aside>
     <div className="snippet-form">
       <div className="snippet-guide">
@@ -432,6 +452,44 @@ function BuildPage({ t }: Pick<SettingsDialogProps, "t">) {
     <div className="appearance-group"><span>{t("judging")}</span></div>
     <label className="clangd-path-label">{t("floatTolerance")}<select value={String(floatTolerance)} onChange={(event) => setFloatTolerance(Number(event.target.value))}><option value="0">{t("floatToleranceOff")}</option><option value="0.0001">1e-4</option><option value="0.000001">1e-6</option><option value="1e-9">1e-9</option></select></label>
     <p className="settings-help">{t("floatToleranceHelp")}</p>
+  </div>;
+}
+
+type DiscordStatus = { connected: boolean; user: string | null; error: string | null };
+
+/** Discord's activity status: whether it is on, what it may say, and whether Discord is there to show it. */
+function DiscordPage({ t }: Pick<SettingsDialogProps, "t">) {
+  const [enabled, setEnabled] = useSetting("discordEnabled");
+  const [showFile, setShowFile] = useSetting("discordShowFile");
+  const [showContest, setShowContest] = useSetting("discordShowContest");
+  const [appId, setAppId] = useSetting("discordAppId");
+  const [status, setStatus] = useState<DiscordStatus | null>(null);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const look = () => void invoke<DiscordStatus>("discord_status").then(setStatus).catch(() => undefined);
+    look();
+    const timer = window.setInterval(look, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const application = appId || DISCORD_APPLICATION_ID;
+  const state = !enabled ? "off" : !application ? "no-app" : status?.connected ? "ready" : status?.error === "not-running" || !status?.error ? "waiting" : "error";
+  const line = state === "off" ? t("discordOff") : state === "no-app" ? t("discordNoApp") : state === "ready" ? (status?.user ? t("discordConnectedAs").replace("{user}", status.user) : t("discordConnected"))
+    : state === "waiting" ? t("discordWaiting") : `${t("discordError")}: ${status?.error}`;
+  return <div className="language-server-settings judge-settings">
+    <p className="settings-help">{t("discordHelp")}</p>
+    <div className={`lsp-state ${state === "ready" ? "ready" : state === "error" ? "error" : "idle"}`}>
+      <span className="lsp-dot" />
+      <div><strong>Discord</strong><small>{line}</small></div>
+    </div>
+    <label className="companion-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("discordEnable")}</label>
+    <label className="companion-toggle"><input type="checkbox" checked={showFile} disabled={!enabled} onChange={(event) => setShowFile(event.target.checked)} />{t("discordShowFile")}</label>
+    <p className="settings-help">{t("discordShowFileHelp")}</p>
+    <label className="companion-toggle"><input type="checkbox" checked={showContest} disabled={!enabled} onChange={(event) => setShowContest(event.target.checked)} />{t("discordShowContest")}</label>
+    <details className="collab-advanced">
+      <summary>{t("collabAdvanced")}</summary>
+      <label className="clangd-path-label">{t("discordAppId")}<input value={appId} onChange={(event) => setAppId(event.target.value.replace(/\D/g, ""))} placeholder={DISCORD_APPLICATION_ID || "123456789012345678"} spellCheck={false} inputMode="numeric" /></label>
+      <p className="settings-help">{t("discordAppIdHelp")}</p>
+    </details>
   </div>;
 }
 

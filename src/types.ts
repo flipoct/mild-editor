@@ -193,7 +193,7 @@ export type CompanionStatus = { listening: boolean; port: number | null };
 
 export type ClangdStatus = "idle" | "connecting" | "ready" | "missing" | "error";
 
-export type SettingsPage = "appearance" | "template" | "snippets" | "judge" | "build" | "languages" | "language-server" | "updates" | "browser";
+export type SettingsPage = "appearance" | "template" | "snippets" | "judge" | "build" | "languages" | "discord" | "language-server" | "updates" | "browser";
 
 
 /** A timed practice or a live round: a countdown, and when each problem of the folder was solved. */

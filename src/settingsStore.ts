@@ -99,6 +99,14 @@ const definitions = {
   cppStandard: text<"auto" | "c++17" | "c++20" | "c++23">("mild-cpp-standard", "auto"),
   floatTolerance: stored("mild-float-tolerance", (value) => value === null ? DEFAULT_FLOAT_TOLERANCE : Number(value) || 0),
 
+  // The user's snippets come first among the completions, above the built-in ones and clangd's.
+  snippetsFirst: flag("mild-snippets-first", true),
+  // Discord's activity status (src/discord.ts): on unless turned off, and what it may say.
+  discordEnabled: flag("mild-discord-enabled", true),
+  discordShowFile: flag("mild-discord-show-file", true),
+  discordShowContest: flag("mild-discord-show-contest", true),
+  // Another Discord application to show the status as; empty is the editor's own.
+  discordAppId: text("mild-discord-app-id", "", trimmed),
   snippets: { read: loadSnippets, save: (snippets) => localStorage.setItem("mild-snippets", JSON.stringify(snippets)), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,
   // Empty means "find clangd on PATH", which is stored as no key at all.
   clangdPath: {

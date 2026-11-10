@@ -883,6 +883,13 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .verdict-notice-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
 .verdict-notice-close:hover { color: var(--text); }
 
+/* Settings → Snippets: the order of a snippet among the completions. */
+.snippet-order { display: flex; flex-direction: column; justify-content: center; }
+.snippet-order button { width: 18px; height: 14px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted); }
+.snippet-order button:hover { background: var(--hover); color: var(--text); }
+.snippet-order .flip { transform: rotate(180deg); }
+.snippet-first { margin-top: 10px; font-size: var(--fs-xs); }
+
 /* Settings → Languages */
 .toolchain-settings .appearance-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .toolchain-settings .appearance-group .subtle-button { height: 24px; padding: 0 8px; font-size: var(--fs-xs); }

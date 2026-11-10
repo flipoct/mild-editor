@@ -41,6 +41,7 @@ import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./setting
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
 import { BoardView } from "./board/BoardView";
 import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
+import { DISCORD_APPLICATION_ID, discordActivity } from "./discord";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
@@ -435,6 +436,7 @@ function App() {
   const [floatTolerance] = useSetting("floatTolerance");
   // The toolchain chosen in Settings → Languages; empty is the first one on PATH.
   const [pythonPath, setPythonPath] = useSetting("pythonPath");
+  const [snippetsFirst] = useSetting("snippetsFirst");
   const pythons = toolchains.use((state) => state.pythons);
   const [cppCompiler] = useSetting("cppCompiler");
   const [cppStandard] = useSetting("cppStandard");
@@ -2531,6 +2533,38 @@ function App() {
     const excluded = new Set(contest.excluded);
     return problemsOfFolder(contest.folder).filter((file) => !excluded.has(fileKey(file.filename)));
   }, [contest?.folder, contest?.excluded, savedFiles, tabs]);
+
+  // Discord's activity status (src/discord.ts): what is in front, how it runs, the contest and
+  // the room. Sent a moment after it settles; the backend keeps Discord's own pace.
+  const [discordEnabled] = useSetting("discordEnabled");
+  const [discordShowFile] = useSetting("discordShowFile");
+  const [discordShowContest] = useSetting("discordShowContest");
+  const [discordAppId] = useSetting("discordAppId");
+  const roomTeammates = useCollab((room) => room.phase === "live" ? Math.max(0, room.members.length - 1) : 0);
+  const presenceSinceRef = useRef({ file: "\u0000", at: Date.now() });
+  if (presenceSinceRef.current.file !== (activeTab?.filename ?? "")) presenceSinceRef.current = { file: activeTab?.filename ?? "", at: Date.now() };
+  const presenceToolchain = !activeTab ? ""
+    : activeTab.language === "python" ? (() => { const python = chosenToolchain(pythons, pythonPath); return python ? `Python ${minorVersion(python.version)}` : ""; })()
+    : cppStandard === "auto" ? "" : cppStandard.toUpperCase();
+  const presence = JSON.stringify(discordActivity({
+    locale: uiLocale === "ko" ? "ko" : "en",
+    version: APP_VERSION,
+    file: activeTab ? { title: activeTab.title, filename: activeTab.filename, language: activeTab.language, source: activeTab.source } : null,
+    toolchain: presenceToolchain,
+    since: presenceSinceRef.current.at,
+    contest: contestRunning && contest ? { endsAt: contestEndsAt, solved: contestProblems.filter((file) => contest.solved[fileKey(file.filename)] !== undefined).length, total: contestProblems.length } : null,
+    teammates: roomTeammates,
+    showFile: discordShowFile,
+    showContest: discordShowContest,
+  }));
+  const discordClient = discordEnabled ? discordAppId || DISCORD_APPLICATION_ID : "";
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const timer = window.setTimeout(() => {
+      void invoke("discord_set_activity", { clientId: discordClient, activity: discordClient ? JSON.parse(presence) : null }).catch(() => undefined);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [presence, discordClient]);
   // What the next contest covers: a folder (the active file's until another is picked) minus
   // the problems clicked away, so a contest needs no workspace of its own.
   const [contestFolderChoice, setContestFolderChoice] = useState<string | null>(null);
@@ -3802,7 +3836,7 @@ function App() {
               suggestOnTriggerCharacters: true,
               wordBasedSuggestions: "allDocuments",
               tabCompletion: "on",
-              snippetSuggestions: "top",
+              snippetSuggestions: snippetsFirst ? "top" : "inline",
               wordWrap: "off",
               tabSize: 4,
               readOnly: keyboardBusy !== null && sharedFiles.has(activeTabId),
