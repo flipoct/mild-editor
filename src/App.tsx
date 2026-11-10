@@ -31,7 +31,7 @@ import { createThemeWindowIcon } from "./themeIcon";
 import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
 import { isPendingVerdict, newVerdicts, type SeenVerdict } from "./verdictNotice";
-import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, savedProblem, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
+import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, sameSavedTests, savedProblem, savedTestsKey, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
 import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_STYLES, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
 import { useLatest, useNextRender, useStableCallback } from "./hooks";
@@ -574,6 +574,9 @@ function App() {
   // When the code was last typed into, so a save that was already on its way can tell it
   // did not catch the newest edit.
   const lastEditAtRef = useRef(0);
+  // The tests each tab last wrote to disk, by workspace and tab, so a save can leave out the
+  // ones that have not changed since.
+  const savedTestsRef = useRef(new Map<string, TestCase[]>());
   const markActiveDirty = () => {
     lastEditAtRef.current = Date.now();
     setFileStatus("modified");
@@ -1439,9 +1442,15 @@ function App() {
       const saved = await invoke<LoadedWorkspace>("save_workspace", {
         request: {
           folderPath,
-          problems: sent.map(savedProblem),
+          // Tests already on disk are not sent again: they can run to megabytes, and this
+          // is the save auto save makes every time the typing stops (save_workspace keeps them).
+          problems: sent.map((tab) => {
+            const known = savedTestsRef.current.get(savedTestsKey(folderPath, tab.id));
+            return known && sameSavedTests(known, tab.tests) ? { ...savedProblem(tab), tests: undefined } : savedProblem(tab);
+          }),
         },
       });
+      for (const tab of sent) savedTestsRef.current.set(savedTestsKey(folderPath, tab.id), tab.tests);
       // A file changed behind the editor (another editor, a checkout) while its tab sat
       // untouched is not overwritten: the save hands back the file's text instead, and the
       // tab takes it, as an unmodified editor in VS Code follows its file.
@@ -1578,10 +1587,12 @@ function App() {
     void refreshDirectories(setFileStatus, workspacePath);
   }, [workspacePath]);
 
+  // Keyed by the names alone: `tabs` changes with every keystroke, and the list of open files does not.
+  const openTabFilenames = tabs.map((tab) => tab.filename).join("\n");
   useEffect(() => {
     if (!workspacePath) return;
-    localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({ workspacePath, filenames: tabs.map((tab) => tab.filename), activeFilename: activeTab?.filename || "" }));
-  }, [activeTab?.filename, tabs, workspacePath]);
+    localStorage.setItem(OPEN_TABS_KEY, JSON.stringify({ workspacePath, filenames: openTabFilenames ? openTabFilenames.split("\n") : [], activeFilename: activeTab?.filename || "" }));
+  }, [activeTab?.filename, openTabFilenames, workspacePath]);
 
   /** The page the last import was asked for from: a contest page tells when the contest runs. */
   const importPageRef = useRef("");
@@ -2002,7 +2013,9 @@ function App() {
     if (testSaveTimerRef.current !== null) window.clearTimeout(testSaveTimerRef.current);
     testSaveTimerRef.current = window.setTimeout(() => {
       testSaveTimerRef.current = null;
-      void invoke("save_workspace_tests", { request: { folderPath: workspacePath, filename: activeTab.filename, tests: savedTests, limits } }).catch((error) => setFileStatus(errorMessage(error)));
+      void invoke("save_workspace_tests", { request: { folderPath: workspacePath, filename: activeTab.filename, tests: savedTests, limits } })
+        .then(() => savedTestsRef.current.set(savedTestsKey(workspacePath, activeTab.id), nextTests))
+        .catch((error) => setFileStatus(errorMessage(error)));
     }, 250);
   };
 
@@ -2288,16 +2301,21 @@ function App() {
   // board is for reading beside the problem, not instead of it.
   const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
-    const host = problemHostRef.current?.getBoundingClientRect();
+    // A panel being dragged counts too: its drop preview has to show over the page, and VS
+    // Code likewise keeps webviews out of the way while a group is dragged.
+    if (document.querySelector(".modal-backdrop, .error-notice, .quick-open") || document.body.classList.contains("panel-dragging")) {
+      setOverlayOpen(true);
+      return;
+    }
+    // This runs after every render, keystrokes included, so the page's box is only measured
+    // when a menu is up: measuring forces the browser to lay the whole window out first.
+    const menus = document.querySelectorAll(".explorer-context-menu, .contest-popover, .file-menu-list");
+    const host = menus.length ? problemHostRef.current?.getBoundingClientRect() : undefined;
     const reachesPage = (element: Element) => {
       const box = element.getBoundingClientRect();
       return Boolean(host) && box.right > host!.left && box.left < host!.right && box.bottom > host!.top && box.top < host!.bottom;
     };
-    // A panel being dragged counts too: its drop preview has to show over the page, and VS
-    // Code likewise keeps webviews out of the way while a group is dragged.
-    setOverlayOpen(Boolean(document.querySelector(".modal-backdrop, .error-notice, .quick-open"))
-      || document.body.classList.contains("panel-dragging")
-      || [...document.querySelectorAll(".explorer-context-menu, .contest-popover, .file-menu-list")].some(reachesPage));
+    setOverlayOpen([...menus].some(reachesPage));
   });
   /**
    * The contest board opens at the left edge, above its button. A problem page docked there
@@ -3528,6 +3546,35 @@ function App() {
     return `${accepted} / ${tests.length} AC${worst ? ` · ${verdictLabels[worst]}` : ""}`;
   }, [running, tests]);
 
+  // One object for as long as nothing in it changes: a new one each render made the editor
+  // copy and compare all its options on every keystroke.
+  const readOnlyShared = keyboardBusy !== null && sharedFiles.has(activeTabId);
+  const editorOptions = useMemo((): Monaco.editor.IStandaloneEditorConstructionOptions => ({
+    automaticLayout: true,
+    fontFamily: editorFontFamily,
+    fontSize: editorFontSize,
+    lineHeight: editorLineHeightFor(editorFontSize),
+    smoothScrolling: true,
+    editContext: false,
+    disableLayerHinting: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    padding: { top: 18, bottom: 18 },
+    renderLineHighlight: "none",
+    overviewRulerBorder: false,
+    hideCursorInOverviewRuler: true,
+    quickSuggestions: { other: true, comments: false, strings: false },
+    suggestOnTriggerCharacters: true,
+    wordBasedSuggestions: "allDocuments",
+    tabCompletion: "on",
+    snippetSuggestions: snippetsFirst ? "top" : "inline",
+    wordWrap: "off",
+    tabSize: 4,
+    readOnly: readOnlyShared,
+    // A teammate's name, so nothing in it is read as markdown.
+    readOnlyMessage: { value: t("collabKeyboardBusy").replace("{name}", (keyboardBusy ?? "").replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&")) },
+  }), [editorFontFamily, editorFontSize, readOnlyShared, keyboardBusy, snippetsFirst, t]);
+
   return (
     <main
       className="app-shell"
@@ -3848,34 +3895,12 @@ function App() {
               // A change to a model that is not this render's tab: the editor has moved on to
               // another tab and this listener has not been replaced yet. It is not this tab's edit.
               if (editorRef.current?.getModel()?.uri.path.split("/")[1] !== activeTabId) return;
-              markActiveDirty();
-              patchActiveTab((tab) => ({ codes: { ...tab.codes, [language]: value || "" } }));
+              // One update of `tabs` per keystroke: the text and the modified mark together.
+              lastEditAtRef.current = Date.now();
+              setFileStatus("modified");
+              patchActiveTab((tab) => ({ codes: { ...tab.codes, [language]: value || "" }, dirty: true, modifiedAt: lastEditAtRef.current }));
             }}
-            options={{
-              automaticLayout: true,
-              fontFamily: editorFontFamily,
-              fontSize: editorFontSize,
-              lineHeight: editorLineHeightFor(editorFontSize),
-              smoothScrolling: true,
-              editContext: false,
-              disableLayerHinting: true,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              padding: { top: 18, bottom: 18 },
-              renderLineHighlight: "none",
-              overviewRulerBorder: false,
-              hideCursorInOverviewRuler: true,
-              quickSuggestions: { other: true, comments: false, strings: false },
-              suggestOnTriggerCharacters: true,
-              wordBasedSuggestions: "allDocuments",
-              tabCompletion: "on",
-              snippetSuggestions: snippetsFirst ? "top" : "inline",
-              wordWrap: "off",
-              tabSize: 4,
-              readOnly: keyboardBusy !== null && sharedFiles.has(activeTabId),
-              // A teammate's name, so nothing in it is read as markdown.
-              readOnlyMessage: { value: t("collabKeyboardBusy").replace("{name}", (keyboardBusy ?? "").replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&")) },
-            }}
+            options={editorOptions}
           />
           </> : <div className="welcome-screen">
             <div className="welcome-mark"><AppLogo icon={appIcon} /></div>

@@ -45,8 +45,15 @@ fn read_workspace_metadata(path: &Path) -> Result<WorkspaceMetadata, String> {
 /// file whole instead of a truncated one that no longer parses. When the move is refused (the
 /// file held open without delete sharing, as some sync tools and scanners do), it is written
 /// in place as before.
+///
+/// A file that already holds exactly this text is left alone. Auto save runs a second after
+/// every pause in typing, and most of those saves change nothing here; a new file and a move
+/// over the old one is what a virus scanner looks at each time.
 pub(crate) fn write_workspace_metadata(path: &Path, metadata: &WorkspaceMetadata, action: &str) -> Result<(), String> {
     let json = serde_json::to_string_pretty(metadata).map_err(|error| error.to_string())?;
+    if fs::read_to_string(path).is_ok_and(|current| current == json) {
+        return Ok(());
+    }
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| WORKSPACE_METADATA_FILENAME.into());
     let temporary = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
     let moved = fs::write(&temporary, &json).and_then(|_| fs::rename(&temporary, path));
@@ -159,7 +166,11 @@ pub(crate) struct WorkspaceProblemInput {
     title: String,
     language: String,
     code: String,
-    tests: Vec<SavedTestCase>,
+    /// Left out when they have not changed since the last save: a problem's tests can run to
+    /// megabytes, and auto save would otherwise send all of them every time. Missing, the
+    /// saved ones stay.
+    #[serde(default)]
+    tests: Option<Vec<SavedTestCase>>,
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
@@ -220,13 +231,13 @@ pub(crate) struct WorkspaceFolderRequest {
     directory: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_workspace_source_filenames(request: WorkspaceRequest) -> Result<Vec<String>, String> {
     let _metadata = metadata_lock();
     workspace_source_filenames(Path::new(&request.folder_path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_workspace_directories(request: WorkspaceRequest) -> Result<Vec<String>, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
@@ -242,7 +253,7 @@ fn valid_folder_name(name: &str) -> bool {
     !name.is_empty() && Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name) && !matches!(name, "." | "..")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_workspace_folder(request: CreateWorkspaceFolderRequest) -> Result<String, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
@@ -277,7 +288,7 @@ pub(crate) struct RenamedWorkspaceFolder {
     renamed: Vec<[String; 2]>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_workspace_folder(request: RenameWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -300,7 +311,7 @@ pub(crate) struct MoveWorkspaceFolderRequest {
     target_directory: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn move_workspace_folder(request: MoveWorkspaceFolderRequest) -> Result<RenamedWorkspaceFolder, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -359,7 +370,7 @@ fn relocate_workspace_folder(folder: &Path, directory: &Path, destination_relati
 
 /// Makes sure a folder is there, with every folder above it. For a shared room
 /// (src/collab), where a teammate made the folder and this copy of it follows.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn ensure_workspace_folder(request: WorkspaceFolderRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let directory = workspace_directory_path(&request.directory)?;
@@ -368,7 +379,7 @@ pub(crate) fn ensure_workspace_folder(request: WorkspaceFolderRequest) -> Result
 
 /// Removes a folder a teammate removed, and only if nothing is left in it: whatever this
 /// user keeps there that the room never knew of stays, and the folder with it.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn remove_empty_workspace_folder(request: WorkspaceFolderRequest) -> Result<bool, String> {
     let _metadata = metadata_lock();
     let directory = workspace_directory_path(&request.directory)?;
@@ -376,7 +387,7 @@ pub(crate) fn remove_empty_workspace_folder(request: WorkspaceFolderRequest) -> 
     Ok(fs::remove_dir(std::path::PathBuf::from(&request.folder_path).join(directory)).is_ok())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_workspace_folder(request: WorkspaceFolderRequest) -> Result<Vec<String>, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -545,7 +556,7 @@ fn file_modified_at(path: &std::path::Path) -> u64 {
         .unwrap_or(0)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(request.folder_path);
@@ -566,7 +577,7 @@ pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result
     write_workspace_metadata(&metadata_path, &metadata, "save test cases")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn update_workspace_source(request: UpdateWorkspaceSourceRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     if !matches!(request.source.as_str(), "atcoder" | "codeforces" | "doj" | "other") {
@@ -742,7 +753,7 @@ fn unique_workspace_filename(folder: &Path, requested: &str, metadata: &Workspac
     unreachable!()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWorkspace, String> {
     let _metadata = metadata_lock();
     if request.problems.is_empty() {
@@ -784,11 +795,15 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
         // The arranged position and the submission history are not the frontend's to
         // send, so a problem saved again keeps the ones it had.
         let existing = metadata_problems.iter().position(|item| item.filename == filename);
-        let metadata_problem = WorkspaceProblemMetadata {
+        let tests = match problem.tests {
+            Some(tests) => tests,
+            None => existing.map(|index| std::mem::take(&mut metadata_problems[index].tests)).unwrap_or_default(),
+        };
+        let mut metadata_problem = WorkspaceProblemMetadata {
             filename,
             title: problem.title,
             language: problem.language,
-            tests: problem.tests,
+            tests,
             source: problem.source,
             source_url: problem.source_url,
             judge_status: problem.judge_status, limits: problem.limits,
@@ -796,7 +811,11 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
             order: existing.and_then(|index| metadata_problems[index].order),
             submissions: existing.map(|index| metadata_problems[index].submissions.clone()).unwrap_or_default(),
         };
+        // What a save hands back is the code, for a file that changed behind the editor; the
+        // tests are the ones just sent or already saved, so they are not sent back again.
+        let tests = std::mem::take(&mut metadata_problem.tests);
         outputs.push(WorkspaceProblemOutput::new(metadata_problem.clone(), code));
+        metadata_problem.tests = tests;
         match existing {
             Some(index) => metadata_problems[index] = metadata_problem,
             None => metadata_problems.push(metadata_problem),
@@ -823,7 +842,7 @@ pub(crate) struct SavePanelModeRequest {
     panel_mode: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_workspace_panel_mode(request: SavePanelModeRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     if !matches!(request.panel_mode.as_str(), "tests" | "interactive") {
@@ -842,7 +861,7 @@ pub(crate) fn save_workspace_panel_mode(request: SavePanelModeRequest) -> Result
     write_workspace_metadata(&metadata_path, &metadata, "save workspace metadata")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_workspace(request: WorkspaceRequest) -> Result<LoadedWorkspace, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -855,7 +874,7 @@ pub(crate) fn create_workspace(request: WorkspaceRequest) -> Result<LoadedWorksp
     Ok(LoadedWorkspace { folder_path: folder.to_string_lossy().into_owned(), panel_mode: None, problems: Vec::new() })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_workspace_file(request: WorkspaceFileRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -868,7 +887,7 @@ pub(crate) fn delete_workspace_file(request: WorkspaceFileRequest) -> Result<(),
     write_workspace_metadata(&metadata_path, &metadata, "update workspace metadata")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn open_workspace_file_location(request: WorkspaceFileRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -878,7 +897,7 @@ pub(crate) fn open_workspace_file_location(request: WorkspaceFileRequest) -> Res
     reveal_in_file_manager(&source, &folder, "file")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn open_workspace_folder_location(request: WorkspaceFolderRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -923,7 +942,7 @@ fn windows_explorer_select_argument(source: &Path) -> String {
     format!("/select,\"{}\"", source.to_string_lossy().replace('/', "\\"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -946,7 +965,7 @@ pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> R
     Ok(WorkspaceProblemOutput::new(duplicated, code))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Result<WorkspaceProblemOutput, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -980,7 +999,7 @@ pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Resu
     Ok(result)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn load_workspace(path: String) -> Result<LoadedWorkspace, String> {
     let _metadata = metadata_lock();
     let selected = std::path::PathBuf::from(path);
@@ -1051,7 +1070,7 @@ fn read_workspace_problems(folder: &Path, metadata: WorkspaceMetadata) -> Result
 /// renamed outside the editor only reach `.mild-editor.json` through a scan, and the one
 /// in `load_workspace` runs at start-up, so without this the explorer would not show them
 /// until the workspace was opened again.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn reload_workspace_files(request: WorkspaceRequest) -> Result<Vec<WorkspaceProblemOutput>, String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -1086,7 +1105,7 @@ pub(crate) struct ReorderWorkspaceFilesRequest {
 
 /// Records the order the explorer shows a folder's files in, so a drag between two rows
 /// survives a restart. Files of other folders keep the order they had.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn reorder_workspace_files(request: ReorderWorkspaceFilesRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
     let folder = std::path::PathBuf::from(&request.folder_path);
@@ -1145,7 +1164,7 @@ mod tests {
         let saved = save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: Some(imported), modified_at: None,
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: Some(imported), modified_at: None,
             }],
         }).expect("save source");
         assert_eq!(saved.problems[0].limits, Some(imported));
@@ -1174,7 +1193,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "B.cpp".into(), title: "B".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+                filename: "B.cpp".into(), title: "B".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
             }],
         }).expect("save source");
 
@@ -1203,7 +1222,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.py".into(), title: "A".into(), language: "python".into(), code: "print(2)".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+                filename: "A.py".into(), title: "A".into(), language: "python".into(), code: "print(2)".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
             }],
         }).expect("save again");
         let after = reload_workspace_files(WorkspaceRequest { folder_path: folder_path.clone() }).expect("rescan once more");
@@ -1228,7 +1247,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
             }],
         }).expect("save source");
 
@@ -1258,7 +1277,7 @@ mod tests {
         save_workspace(SaveWorkspaceRequest {
             folder_path: folder_path.clone(),
             problems: vec![WorkspaceProblemInput {
-                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+                filename: "A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
             }],
         }).expect("save source");
 
@@ -1325,7 +1344,7 @@ mod tests {
         create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
         save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
-            filename: "round/A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            filename: "round/A.cpp".into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         }] }).unwrap();
 
         let removed = delete_workspace_folder(WorkspaceFolderRequest { folder_path: folder_path.clone(), directory: "round".into() }).unwrap();
@@ -1343,7 +1362,7 @@ mod tests {
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "round".into(), parent_directory: String::new() }).unwrap();
         create_workspace_folder(CreateWorkspaceFolderRequest { folder_path: folder_path.clone(), name: "div2".into(), parent_directory: "round".into() }).unwrap();
         let problem = |filename: &str, language: &str| WorkspaceProblemInput {
-            filename: filename.into(), title: filename.into(), language: language.into(), code: "x".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            filename: filename.into(), title: filename.into(), language: language.into(), code: "x".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         };
         save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![problem("round/A.cpp", "cpp"), problem("round/div2/B.py", "python"), problem("C.cpp", "cpp")] }).unwrap();
         let metadata_filenames = || {
@@ -1392,7 +1411,7 @@ mod tests {
         let folder_path = directory.path().to_string_lossy().into_owned();
         create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).unwrap();
         let saved = save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![WorkspaceProblemInput {
-            filename: "notes.txt".into(), title: "notes".into(), language: "cpp".into(), code: "ignored".into(), tests: Vec::new(), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
+            filename: "notes.txt".into(), title: "notes".into(), language: "cpp".into(), code: "ignored".into(), tests: Some(Vec::new()), source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         }] }).unwrap();
         assert!(saved.problems.is_empty());
         assert!(!directory.path().join("notes.txt").exists());
@@ -1401,13 +1420,48 @@ mod tests {
     fn input(filename: &str, code: &str, tests: Vec<SavedTestCase>) -> WorkspaceProblemInput {
         let language = if filename.ends_with(".py") { "python" } else { "cpp" };
         WorkspaceProblemInput {
-            filename: filename.into(), title: filename.into(), language: language.into(), code: code.into(), tests,
+            filename: filename.into(), title: filename.into(), language: language.into(), code: code.into(), tests: Some(tests),
             source: None, source_url: None, judge_status: None, limits: None, modified_at: None,
         }
     }
 
     fn one_test(name: &str) -> Vec<SavedTestCase> {
         vec![SavedTestCase { name: name.into(), input: "1".into(), expected: "1".into() }]
+    }
+
+    #[test]
+    fn a_save_without_tests_keeps_the_saved_ones_and_sends_none_back() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create");
+        let first = save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("A.cpp", "int main() {}", one_test("kept"))] }).expect("save");
+        assert!(first.problems[0].tests.is_empty(), "a save does not echo the tests back");
+        let mut without = input("A.cpp", "int main() { return 0; }", Vec::new());
+        without.tests = None;
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![without] }).expect("save without tests");
+        let metadata = read_workspace_metadata(&workspace_metadata_path(directory.path())).expect("metadata");
+        assert_eq!(metadata.problems[0].tests.iter().map(|test| test.name.as_str()).collect::<Vec<_>>(), ["kept"]);
+        assert_eq!(fs::read_to_string(directory.path().join("A.cpp")).expect("source"), "int main() { return 0; }");
+        // A new problem sent without tests starts with none.
+        let mut fresh = input("B.cpp", "int main() {}", Vec::new());
+        fresh.tests = None;
+        save_workspace(SaveWorkspaceRequest { folder_path, problems: vec![fresh] }).expect("save new");
+        let metadata = read_workspace_metadata(&workspace_metadata_path(directory.path())).expect("metadata");
+        assert!(metadata.problems.iter().find(|problem| problem.filename == "B.cpp").expect("B").tests.is_empty());
+    }
+
+    #[test]
+    fn unchanged_metadata_is_not_written_again() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create");
+        let problem = || { let mut problem = input("A.cpp", "int main() {}", one_test("t")); problem.modified_at = Some(1); problem };
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![problem()] }).expect("save");
+        let path = workspace_metadata_path(directory.path());
+        let before = fs::metadata(&path).and_then(|metadata| metadata.modified()).expect("modified time");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        save_workspace(SaveWorkspaceRequest { folder_path, problems: vec![problem()] }).expect("save again");
+        assert_eq!(fs::metadata(&path).and_then(|metadata| metadata.modified()).expect("modified time"), before);
     }
 
     #[test]

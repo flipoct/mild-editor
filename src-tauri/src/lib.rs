@@ -175,6 +175,12 @@ pub fn run() {
         Ok(())
     });
 
+    // A plain `#[tauri::command]` runs on the main thread, which also runs the window and
+    // the problem panel's Chromium: while one reads or writes the disk, every other command
+    // waits behind it and the panel stops. Commands that touch files, start processes or
+    // resolve addresses are `#[tauri::command(async)]` and run on a worker instead. The ones
+    // that stay plain must keep their order (terminal and clangd input, `send_interactive`,
+    // `pad_send`) or drive Chromium, which only runs on the main thread.
     builder
         .invoke_handler(tauri::generate_handler![
             runner::run_code,

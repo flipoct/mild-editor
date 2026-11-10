@@ -26,20 +26,20 @@ pub(crate) struct SettingsFileRequest {
 /// Settings live in the webview's local storage, which no backup reaches and which a
 /// reinstall or a changed app identifier can empty without warning. These two write and
 /// read the one file the user can keep somewhere safe.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn export_settings_file(request: SettingsFileRequest) -> Result<(), String> {
     if request.contents.len() > 8 * 1024 * 1024 { return Err("The settings are too large to export.".into()); }
     fs::write(&request.path, &request.contents).map_err(|error| format!("Could not write {}: {error}", request.path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_settings_file(request: SettingsFileRequest) -> Result<String, String> {
     let metadata = fs::metadata(&request.path).map_err(|error| format!("Could not read {}: {error}", request.path))?;
     if metadata.len() > 8 * 1024 * 1024 { return Err("That file is too large to be a settings backup.".into()); }
     fs::read_to_string(&request.path).map_err(|error| format!("Could not read {}: {error}", request.path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_font_file(request: ReadFileRequest) -> Result<Vec<u8>, String> {
     let path = std::path::PathBuf::from(request.path);
     let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -51,7 +51,7 @@ pub(crate) fn read_font_file(request: ReadFileRequest) -> Result<Vec<u8>, String
     fs::read(path).map_err(|error| format!("Could not read font file: {error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_image_file(request: ReadFileRequest) -> Result<ReadImageFileResponse, String> {
     let path = std::path::PathBuf::from(request.path);
     let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();

@@ -118,7 +118,7 @@ fn relay_lsp_messages<R: Read>(reader: R, app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn start_clangd(
     app: tauri::AppHandle,
     state: tauri::State<'_, ClangdState>,
