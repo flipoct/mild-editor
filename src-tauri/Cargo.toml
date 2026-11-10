@@ -68,8 +68,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
-objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate", "NSData"] }
 
 # Development builds: line numbers for this project's own code, so a panic still says where,
 # and no debug information for the seven hundred crates it depends on. Cargo's default is

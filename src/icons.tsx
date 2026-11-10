@@ -133,6 +133,11 @@ export const APP_MARK = {
   cap: { fill: "#2f9149", d: "M260 172C274 100 388 100 400 190C366 152 306 148 260 172Z" },
 } as const;
 
+/** The mark, or the user's own icon in its place when there is one (Settings → Appearance). */
+export function AppLogo({ icon, className }: { icon: string; className?: string }) {
+  return icon ? <img className={`app-icon-image${className ? ` ${className}` : ""}`} src={icon} alt="" draggable={false} /> : <AppMark className={className} />;
+}
+
 export function AppMark({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox={APP_MARK.viewBox.join(" ")} aria-hidden="true">

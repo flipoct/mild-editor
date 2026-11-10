@@ -107,6 +107,19 @@ const definitions = {
   discordShowContest: flag("mild-discord-show-contest", true),
   // Another Discord application to show the status as; empty is the editor's own.
   discordAppId: text("mild-discord-app-id", "", trimmed),
+  // The two lines Discord shows, as templates (src/discord.ts); empty is the default.
+  discordDetails: text("mild-discord-details", ""),
+  discordState: text("mild-discord-state", ""),
+  discordIdle: text("mild-discord-idle", ""),
+  discordShowTime: flag("mild-discord-show-time", true),
+  discordShowLanguage: flag("mild-discord-show-language", true),
+  discordShowButton: flag("mild-discord-show-button", true),
+  discordButtonLabel: text("mild-discord-button-label", "", trimmed),
+  discordButtonUrl: text("mild-discord-button-url", "", trimmed),
+  // An icon of the user's own (src/appIcon.ts): a PNG data URL, and the address it came from,
+  // which Discord can show too. Both empty is the editor's own mark.
+  appIcon: { read: () => localStorage.getItem("mild-app-icon") || "", save: (icon) => { if (icon) localStorage.setItem("mild-app-icon", icon); else localStorage.removeItem("mild-app-icon"); } } as Setting<string>,
+  appIconUrl: text("mild-app-icon-url", "", trimmed),
   snippets: { read: loadSnippets, save: (snippets) => localStorage.setItem("mild-snippets", JSON.stringify(snippets)), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,
   // Empty means "find clangd on PATH", which is stored as no key at all.
   clangdPath: {

@@ -6,6 +6,7 @@ pub mod browser;
 #[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
+mod app_icon;
 mod boards;
 mod checker;
 mod clangd;
@@ -228,6 +229,8 @@ pub fn run() {
             toolchains::warm_python,
             discord::discord_set_activity,
             discord::discord_status,
+            app_icon::set_app_icon,
+            app_icon::fetch_icon_image,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,

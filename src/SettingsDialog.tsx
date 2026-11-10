@@ -8,14 +8,15 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import type { BackgroundImage } from "./backgroundImage";
 import type { ClangdInfo } from "./clangd";
 import { updateStatusLine, type messages, type Translate } from "./i18n";
-import { Icon } from "./icons";
+import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { setupMonaco } from "./monacoSetup";
 import { errorMessage, IS_TAURI } from "./platform";
 import { loadTemplateDrafts, templates, templateSources, templateStorageKey } from "./problems";
 import type { BrowserStatus } from "./ProblemWindow";
 import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
-import { DISCORD_APPLICATION_ID } from "./discord";
+import { DEFAULT_DETAILS, DEFAULT_PRESENCE_OPTIONS, DEFAULT_STATE, DISCORD_APPLICATION_ID, discordActivity, PLACEHOLDERS } from "./discord";
+import { iconFromUrl, imageToIcon, isImageAddress } from "./appIcon";
 import { chosenToolchain, ensureToolchains, rescanToolchains, toolchainLabel, toolchains, type PythonDownload, type Toolchain } from "./toolchains";
 import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiStyle, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
 
@@ -127,6 +128,43 @@ export function SettingsDialog(props: SettingsDialogProps) {
 /** How the two small Monaco editors in the dialog follow the app's theme and editor font. */
 type MonacoLook = { theme: string; fontFamily: string };
 
+/** The app's icon: the mark, a picture from this computer, or one from an address — which Discord can show as well. */
+function AppIconSection({ t }: Pick<SettingsDialogProps, "t">) {
+  const [appIcon, setAppIcon] = useSetting("appIcon");
+  const [appIconUrl, setAppIconUrl] = useSetting("appIconUrl");
+  const [address, setAddress] = useState(appIconUrl);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const fromFile = (file: File | undefined) => {
+    if (!file) return;
+    setError("");
+    imageToIcon(file).then((icon) => { setAppIcon(icon); setAppIconUrl(""); setAddress(""); }, (reason) => setError(errorMessage(reason)));
+  };
+  const fromAddress = () => {
+    if (!isImageAddress(address.trim())) { setError(t("appIconHttps")); return; }
+    setError("");
+    setBusy(true);
+    iconFromUrl(address.trim()).then((icon) => { setAppIcon(icon); setAppIconUrl(address.trim()); }, (reason) => setError(errorMessage(reason))).finally(() => setBusy(false));
+  };
+  return <>
+    <div className="appearance-group"><span>{t("appIcon")}</span></div>
+    <div className="app-icon-picker">
+      <span className="app-icon-preview welcome-mark"><AppLogo icon={appIcon} /></span>
+      <div className="app-icon-actions">
+        <div className="companion-controls">
+          <button className="subtle-button" onClick={() => fileRef.current?.click()}>{t("appIconUpload")}</button>
+          <button className="subtle-button" onClick={() => { setAppIcon(""); setAppIconUrl(""); setAddress(""); setError(""); }} disabled={!appIcon}>{t("reset")}</button>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => { fromFile(event.target.files?.[0]); event.target.value = ""; }} />
+        </div>
+        <span className="path-picker"><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="https://…/icon.png" spellCheck={false} aria-label={t("appIconAddress")} onKeyDown={(event) => { if (event.key === "Enter") fromAddress(); }} /><button className="subtle-button" onClick={fromAddress} disabled={busy || !address.trim()}>{busy ? t("appIconLoading") : t("appIconUse")}</button></span>
+      </div>
+    </div>
+    <p className="settings-help">{appIcon && !appIconUrl ? t("appIconLocalNote") : t("appIconHelp")}</p>
+    {error && <p className="settings-help toolchain-error" role="alert">{error}</p>}
+  </>;
+}
+
 function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background, showStatus, resetLayout }: Pick<SettingsDialogProps, "t" | "systemFonts" | "background" | "showStatus" | "resetLayout"> & { fontOptions: EditorFontOption[]; selectedFont: EditorFontOption }) {
   const [uiLocale, setUiLocale] = useSetting("uiLocale");
   const [uiZoom, setUiZoom] = useSetting("uiZoom");
@@ -193,6 +231,7 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
     <p className="settings-help">{t("interfaceScaleHelp")}</p>
     <div className="appearance-group"><span>{t("layoutTitle")}</span><div className="companion-controls"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div></div>
     <p className="settings-help">{t("layoutHint")}</p>
+    <AppIconSection t={t} />
     <p className="settings-help">{t("appearanceHelp")}</p>
     <div className="appearance-group"><span>{t("theme")}</span><div className="theme-options">
       {UI_THEMES.map(([theme, name]) => <button key={theme} className={`theme-option ${theme} ${uiTheme === theme ? "active" : ""}`} onClick={() => setUiTheme(theme)}><i /><strong>{name}</strong><small>{THEME_NOTES[theme]}</small></button>)}
@@ -457,12 +496,70 @@ function BuildPage({ t }: Pick<SettingsDialogProps, "t">) {
 
 type DiscordStatus = { connected: boolean; user: string | null; error: string | null };
 
-/** Discord's activity status: whether it is on, what it may say, and whether Discord is there to show it. */
+/** Discord's activity status as Discord's own profile card shows it, from the settings as they are now. */
+function DiscordPreview({ t, locale }: Pick<SettingsDialogProps, "t"> & { locale: "en" | "ko" }) {
+  const settings = {
+    details: useSetting("discordDetails")[0], state: useSetting("discordState")[0], idle: useSetting("discordIdle")[0],
+    showFile: useSetting("discordShowFile")[0], showContest: useSetting("discordShowContest")[0], showTime: useSetting("discordShowTime")[0],
+    showLanguage: useSetting("discordShowLanguage")[0], showButton: useSetting("discordShowButton")[0],
+    buttonLabel: useSetting("discordButtonLabel")[0], buttonUrl: useSetting("discordButtonUrl")[0],
+  };
+  const [appIcon] = useSetting("appIcon");
+  const [contest, setContest] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+  const since = useRef(Date.now() - 12 * 60_000 - 34_000).current;
+  const endsAt = useRef(Date.now() + 42 * 60_000 + 10_000).current;
+  const activity = discordActivity({
+    locale, version: "", toolchain: "Python 3.14", since, teammates: 2,
+    file: { title: "A - Takahashi's Snack", filename: "AtCoder/abc300/A.py", language: "python", source: "atcoder" },
+    contest: contest ? { endsAt, solved: 3, total: 7 } : null,
+    options: {
+      details: settings.details, state: settings.state, idle: settings.idle, showFile: settings.showFile, showContest: settings.showContest,
+      showTime: settings.showTime, showLanguage: settings.showLanguage, image: "",
+      button: settings.showButton ? { label: settings.buttonLabel || DEFAULT_PRESENCE_OPTIONS.button!.label, url: settings.buttonUrl || DEFAULT_PRESENCE_OPTIONS.button!.url } : null,
+    },
+  });
+  const clock = (seconds: number) => { const value = Math.max(0, seconds); const hours = Math.floor(value / 3600); const rest = `${String(Math.floor(value / 60) % 60).padStart(2, "0")}:${String(Math.floor(value % 60)).padStart(2, "0")}`; return hours ? `${hours}:${rest}` : rest; };
+  const stamps = activity.timestamps as { start?: number; end?: number } | undefined;
+  const time = stamps && (stamps.end !== undefined
+    ? t("discordLeft").replace("{time}", clock(stamps.end - now / 1000))
+    : t("discordElapsed").replace("{time}", clock(now / 1000 - (stamps.start ?? now / 1000))));
+  return <div className="discord-preview">
+    <div className="discord-preview-head">
+      <small>{activity.type === 5 ? t("discordCompeting") : t("discordPlaying")}</small>
+      <label className="discord-preview-toggle"><input type="checkbox" checked={contest} onChange={(event) => setContest(event.target.checked)} />{t("discordPreviewContest")}</label>
+    </div>
+    <div className="discord-preview-body">
+      <span className="discord-preview-art"><AppLogo icon={appIcon} />{"small_image" in activity.assets && <i><LanguageIcon language="python" size={14} /></i>}</span>
+      <div className="discord-preview-text">
+        <strong>Mild Editor</strong>
+        <span>{activity.details}</span>
+        {"state" in activity && <span>{activity.state}</span>}
+        {time && <span className="discord-preview-time">{time}</span>}
+      </div>
+    </div>
+    {activity.buttons?.map((button) => <span key={button.label} className="discord-preview-button" title={button.url}>{button.label}</span>)}
+  </div>;
+}
+
+/** Discord's activity status: whether it is on, what it says, and whether Discord is there to show it. */
 function DiscordPage({ t }: Pick<SettingsDialogProps, "t">) {
   const [enabled, setEnabled] = useSetting("discordEnabled");
   const [showFile, setShowFile] = useSetting("discordShowFile");
   const [showContest, setShowContest] = useSetting("discordShowContest");
+  const [showTime, setShowTime] = useSetting("discordShowTime");
+  const [showLanguage, setShowLanguage] = useSetting("discordShowLanguage");
+  const [showButton, setShowButton] = useSetting("discordShowButton");
+  const [details, setDetails] = useSetting("discordDetails");
+  const [stateLine, setStateLine] = useSetting("discordState");
+  const [idle, setIdle] = useSetting("discordIdle");
+  const [buttonLabel, setButtonLabel] = useSetting("discordButtonLabel");
+  const [buttonUrl, setButtonUrl] = useSetting("discordButtonUrl");
   const [appId, setAppId] = useSetting("discordAppId");
+  const [appIcon] = useSetting("appIcon");
+  const [appIconUrl] = useSetting("appIconUrl");
+  const [uiLocale] = useSetting("uiLocale");
   const [status, setStatus] = useState<DiscordStatus | null>(null);
   useEffect(() => {
     if (!IS_TAURI) return;
@@ -475,16 +572,32 @@ function DiscordPage({ t }: Pick<SettingsDialogProps, "t">) {
   const state = !enabled ? "off" : !application ? "no-app" : status?.connected ? "ready" : status?.error === "not-running" || !status?.error ? "waiting" : "error";
   const line = state === "off" ? t("discordOff") : state === "no-app" ? t("discordNoApp") : state === "ready" ? (status?.user ? t("discordConnectedAs").replace("{user}", status.user) : t("discordConnected"))
     : state === "waiting" ? t("discordWaiting") : `${t("discordError")}: ${status?.error}`;
-  return <div className="language-server-settings judge-settings">
+  const toggle = (checked: boolean, set: (value: boolean) => void, label: string) =>
+    <label className="companion-toggle"><input type="checkbox" checked={checked} disabled={!enabled} onChange={(event) => set(event.target.checked)} />{label}</label>;
+  return <div className="language-server-settings judge-settings discord-settings">
     <p className="settings-help">{t("discordHelp")}</p>
     <div className={`lsp-state ${state === "ready" ? "ready" : state === "error" ? "error" : "idle"}`}>
       <span className="lsp-dot" />
       <div><strong>Discord</strong><small>{line}</small></div>
     </div>
     <label className="companion-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("discordEnable")}</label>
-    <label className="companion-toggle"><input type="checkbox" checked={showFile} disabled={!enabled} onChange={(event) => setShowFile(event.target.checked)} />{t("discordShowFile")}</label>
-    <p className="settings-help">{t("discordShowFileHelp")}</p>
-    <label className="companion-toggle"><input type="checkbox" checked={showContest} disabled={!enabled} onChange={(event) => setShowContest(event.target.checked)} />{t("discordShowContest")}</label>
+    <DiscordPreview t={t} locale={uiLocale === "ko" ? "ko" : "en"} />
+    <div className="appearance-group"><span>{t("discordShown")}</span></div>
+    {toggle(showFile, setShowFile, t("discordShowFile"))}
+    {toggle(showContest, setShowContest, t("discordShowContest"))}
+    {toggle(showTime, setShowTime, t("discordShowTime"))}
+    {toggle(showLanguage, setShowLanguage, t("discordShowLanguage"))}
+    {toggle(showButton, setShowButton, t("discordShowButton"))}
+    {showButton && <div className="discord-button-fields">
+      <input value={buttonLabel} onChange={(event) => setButtonLabel(event.target.value)} placeholder={DEFAULT_PRESENCE_OPTIONS.button!.label} maxLength={32} aria-label={t("discordButtonLabel")} disabled={!enabled} />
+      <input value={buttonUrl} onChange={(event) => setButtonUrl(event.target.value)} placeholder={DEFAULT_PRESENCE_OPTIONS.button!.url} spellCheck={false} aria-label={t("discordButtonUrl")} disabled={!enabled} />
+    </div>}
+    <div className="appearance-group"><span>{t("discordLines")}</span></div>
+    <label className="clangd-path-label">{t("discordDetails")}<input value={details} onChange={(event) => setDetails(event.target.value)} placeholder={DEFAULT_DETAILS} spellCheck={false} disabled={!enabled} /></label>
+    <label className="clangd-path-label">{t("discordState")}<input value={stateLine} onChange={(event) => setStateLine(event.target.value)} placeholder={DEFAULT_STATE} spellCheck={false} disabled={!enabled} /></label>
+    <label className="clangd-path-label">{t("discordIdle")}<input value={idle} onChange={(event) => setIdle(event.target.value)} placeholder={t("discordIdlePlaceholder")} spellCheck={false} disabled={!enabled} /></label>
+    <p className="settings-help">{t("discordLinesHelp")} {PLACEHOLDERS.map((name) => <code key={name}>{`{${name}}`}</code>)}</p>
+    <p className="settings-help">{appIcon ? appIconUrl ? t("discordImageCustom") : t("discordImageLocal") : t("discordImageDefault")}</p>
     <details className="collab-advanced">
       <summary>{t("collabAdvanced")}</summary>
       <label className="clangd-path-label">{t("discordAppId")}<input value={appId} onChange={(event) => setAppId(event.target.value.replace(/\D/g, ""))} placeholder={DISCORD_APPLICATION_ID || "123456789012345678"} spellCheck={false} inputMode="numeric" /></label>

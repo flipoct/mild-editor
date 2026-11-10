@@ -1,7 +1,7 @@
 import { VerdictBadge } from "./VerdictBadge";
 import { commonFolder, contestPlan, verdictView, type ContestSchedule } from "./workbench";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { AppMark, Icon, LanguageIcon } from "./icons";
+import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { diffView, splitFlags } from "./judge";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
@@ -41,7 +41,8 @@ import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./setting
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
 import { BoardView } from "./board/BoardView";
 import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
-import { DISCORD_APPLICATION_ID, discordActivity } from "./discord";
+import { DEFAULT_PRESENCE_OPTIONS, DISCORD_APPLICATION_ID, discordActivity, type PresenceOptions } from "./discord";
+import { iconBytes } from "./appIcon";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
@@ -410,9 +411,22 @@ function App() {
     return () => { cancelled = true; };
   }, [companionEnabled, companionPort]);
 
+  // The app's icon: the user's own picture when there is one (src/appIcon.ts), on the window
+  // and, on a Mac, in the Dock; otherwise the mark on the theme's own tile.
+  const [appIcon] = useSetting("appIcon");
+  const customIconShownRef = useRef(false);
   useEffect(() => {
     if (!IS_TAURI) return;
     let cancelled = false;
+    if (appIcon) {
+      customIconShownRef.current = true;
+      void invoke("set_app_icon", { png: Array.from(iconBytes(appIcon)) }).catch(() => undefined);
+      return;
+    }
+    if (customIconShownRef.current) {
+      customIconShownRef.current = false;
+      void invoke("set_app_icon", { png: null }).catch(() => undefined);
+    }
     void createThemeWindowIcon(uiTheme)
       .then(async (icon) => {
         if (!cancelled) await getCurrentWindow().setIcon(icon);
@@ -421,7 +435,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [uiTheme]);
+  }, [uiTheme, appIcon]);
 
   const background = useBackgroundImage(t);
 
@@ -2540,6 +2554,22 @@ function App() {
   const [discordShowFile] = useSetting("discordShowFile");
   const [discordShowContest] = useSetting("discordShowContest");
   const [discordAppId] = useSetting("discordAppId");
+  const [discordDetails] = useSetting("discordDetails");
+  const [discordState] = useSetting("discordState");
+  const [discordIdle] = useSetting("discordIdle");
+  const [discordShowTime] = useSetting("discordShowTime");
+  const [discordShowLanguage] = useSetting("discordShowLanguage");
+  const [discordShowButton] = useSetting("discordShowButton");
+  const [discordButtonLabel] = useSetting("discordButtonLabel");
+  const [discordButtonUrl] = useSetting("discordButtonUrl");
+  const [appIconUrl] = useSetting("appIconUrl");
+  const presenceOptions = useMemo((): PresenceOptions => ({
+    details: discordDetails, state: discordState, idle: discordIdle, showFile: discordShowFile, showContest: discordShowContest,
+    showTime: discordShowTime, showLanguage: discordShowLanguage,
+    button: discordShowButton ? { label: discordButtonLabel || DEFAULT_PRESENCE_OPTIONS.button!.label, url: discordButtonUrl || DEFAULT_PRESENCE_OPTIONS.button!.url } : null,
+    // The user's icon, where Discord can fetch it.
+    image: appIcon && appIconUrl ? appIconUrl : "",
+  }), [discordDetails, discordState, discordIdle, discordShowFile, discordShowContest, discordShowTime, discordShowLanguage, discordShowButton, discordButtonLabel, discordButtonUrl, appIcon, appIconUrl]);
   const roomTeammates = useCollab((room) => room.phase === "live" ? Math.max(0, room.members.length - 1) : 0);
   const presenceSinceRef = useRef({ file: "\u0000", at: Date.now() });
   if (presenceSinceRef.current.file !== (activeTab?.filename ?? "")) presenceSinceRef.current = { file: activeTab?.filename ?? "", at: Date.now() };
@@ -2557,10 +2587,9 @@ function App() {
     since: presenceSince,
     contest: contestRunning ? { endsAt: contestEndsAt, solved: presenceSolved, total: contestProblems.length } : null,
     teammates: roomTeammates,
-    showFile: discordShowFile,
-    showContest: discordShowContest,
+    options: presenceOptions,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  })), [uiLocale, activeTab?.title, activeTab?.filename, activeTab?.language, activeTab?.source, presenceToolchain, presenceSince, contestRunning, contestEndsAt, presenceSolved, contestProblems.length, roomTeammates, discordShowFile, discordShowContest]);
+  })), [uiLocale, activeTab?.title, activeTab?.filename, activeTab?.language, activeTab?.source, presenceToolchain, presenceSince, contestRunning, contestEndsAt, presenceSolved, contestProblems.length, roomTeammates, presenceOptions]);
   const discordClient = discordEnabled ? discordAppId || DISCORD_APPLICATION_ID : "";
   useEffect(() => {
     if (!IS_TAURI) return;
@@ -3514,7 +3543,7 @@ function App() {
     >
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
-          <span className="titlebar-logo" title="Mild Editor"><AppMark /></span>
+          <span className="titlebar-logo" title="Mild Editor"><AppLogo icon={appIcon} /></span>
           {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev{device ? ` · ${t("devDevice").replace("{n}", String(device.number))}` : ""}</span>}
           {!isMac && <div className="file-menu">
             <button ref={fileMenuButtonRef} className={`file-menu-button ${fileMenuOpen ? "active" : ""}`} onClick={() => setFileMenuOpen((open) => !open)} aria-haspopup="menu" aria-expanded={fileMenuOpen}>{t("fileMenu")}</button>
@@ -3849,7 +3878,7 @@ function App() {
             }}
           />
           </> : <div className="welcome-screen">
-            <div className="welcome-mark"><AppMark /></div>
+            <div className="welcome-mark"><AppLogo icon={appIcon} /></div>
             <h1>Mild Editor</h1>
             <p className="welcome-tagline">{t("welcomeTagline")}</p>
             <p>{t("welcomeBody")}</p>
