@@ -92,8 +92,34 @@ const definitions = {
     },
   } as Setting<Record<CompileProfile, string>>,
   precompileHeaders: flag("mild-precompile-headers", true),
+  // Which Python and which C++ compiler run a solution (Settings → Languages, toolchains.rs).
+  // Empty is the first one on PATH, as it always was.
+  pythonPath: text("mild-python-path", "", trimmed),
+  cppCompiler: text("mild-cpp-compiler", "", trimmed),
+  cppStandard: text<"auto" | "c++17" | "c++20" | "c++23">("mild-cpp-standard", "auto"),
   floatTolerance: stored("mild-float-tolerance", (value) => value === null ? DEFAULT_FLOAT_TOLERANCE : Number(value) || 0),
 
+  // The user's snippets come first among the completions, above the built-in ones and clangd's.
+  snippetsFirst: flag("mild-snippets-first", true),
+  // Discord's activity status (src/discord.ts): off until turned on, and what it may say.
+  discordEnabled: flag("mild-discord-enabled", false),
+  discordShowFile: flag("mild-discord-show-file", true),
+  discordShowContest: flag("mild-discord-show-contest", true),
+  // Another Discord application to show the status as; empty is the editor's own.
+  discordAppId: text("mild-discord-app-id", "", trimmed),
+  // The two lines Discord shows, as templates (src/discord.ts); empty is the default.
+  discordDetails: text("mild-discord-details", ""),
+  discordState: text("mild-discord-state", ""),
+  discordIdle: text("mild-discord-idle", ""),
+  discordShowTime: flag("mild-discord-show-time", true),
+  discordShowLanguage: flag("mild-discord-show-language", true),
+  discordShowButton: flag("mild-discord-show-button", true),
+  discordButtonLabel: text("mild-discord-button-label", "", trimmed),
+  discordButtonUrl: text("mild-discord-button-url", "", trimmed),
+  // An icon of the user's own (src/appIcon.ts): a PNG data URL, and the address it came from,
+  // which Discord can show too. Both empty is the editor's own mark.
+  appIcon: { read: () => localStorage.getItem("mild-app-icon") || "", save: (icon) => { if (icon) localStorage.setItem("mild-app-icon", icon); else localStorage.removeItem("mild-app-icon"); } } as Setting<string>,
+  appIconUrl: text("mild-app-icon-url", "", trimmed),
   snippets: { read: loadSnippets, save: (snippets) => localStorage.setItem("mild-snippets", JSON.stringify(snippets)), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,
   // Empty means "find clangd on PATH", which is stored as no key at all.
   clangdPath: {

@@ -36,6 +36,13 @@ igd-next = "0.18"
 tokio = { version = "1", features = ["net", "rt", "sync", "time", "io-util", "macros"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# Installing a Python into the editor (src/toolchains.rs): checking the download against the
+# release's SHA-256 sums and unpacking it. All four are already in the tree through Tauri.
+# (SHA-256 is also how Chromium names an unpacked extension, src/browser.rs.)
+sha2 = "0.10"
+hex = "0.4"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 
 # Embedded Chromium for the problem panel, on macOS and Windows. CEF only ships MSVC
 # builds, so a GNU-toolchain Windows build keeps the stub and the editor still compiles.
@@ -48,8 +55,6 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 cef = { version = "=151.8.1", default-features = false }
 # Unpacks .crx downloads (a CRX3 header in front of a deflate zip).
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
-# Chromium derives an unpacked extension's id from the SHA-256 of its path.
-sha2 = "0.10"
 
 # Peak memory of the program under test (src/memory.rs), the Job Object a run is held in
 # (src/sandbox.rs), and the native window calls of the problem panel (src/browser.rs) and
@@ -63,8 +68,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext"] }
-objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSApplication", "NSResponder", "NSEvent", "NSGraphicsContext", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSDate", "NSData"] }
 
 # Development builds: line numbers for this project's own code, so a panic still says where,
 # and no debug information for the seven hundred crates it depends on. Cargo's default is

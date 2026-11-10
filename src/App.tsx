@@ -1,7 +1,7 @@
 import { VerdictBadge } from "./VerdictBadge";
 import { commonFolder, contestPlan, verdictView, type ContestSchedule } from "./workbench";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { AppMark, Icon, LanguageIcon } from "./icons";
+import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { diffView, splitFlags } from "./judge";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
@@ -19,7 +19,7 @@ import { dismissExplorerOverlay, Explorer, ExplorerContextMenu, ExplorerDialogs,
 import { mergeExplorerFiles, useExplorerFiles } from "./explorerFiles";
 import { errorMessage, IS_TAURI, isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
-import { explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
+import { explorerBasename, explorerParent, fileForProblemPage, fileKey, findStressCompanion, fuzzyMatch, sameProblem, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
 import { applyDrop, distributeSiblings, dropPreview, dropTargetAt, layoutGrid, nodeAt, resizeLimit, resizeSiblings, signatureOf, type DropTarget, type Rect, type Sash } from "./gridLayout";
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
@@ -40,6 +40,9 @@ import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
 import { BoardView } from "./board/BoardView";
+import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
+import { DEFAULT_PRESENCE_OPTIONS, DISCORD_APPLICATION_ID, discordActivity, type PresenceOptions } from "./discord";
+import { iconBytes } from "./appIcon";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
@@ -408,9 +411,22 @@ function App() {
     return () => { cancelled = true; };
   }, [companionEnabled, companionPort]);
 
+  // The app's icon: the user's own picture when there is one (src/appIcon.ts), on the window
+  // and, on a Mac, in the Dock; otherwise the mark on the theme's own tile.
+  const [appIcon] = useSetting("appIcon");
+  const customIconShownRef = useRef(false);
   useEffect(() => {
     if (!IS_TAURI) return;
     let cancelled = false;
+    if (appIcon) {
+      customIconShownRef.current = true;
+      void invoke("set_app_icon", { png: Array.from(iconBytes(appIcon)) }).catch(() => undefined);
+      return;
+    }
+    if (customIconShownRef.current) {
+      customIconShownRef.current = false;
+      void invoke("set_app_icon", { png: null }).catch(() => undefined);
+    }
     void createThemeWindowIcon(uiTheme)
       .then(async (icon) => {
         if (!cancelled) await getCurrentWindow().setIcon(icon);
@@ -419,7 +435,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [uiTheme]);
+  }, [uiTheme, appIcon]);
 
   const background = useBackgroundImage(t);
 
@@ -432,7 +448,28 @@ function App() {
   const [profileFlags] = useSetting("profileFlags");
   const [precompileHeaders] = useSetting("precompileHeaders");
   const [floatTolerance] = useSetting("floatTolerance");
-  const buildOptions = () => ({ compileFlags: splitFlags(profileFlags[compileProfile]), precompileHeaders });
+  // The toolchain chosen in Settings → Languages; empty is the first one on PATH.
+  const [pythonPath, setPythonPath] = useSetting("pythonPath");
+  const [snippetsFirst] = useSetting("snippetsFirst");
+  const pythons = toolchains.use((state) => state.pythons);
+  const [cppCompiler] = useSetting("cppCompiler");
+  const [cppStandard] = useSetting("cppStandard");
+  const buildOptions = () => ({
+    compileFlags: splitFlags(profileFlags[compileProfile]), precompileHeaders,
+    python: pythonPath || undefined, cppCompiler: cppCompiler || undefined,
+    cppStandard: cppStandard === "c++17" || cppStandard === "c++20" || cppStandard === "c++23" ? cppStandard : undefined,
+  });
+  // The interpreter is started once off the clock — when chosen, and when a Python file comes
+  // to the front after a while — so the first timed test does not wait for it to load from disk.
+  const pythonWarmedRef = useRef({ path: "\u0000", at: 0 });
+  useEffect(() => {
+    if (!IS_TAURI || language !== "python") return;
+    ensureToolchains();
+    const warmed = pythonWarmedRef.current;
+    if (warmed.path === pythonPath && Date.now() - warmed.at < 5 * 60_000) return;
+    pythonWarmedRef.current = { path: pythonPath, at: Date.now() };
+    void invoke("warm_python", { python: pythonPath || null }).catch(() => undefined);
+  }, [language, pythonPath, activeTabId]);
 
   useEffect(() => {
     if (fontOptions.length && !fontOptions.some((font) => font.id === editorFont)) setEditorFont(fontOptions[0].id);
@@ -2528,6 +2565,57 @@ function App() {
     const excluded = new Set(contest.excluded);
     return problemsOfFolder(contest.folder).filter((file) => !excluded.has(fileKey(file.filename)));
   }, [contest?.folder, contest?.excluded, savedFiles, tabs]);
+
+  // Discord's activity status (src/discord.ts): what is in front, how it runs, the contest and
+  // the room. Sent a moment after it settles; the backend keeps Discord's own pace.
+  const [discordEnabled] = useSetting("discordEnabled");
+  const [discordShowFile] = useSetting("discordShowFile");
+  const [discordShowContest] = useSetting("discordShowContest");
+  const [discordAppId] = useSetting("discordAppId");
+  const [discordDetails] = useSetting("discordDetails");
+  const [discordState] = useSetting("discordState");
+  const [discordIdle] = useSetting("discordIdle");
+  const [discordShowTime] = useSetting("discordShowTime");
+  const [discordShowLanguage] = useSetting("discordShowLanguage");
+  const [discordShowButton] = useSetting("discordShowButton");
+  const [discordButtonLabel] = useSetting("discordButtonLabel");
+  const [discordButtonUrl] = useSetting("discordButtonUrl");
+  const [appIconUrl] = useSetting("appIconUrl");
+  const presenceOptions = useMemo((): PresenceOptions => ({
+    details: discordDetails, state: discordState, idle: discordIdle, showFile: discordShowFile, showContest: discordShowContest,
+    showTime: discordShowTime, showLanguage: discordShowLanguage,
+    button: discordShowButton ? { label: discordButtonLabel || DEFAULT_PRESENCE_OPTIONS.button!.label, url: discordButtonUrl || DEFAULT_PRESENCE_OPTIONS.button!.url } : null,
+    // The user's icon, where Discord can fetch it.
+    image: appIcon && appIconUrl ? appIconUrl : "",
+  }), [discordDetails, discordState, discordIdle, discordShowFile, discordShowContest, discordShowTime, discordShowLanguage, discordShowButton, discordButtonLabel, discordButtonUrl, appIcon, appIconUrl]);
+  const roomTeammates = useCollab((room) => room.phase === "live" ? Math.max(0, room.members.length - 1) : 0);
+  const presenceSinceRef = useRef({ file: "\u0000", at: Date.now() });
+  if (presenceSinceRef.current.file !== (activeTab?.filename ?? "")) presenceSinceRef.current = { file: activeTab?.filename ?? "", at: Date.now() };
+  const presenceToolchain = !activeTab ? ""
+    : activeTab.language === "python" ? (() => { const python = chosenToolchain(pythons, pythonPath); return python ? `Python ${minorVersion(python.version)}` : ""; })()
+    : cppStandard === "auto" ? "" : cppStandard.toUpperCase();
+  const presenceSolved = contestRunning && contest ? contestProblems.filter((file) => contest.solved[fileKey(file.filename)] !== undefined).length : 0;
+  const presenceSince = presenceSinceRef.current.at;
+  // Built again only when something it shows changes, not with every keystroke.
+  const presence = useMemo(() => JSON.stringify(discordActivity({
+    locale: uiLocale === "ko" ? "ko" : "en",
+    version: APP_VERSION,
+    file: activeTab ? { title: activeTab.title, filename: activeTab.filename, language: activeTab.language, source: activeTab.source } : null,
+    toolchain: presenceToolchain,
+    since: presenceSince,
+    contest: contestRunning ? { endsAt: contestEndsAt, solved: presenceSolved, total: contestProblems.length } : null,
+    teammates: roomTeammates,
+    options: presenceOptions,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })), [uiLocale, activeTab?.title, activeTab?.filename, activeTab?.language, activeTab?.source, presenceToolchain, presenceSince, contestRunning, contestEndsAt, presenceSolved, contestProblems.length, roomTeammates, presenceOptions]);
+  const discordClient = discordEnabled ? discordAppId || DISCORD_APPLICATION_ID : "";
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const timer = window.setTimeout(() => {
+      void invoke("discord_set_activity", { clientId: discordClient, activity: discordClient ? JSON.parse(presence) : null }).catch(() => undefined);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [presence, discordClient]);
   // What the next contest covers: a folder (the active file's until another is picked) minus
   // the problems clicked away, so a contest needs no workspace of its own.
   const [contestFolderChoice, setContestFolderChoice] = useState<string | null>(null);
@@ -2825,11 +2913,26 @@ function App() {
     if (!problemPanelOpen || !browserStatus.available || submitHoldRef.current) return;
     const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
     if (!url || url === browserStatus.url) return;
+    // Already on the problem, under another of its addresses (a contest's rather than the problem set's).
+    if (activeTab && sameProblem(activeTab.source, activeTab.sourceUrl, browserStatus.url)) return;
     // Following a file changes the page only; the window stays where it is in the stack.
     if (problemBrowserMode === "window") invoke("problem_window_open", { url, focus: false }).catch((error) => setFileStatus(errorMessage(error)));
     else openProblemUrl(url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.sourceUrl, browserStatus.available, problemPanelOpen, problemBrowserMode]);
+
+  // The other way round: a judge's problem page opened in the browser brings its file to the
+  // front, when one was already made for it — no import, no "open the existing file".
+  const followedPageRef = useRef("");
+  useEffect(() => {
+    const url = browserStatus.url;
+    if (!url || browserStatus.loading || submitHoldRef.current || url === followedPageRef.current) return;
+    followedPageRef.current = url;
+    const file = fileForProblemPage([...tabs, ...savedFiles], url);
+    if (!file || (activeTab && fileKey(activeTab.filename) === fileKey(file.filename))) return;
+    openSavedFile(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserStatus.url, browserStatus.loading]);
 
   // Tampermonkey installs a userscript from its dashboard, which the backend drives once
   // the panel is on screen; the host element only exists after the panel renders.
@@ -3464,13 +3567,13 @@ function App() {
     suggestOnTriggerCharacters: true,
     wordBasedSuggestions: "allDocuments",
     tabCompletion: "on",
-    snippetSuggestions: "top",
+    snippetSuggestions: snippetsFirst ? "top" : "inline",
     wordWrap: "off",
     tabSize: 4,
     readOnly: readOnlyShared,
     // A teammate's name, so nothing in it is read as markdown.
     readOnlyMessage: { value: t("collabKeyboardBusy").replace("{name}", (keyboardBusy ?? "").replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&")) },
-  }), [editorFontFamily, editorFontSize, readOnlyShared, keyboardBusy, t]);
+  }), [editorFontFamily, editorFontSize, readOnlyShared, keyboardBusy, snippetsFirst, t]);
 
   return (
     <main
@@ -3487,7 +3590,7 @@ function App() {
     >
       <div className="window-titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
-          <span className="titlebar-logo" title="Mild Editor"><AppMark /></span>
+          <span className="titlebar-logo" title="Mild Editor"><AppLogo icon={appIcon} /></span>
           {IS_DEV_BUILD && <span className="titlebar-dev" data-tauri-drag-region title="tauri dev build">dev{device ? ` · ${t("devDevice").replace("{n}", String(device.number))}` : ""}</span>}
           {!isMac && <div className="file-menu">
             <button ref={fileMenuButtonRef} className={`file-menu-button ${fileMenuOpen ? "active" : ""}`} onClick={() => setFileMenuOpen((open) => !open)} aria-haspopup="menu" aria-expanded={fileMenuOpen}>{t("fileMenu")}</button>
@@ -3535,6 +3638,11 @@ function App() {
               else setDefaultLanguage(next);
             }} aria-label="Select language" title={activeTab ? "language of the open file" : t("defaultLanguage")}><option value="cpp">C++</option><option value="python">Python 3</option></select>
             {(activeTab ? language : defaultLanguage) === "cpp" && <select className={`run-profile ${compileProfile}`} value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")} aria-label={t("compileProfile")} title={`${t("compileProfile")}: ${profileFlags[compileProfile]}`}><option value="release">Release</option><option value="debug">Debug</option></select>}
+            {(activeTab ? language : defaultLanguage) === "python" && pythons && pythons.length > 0 && <select className="run-profile run-python" value={pythons.some((item) => item.path === pythonPath) ? pythonPath : ""} onChange={(event) => setPythonPath(event.target.value)} aria-label="Python" title={chosenToolchain(pythons, pythonPath)?.path ?? "Python"}>
+              {/* Short labels: the full list, with where each came from, is in Settings → Languages. */}
+              <option value="">Py {minorVersion(pythons.find((item) => item.isDefault)?.version ?? "?")}</option>
+              {pythons.filter((item) => !item.isDefault).map((item) => <option key={item.path} value={item.path}>Py {item.version}</option>)}
+            </select>}
           </span>
           <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : () => void run()} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
             <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
@@ -3795,7 +3903,7 @@ function App() {
             options={editorOptions}
           />
           </> : <div className="welcome-screen">
-            <div className="welcome-mark"><AppMark /></div>
+            <div className="welcome-mark"><AppLogo icon={appIcon} /></div>
             <h1>Mild Editor</h1>
             <p className="welcome-tagline">{t("welcomeTagline")}</p>
             <p>{t("welcomeBody")}</p>

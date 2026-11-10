@@ -11,10 +11,13 @@
 //! - an unhandled exception ends the process instead of opening Windows' crash dialog.
 //!
 //! On Linux and macOS the program leads a process group of its own, so a kill reaches what it
-//! started, and its stack limit is raised to what judges give (see `STACK_BYTES`). Time stays
-//! wall-clock there and memory is sampled (see `memory.rs`).
+//! started, and its stack limit is raised to what judges give (see `STACK_BYTES`). Time is the
+//! program's CPU time there too: sampled from the kernel while it runs, and read exactly from
+//! its resource usage when it is reaped. Waiting is not counted, so the first run after a
+//! while — an interpreter read back from a cold disk, a fresh binary the system scans before
+//! it starts — is not a TLE. Memory is sampled (see `memory.rs`).
 
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::Duration;
 
 /// The stack judges give a solution (Codeforces and AtCoder: 256 MB). The default is 1 MB
@@ -88,6 +91,12 @@ mod platform {
             unsafe { TerminateJobObject(self.job, 1); }
         }
 
+        /// Waits up to `timeout` for the child to exit.
+        pub(crate) fn wait(&self, child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
+            use wait_timeout::ChildExt;
+            child.wait_timeout(timeout)
+        }
+
         /// User plus kernel time of every process that ran in the job.
         pub(crate) fn cpu_time(&self) -> Option<Duration> {
             // SAFETY: the buffer is a correctly sized, writable accounting structure.
@@ -151,11 +160,13 @@ mod platform {
 
     pub(crate) struct Sandbox {
         group: std::cell::Cell<Option<i32>>,
+        /// The child's CPU time as the kernel gave it when the child was reaped.
+        spent: std::cell::Cell<Option<Duration>>,
     }
 
     impl Sandbox {
         pub(crate) fn new(_memory_limit_kb: Option<u64>) -> Option<Self> {
-            Some(Sandbox { group: std::cell::Cell::new(None) })
+            Some(Sandbox { group: std::cell::Cell::new(None), spent: std::cell::Cell::new(None) })
         }
 
         /// The child leads its own process group (see `configure`), named by its pid.
@@ -171,7 +182,36 @@ mod platform {
             }
         }
 
-        pub(crate) fn cpu_time(&self) -> Option<Duration> { None }
+        /// Waits up to `timeout` for the child to exit, reaping it with `wait4` so that its exact
+        /// CPU time comes with its status. The `Child` is not asked again afterwards.
+        pub(crate) fn wait(&self, child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
+            use std::os::unix::process::ExitStatusExt;
+            let pid = child.id() as libc::pid_t;
+            let started = std::time::Instant::now();
+            loop {
+                let mut status = 0;
+                // SAFETY: an all-zero rusage is valid, and both pointers are to live locals.
+                let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+                let reaped = unsafe { libc::wait4(pid, &mut status, libc::WNOHANG, &mut usage) };
+                if reaped == pid {
+                    let seconds = |time: libc::timeval| Duration::from_secs(time.tv_sec.max(0) as u64) + Duration::from_micros(time.tv_usec.max(0) as u64);
+                    self.spent.set(Some(seconds(usage.ru_utime) + seconds(usage.ru_stime)));
+                    return Ok(Some(ExitStatus::from_raw(status)));
+                }
+                if reaped < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted { return Err(error); }
+                }
+                if started.elapsed() >= timeout { return Ok(None); }
+                std::thread::sleep(Duration::from_millis(1).min(timeout.saturating_sub(started.elapsed())));
+            }
+        }
+
+        /// The child's user plus system time: exact once it is reaped, sampled while it runs.
+        pub(crate) fn cpu_time(&self) -> Option<Duration> {
+            if let Some(spent) = self.spent.get() { return Some(spent); }
+            running_cpu_time(self.group.get()?)
+        }
         pub(crate) fn peak_memory_kb(&self) -> Option<u64> { None }
         /// Memory is not capped here; the runner samples it (see `memory.rs`).
         pub(crate) fn caps_memory(&self) -> bool { false }
@@ -181,6 +221,41 @@ mod platform {
     impl Drop for Sandbox {
         /// Whatever the program left running in the background goes with it.
         fn drop(&mut self) { self.kill(); }
+    }
+
+    /// The CPU time a running process has used so far. On macOS the kernel counts it in Mach
+    /// time units, which are nanoseconds on Intel but not on Apple silicon.
+    #[cfg(target_os = "macos")]
+    // libc marks the timebase as deprecated in favour of the `mach2` crate; it is the same call.
+    #[allow(deprecated)]
+    fn running_cpu_time(pid: i32) -> Option<Duration> {
+        // SAFETY: zeroed structures are valid for both calls, and each is passed its own type.
+        unsafe {
+            let mut info: libc::rusage_info_v2 = std::mem::zeroed();
+            if libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, &mut info as *mut _ as *mut libc::rusage_info_t) != 0 { return None; }
+            let mut base: libc::mach_timebase_info = std::mem::zeroed();
+            if libc::mach_timebase_info(&mut base) != 0 || base.denom == 0 { return None; }
+            let ticks = u128::from(info.ri_user_time + info.ri_system_time);
+            Some(Duration::from_nanos((ticks * u128::from(base.numer) / u128::from(base.denom)) as u64))
+        }
+    }
+
+    /// The CPU time a running process has used so far, from `/proc/<pid>/stat`.
+    #[cfg(not(target_os = "macos"))]
+    fn running_cpu_time(pid: i32) -> Option<Duration> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let ticks = cpu_ticks(&stat)?;
+        // SAFETY: sysconf has no preconditions.
+        let per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        (per_second > 0).then(|| Duration::from_secs_f64(ticks as f64 / per_second as f64))
+    }
+
+    /// User plus system ticks from a `/proc/<pid>/stat` line: fields 14 and 15, counted after
+    /// the command name, which is in parentheses and may itself hold spaces or parentheses.
+    #[cfg(any(not(target_os = "macos"), test))]
+    pub(super) fn cpu_ticks(stat: &str) -> Option<u64> {
+        let fields: Vec<&str> = stat.get(stat.rfind(')')? + 1..)?.split_whitespace().collect();
+        Some(fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?)
     }
 
     /// A process group of its own, and the judges' stack.
@@ -212,6 +287,10 @@ mod platform {
     impl Sandbox {
         pub(crate) fn new(_memory_limit_kb: Option<u64>) -> Option<Self> { None }
         pub(crate) fn attach(&self, _child: &Child) -> bool { false }
+        pub(crate) fn wait(&self, child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
+            use wait_timeout::ChildExt;
+            child.wait_timeout(timeout)
+        }
         pub(crate) fn kill(&self) {}
         pub(crate) fn cpu_time(&self) -> Option<Duration> { None }
         pub(crate) fn peak_memory_kb(&self) -> Option<u64> { None }
@@ -222,3 +301,13 @@ mod platform {
 }
 
 pub(crate) use platform::{configure, Sandbox};
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn cpu_ticks_are_read_past_a_command_name_with_spaces_and_parentheses() {
+        let stat = "4242 (my (odd) prog) R 1 4242 4242 0 -1 4194304 120 0 0 0 37 5 0 0 20 0 1 0 100 1000 50";
+        assert_eq!(super::platform::cpu_ticks(stat), Some(42));
+        assert_eq!(super::platform::cpu_ticks("4242 (cut short) R 1"), None);
+    }
+}

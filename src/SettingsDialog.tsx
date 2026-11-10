@@ -8,19 +8,22 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import type { BackgroundImage } from "./backgroundImage";
 import type { ClangdInfo } from "./clangd";
 import { updateStatusLine, type messages, type Translate } from "./i18n";
-import { Icon } from "./icons";
+import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { setupMonaco } from "./monacoSetup";
 import { errorMessage, IS_TAURI } from "./platform";
 import { loadTemplateDrafts, templates, templateSources, templateStorageKey } from "./problems";
 import type { BrowserStatus } from "./ProblemWindow";
 import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
+import { DEFAULT_DETAILS, DEFAULT_PRESENCE_OPTIONS, DEFAULT_STATE, DISCORD_APPLICATION_ID, discordActivity, PLACEHOLDERS } from "./discord";
+import { iconFromUrl, imageToIcon, isImageAddress } from "./appIcon";
+import { chosenToolchain, ensureToolchains, rescanToolchains, toolchainLabel, toolchains, type PythonDownload, type Toolchain } from "./toolchains";
 import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiStyle, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
 
 /** The pages in the order the navigation lists them, each with the message that names it. */
 const PAGES: Array<[SettingsPage, keyof typeof messages.en]> = [
   ["appearance", "appearance"], ["template", "template"], ["snippets", "snippets"], ["judge", "judge"],
-  ["build", "buildSettings"], ["language-server", "languageServer"], ["browser", "browserSettings"], ["updates", "updates"],
+  ["build", "buildSettings"], ["languages", "languagesSettings"], ["language-server", "languageServer"], ["discord", "discordSettings"], ["browser", "browserSettings"], ["updates", "updates"],
 ];
 
 const THEME_NOTES: Record<UiTheme, string> = {
@@ -111,6 +114,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
           : page === "snippets" ? <SnippetsPage t={t} editor={snippetEditor} monaco={monaco} />
           : page === "judge" ? <JudgePage t={t} companionStatus={props.companionStatus} companionError={props.companionError} refreshingJudge={props.refreshingJudge} refreshSubmissionStatuses={props.refreshSubmissionStatuses} />
           : page === "build" ? <BuildPage t={t} />
+          : page === "languages" ? <LanguagesPage t={t} />
+          : page === "discord" ? <DiscordPage t={t} />
           : page === "browser" ? <BrowserPage t={t} extensions={extensions} browserStatus={props.browserStatus} installUserscript={props.installUserscript} />
           : page === "updates" ? <UpdatesPage t={t} appVersion={props.appVersion} updateStatus={props.updateStatus} updateRetryable={props.updateRetryable} checkForUpdates={props.checkForUpdates} installUpdate={props.installUpdate} exportSettings={props.exportSettings} importSettings={props.importSettings} />
           : <LanguageServerPage t={t} clangdPath={clangdPath} setClangdPath={setClangdPath} clangdStatus={props.clangdStatus} clangdInfo={props.clangdInfo} connectClangd={props.connectClangd} />}
@@ -122,6 +127,43 @@ export function SettingsDialog(props: SettingsDialogProps) {
 
 /** How the two small Monaco editors in the dialog follow the app's theme and editor font. */
 type MonacoLook = { theme: string; fontFamily: string };
+
+/** The app's icon: the mark, a picture from this computer, or one from an address — which Discord can show as well. */
+function AppIconSection({ t }: Pick<SettingsDialogProps, "t">) {
+  const [appIcon, setAppIcon] = useSetting("appIcon");
+  const [appIconUrl, setAppIconUrl] = useSetting("appIconUrl");
+  const [address, setAddress] = useState(appIconUrl);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const fromFile = (file: File | undefined) => {
+    if (!file) return;
+    setError("");
+    imageToIcon(file).then((icon) => { setAppIcon(icon); setAppIconUrl(""); setAddress(""); }, (reason) => setError(errorMessage(reason)));
+  };
+  const fromAddress = () => {
+    if (!isImageAddress(address.trim())) { setError(t("appIconHttps")); return; }
+    setError("");
+    setBusy(true);
+    iconFromUrl(address.trim()).then((icon) => { setAppIcon(icon); setAppIconUrl(address.trim()); }, (reason) => setError(errorMessage(reason))).finally(() => setBusy(false));
+  };
+  return <>
+    <div className="appearance-group"><span>{t("appIcon")}</span></div>
+    <div className="app-icon-picker">
+      <span className="app-icon-preview welcome-mark"><AppLogo icon={appIcon} /></span>
+      <div className="app-icon-actions">
+        <div className="companion-controls">
+          <button className="subtle-button" onClick={() => fileRef.current?.click()}>{t("appIconUpload")}</button>
+          <button className="subtle-button" onClick={() => { setAppIcon(""); setAppIconUrl(""); setAddress(""); setError(""); }} disabled={!appIcon}>{t("reset")}</button>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => { fromFile(event.target.files?.[0]); event.target.value = ""; }} />
+        </div>
+        <span className="path-picker"><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="https://…/icon.png" spellCheck={false} aria-label={t("appIconAddress")} onKeyDown={(event) => { if (event.key === "Enter") fromAddress(); }} /><button className="subtle-button" onClick={fromAddress} disabled={busy || !address.trim()}>{busy ? t("appIconLoading") : t("appIconUse")}</button></span>
+      </div>
+    </div>
+    <p className="settings-help">{appIcon && !appIconUrl ? t("appIconLocalNote") : t("appIconHelp")}</p>
+    {error && <p className="settings-help toolchain-error" role="alert">{error}</p>}
+  </>;
+}
 
 function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background, showStatus, resetLayout }: Pick<SettingsDialogProps, "t" | "systemFonts" | "background" | "showStatus" | "resetLayout"> & { fontOptions: EditorFontOption[]; selectedFont: EditorFontOption }) {
   const [uiLocale, setUiLocale] = useSetting("uiLocale");
@@ -189,6 +231,7 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
     <p className="settings-help">{t("interfaceScaleHelp")}</p>
     <div className="appearance-group"><span>{t("layoutTitle")}</span><div className="companion-controls"><button className="subtle-button" onClick={resetLayout}>{t("layoutReset")}</button></div></div>
     <p className="settings-help">{t("layoutHint")}</p>
+    <AppIconSection t={t} />
     <p className="settings-help">{t("appearanceHelp")}</p>
     <div className="appearance-group"><span>{t("theme")}</span><div className="theme-options">
       {UI_THEMES.map(([theme, name]) => <button key={theme} className={`theme-option ${theme} ${uiTheme === theme ? "active" : ""}`} onClick={() => setUiTheme(theme)}><i /><strong>{name}</strong><small>{THEME_NOTES[theme]}</small></button>)}
@@ -340,11 +383,24 @@ function useSnippetEditor(activeLanguage: Language) {
     if (draft.id === id) startNew();
   };
 
-  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove };
+  /** Moves a snippet past the next one of its language, up or down: the order is its rank among the completions. */
+  const move = (id: string, step: -1 | 1) => setSnippets((current) => {
+    const at = current.findIndex((snippet) => snippet.id === id);
+    if (at < 0) return current;
+    let other = at + step;
+    while (other >= 0 && other < current.length && current[other].language !== current[at].language) other += step;
+    if (other < 0 || other >= current.length) return current;
+    const next = [...current];
+    [next[at], next[other]] = [next[other], next[at]];
+    return next;
+  });
+
+  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove, move };
 }
 
 function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { editor: ReturnType<typeof useSnippetEditor>; monaco: MonacoLook }) {
   const { draft, setDraft } = editor;
+  const [snippetsFirst, setSnippetsFirst] = useSetting("snippetsFirst");
   // Each snippet keeps its own undo history too: the editor is shared in the same way.
   useHistoryPerDraft(editor.editorRef, draft.id);
   return <div className="snippet-settings">
@@ -352,8 +408,13 @@ function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { 
       <button className="new-snippet" onClick={editor.startNew}><Icon name="plus" size={13} />New snippet</button>
       {editor.snippets.map((snippet) => <div className={`snippet-item ${snippet.id === draft.id ? "active" : ""}`} key={snippet.id}>
         <button onClick={() => setDraft(snippet)}><span>{snippet.name}</span><small>{snippet.language}</small></button>
+        <span className="snippet-order">
+          <button onClick={() => editor.move(snippet.id, -1)} aria-label={t("snippetUp")} title={t("snippetUp")}><Icon name="chevronDown" size={11} className="flip" /></button>
+          <button onClick={() => editor.move(snippet.id, 1)} aria-label={t("snippetDown")} title={t("snippetDown")}><Icon name="chevronDown" size={11} /></button>
+        </span>
         <button className="snippet-delete" onClick={() => editor.remove(snippet.id)} aria-label={`Delete ${snippet.name}`}><Icon name="close" size={12} /></button>
       </div>)}
+      <label className="companion-toggle snippet-first"><input type="checkbox" checked={snippetsFirst} onChange={(event) => setSnippetsFirst(event.target.checked)} />{t("snippetsFirst")}</label>
     </aside>
     <div className="snippet-form">
       <div className="snippet-guide">
@@ -430,6 +491,195 @@ function BuildPage({ t }: Pick<SettingsDialogProps, "t">) {
     <div className="appearance-group"><span>{t("judging")}</span></div>
     <label className="clangd-path-label">{t("floatTolerance")}<select value={String(floatTolerance)} onChange={(event) => setFloatTolerance(Number(event.target.value))}><option value="0">{t("floatToleranceOff")}</option><option value="0.0001">1e-4</option><option value="0.000001">1e-6</option><option value="1e-9">1e-9</option></select></label>
     <p className="settings-help">{t("floatToleranceHelp")}</p>
+  </div>;
+}
+
+type DiscordStatus = { connected: boolean; user: string | null; error: string | null };
+
+/** Discord's activity status as Discord's own profile card shows it, from the settings as they are now. */
+function DiscordPreview({ t, locale }: Pick<SettingsDialogProps, "t"> & { locale: "en" | "ko" }) {
+  const settings = {
+    details: useSetting("discordDetails")[0], state: useSetting("discordState")[0], idle: useSetting("discordIdle")[0],
+    showFile: useSetting("discordShowFile")[0], showContest: useSetting("discordShowContest")[0], showTime: useSetting("discordShowTime")[0],
+    showLanguage: useSetting("discordShowLanguage")[0], showButton: useSetting("discordShowButton")[0],
+    buttonLabel: useSetting("discordButtonLabel")[0], buttonUrl: useSetting("discordButtonUrl")[0],
+  };
+  const [appIcon] = useSetting("appIcon");
+  const [contest, setContest] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+  const since = useRef(Date.now() - 12 * 60_000 - 34_000).current;
+  const endsAt = useRef(Date.now() + 42 * 60_000 + 10_000).current;
+  const activity = discordActivity({
+    locale, version: "", toolchain: "Python 3.14", since, teammates: 2,
+    file: { title: "A - Takahashi's Snack", filename: "AtCoder/abc300/A.py", language: "python", source: "atcoder" },
+    contest: contest ? { endsAt, solved: 3, total: 7 } : null,
+    options: {
+      details: settings.details, state: settings.state, idle: settings.idle, showFile: settings.showFile, showContest: settings.showContest,
+      showTime: settings.showTime, showLanguage: settings.showLanguage, image: "",
+      button: settings.showButton ? { label: settings.buttonLabel || DEFAULT_PRESENCE_OPTIONS.button!.label, url: settings.buttonUrl || DEFAULT_PRESENCE_OPTIONS.button!.url } : null,
+    },
+  });
+  const clock = (seconds: number) => { const value = Math.max(0, seconds); const hours = Math.floor(value / 3600); const rest = `${String(Math.floor(value / 60) % 60).padStart(2, "0")}:${String(Math.floor(value % 60)).padStart(2, "0")}`; return hours ? `${hours}:${rest}` : rest; };
+  const stamps = activity.timestamps as { start?: number; end?: number } | undefined;
+  const time = stamps && (stamps.end !== undefined
+    ? t("discordLeft").replace("{time}", clock(stamps.end - now / 1000))
+    : t("discordElapsed").replace("{time}", clock(now / 1000 - (stamps.start ?? now / 1000))));
+  return <div className="discord-preview">
+    <div className="discord-preview-head">
+      <small>{activity.type === 5 ? t("discordCompeting") : t("discordPlaying")}</small>
+      <label className="discord-preview-toggle"><input type="checkbox" checked={contest} onChange={(event) => setContest(event.target.checked)} />{t("discordPreviewContest")}</label>
+    </div>
+    <div className="discord-preview-body">
+      <span className="discord-preview-art"><AppLogo icon={appIcon} />{"small_image" in activity.assets && <i><LanguageIcon language="python" size={14} /></i>}</span>
+      <div className="discord-preview-text">
+        <strong>Mild Editor</strong>
+        <span>{activity.details}</span>
+        {"state" in activity && <span>{activity.state}</span>}
+        {time && <span className="discord-preview-time">{time}</span>}
+      </div>
+    </div>
+    {activity.buttons?.map((button) => <span key={button.label} className="discord-preview-button" title={button.url}>{button.label}</span>)}
+  </div>;
+}
+
+/** Discord's activity status: whether it is on, what it says, and whether Discord is there to show it. */
+function DiscordPage({ t }: Pick<SettingsDialogProps, "t">) {
+  const [enabled, setEnabled] = useSetting("discordEnabled");
+  const [showFile, setShowFile] = useSetting("discordShowFile");
+  const [showContest, setShowContest] = useSetting("discordShowContest");
+  const [showTime, setShowTime] = useSetting("discordShowTime");
+  const [showLanguage, setShowLanguage] = useSetting("discordShowLanguage");
+  const [showButton, setShowButton] = useSetting("discordShowButton");
+  const [details, setDetails] = useSetting("discordDetails");
+  const [stateLine, setStateLine] = useSetting("discordState");
+  const [idle, setIdle] = useSetting("discordIdle");
+  const [buttonLabel, setButtonLabel] = useSetting("discordButtonLabel");
+  const [buttonUrl, setButtonUrl] = useSetting("discordButtonUrl");
+  const [appId, setAppId] = useSetting("discordAppId");
+  const [appIcon] = useSetting("appIcon");
+  const [appIconUrl] = useSetting("appIconUrl");
+  const [uiLocale] = useSetting("uiLocale");
+  const [status, setStatus] = useState<DiscordStatus | null>(null);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const look = () => void invoke<DiscordStatus>("discord_status").then(setStatus).catch(() => undefined);
+    look();
+    const timer = window.setInterval(look, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const application = appId || DISCORD_APPLICATION_ID;
+  const state = !enabled ? "off" : !application ? "no-app" : status?.connected ? "ready" : status?.error === "not-running" || !status?.error ? "waiting" : "error";
+  const line = state === "off" ? t("discordOff") : state === "no-app" ? t("discordNoApp") : state === "ready" ? (status?.user ? t("discordConnectedAs").replace("{user}", status.user) : t("discordConnected"))
+    : state === "waiting" ? t("discordWaiting") : `${t("discordError")}: ${status?.error}`;
+  const toggle = (checked: boolean, set: (value: boolean) => void, label: string) =>
+    <label className="companion-toggle"><input type="checkbox" checked={checked} disabled={!enabled} onChange={(event) => set(event.target.checked)} />{label}</label>;
+  return <div className="language-server-settings judge-settings discord-settings">
+    <p className="settings-help">{t("discordHelp")}</p>
+    <div className={`lsp-state ${state === "ready" ? "ready" : state === "error" ? "error" : "idle"}`}>
+      <span className="lsp-dot" />
+      <div><strong>Discord</strong><small>{line}</small></div>
+    </div>
+    <label className="companion-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("discordEnable")}</label>
+    <DiscordPreview t={t} locale={uiLocale === "ko" ? "ko" : "en"} />
+    <div className="appearance-group"><span>{t("discordShown")}</span></div>
+    {toggle(showFile, setShowFile, t("discordShowFile"))}
+    {toggle(showContest, setShowContest, t("discordShowContest"))}
+    {toggle(showTime, setShowTime, t("discordShowTime"))}
+    {toggle(showLanguage, setShowLanguage, t("discordShowLanguage"))}
+    {toggle(showButton, setShowButton, t("discordShowButton"))}
+    {showButton && <div className="discord-button-fields">
+      <input value={buttonLabel} onChange={(event) => setButtonLabel(event.target.value)} placeholder={DEFAULT_PRESENCE_OPTIONS.button!.label} maxLength={32} aria-label={t("discordButtonLabel")} disabled={!enabled} />
+      <input value={buttonUrl} onChange={(event) => setButtonUrl(event.target.value)} placeholder={DEFAULT_PRESENCE_OPTIONS.button!.url} spellCheck={false} aria-label={t("discordButtonUrl")} disabled={!enabled} />
+    </div>}
+    <div className="appearance-group"><span>{t("discordLines")}</span></div>
+    <label className="clangd-path-label">{t("discordDetails")}<input value={details} onChange={(event) => setDetails(event.target.value)} placeholder={DEFAULT_DETAILS} spellCheck={false} disabled={!enabled} /></label>
+    <label className="clangd-path-label">{t("discordState")}<input value={stateLine} onChange={(event) => setStateLine(event.target.value)} placeholder={DEFAULT_STATE} spellCheck={false} disabled={!enabled} /></label>
+    <label className="clangd-path-label">{t("discordIdle")}<input value={idle} onChange={(event) => setIdle(event.target.value)} placeholder={t("discordIdlePlaceholder")} spellCheck={false} disabled={!enabled} /></label>
+    <p className="settings-help">{t("discordLinesHelp")} {PLACEHOLDERS.map((name) => <code key={name}>{`{${name}}`}</code>)}</p>
+    <p className="settings-help">{appIcon ? appIconUrl ? t("discordImageCustom") : t("discordImageLocal") : t("discordImageDefault")}</p>
+    <details className="collab-advanced">
+      <summary>{t("collabAdvanced")}</summary>
+      <label className="clangd-path-label">{t("discordAppId")}<input value={appId} onChange={(event) => setAppId(event.target.value.replace(/\D/g, ""))} placeholder={DISCORD_APPLICATION_ID || "123456789012345678"} spellCheck={false} inputMode="numeric" /></label>
+      <p className="settings-help">{t("discordAppIdHelp")}</p>
+    </details>
+  </div>;
+}
+
+/** One toolchain choice: the default (whatever is first on PATH) or one of those found, and a chosen one that has gone. */
+function ToolchainSelect({ t, list, value, onChange, label }: { t: Translate; list: Toolchain[] | null; value: string; onChange: (path: string) => void; label: string }) {
+  const fallback = list?.find((item) => item.isDefault);
+  const known = !value || list === null || list.some((item) => item.path === value);
+  return <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} disabled={list === null}>
+    <option value="">{fallback ? `${t("toolchainDefault")} (${toolchainLabel(fallback, list ?? [])})` : list === null ? t("toolchainScanning") : t("toolchainDefault")}</option>
+    {!known && <option value={value}>{t("toolchainMissing")}: {value}</option>}
+    {(list ?? []).map((item) => <option key={item.path} value={item.path} title={item.path}>{toolchainLabel(item, list ?? [])}</option>)}
+  </select>;
+}
+
+/** Which Python and which C++ compiler run a solution, and a Python of the editor's own when none fits. */
+function LanguagesPage({ t }: Pick<SettingsDialogProps, "t">) {
+  const [pythonPath, setPythonPath] = useSetting("pythonPath");
+  const [cppCompiler, setCppCompiler] = useSetting("cppCompiler");
+  const [cppStandard, setCppStandard] = useSetting("cppStandard");
+  const pythons = toolchains.use((state) => state.pythons);
+  const compilers = toolchains.use((state) => state.compilers);
+  const scanning = toolchains.use((state) => state.scanning);
+  const [downloads, setDownloads] = useState<PythonDownload[] | null>(null);
+  const [wanted, setWanted] = useState("");
+  const [installing, setInstalling] = useState<{ version: string; received: number; total: number } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { ensureToolchains(); }, []);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let stop: (() => void) | undefined;
+    void listen<{ version: string; received: number; total: number }>("python-install-progress", (event) => setInstalling(event.payload)).then((unlisten) => { stop = unlisten; });
+    return () => stop?.();
+  }, []);
+  const python = chosenToolchain(pythons, pythonPath);
+  const compiler = chosenToolchain(compilers, cppCompiler);
+  const showDownloads = () => {
+    setError("");
+    invoke<PythonDownload[]>("python_downloads").then((list) => { setDownloads(list); setWanted((current) => current || list[0]?.version || ""); }, (reason) => setError(errorMessage(reason)));
+  };
+  const install = () => {
+    if (!wanted) return;
+    setError("");
+    setInstalling({ version: wanted, received: 0, total: downloads?.find((item) => item.version === wanted)?.size ?? 0 });
+    invoke<Toolchain>("install_python", { version: wanted })
+      .then(async (installed) => { await rescanToolchains(); setPythonPath(installed.path); }, (reason) => setError(errorMessage(reason)))
+      .finally(() => setInstalling(null));
+  };
+  const remove = (path: string) => {
+    setError("");
+    invoke("remove_python", { path }).then(async () => { if (pythonPath === path) setPythonPath(""); await rescanToolchains(); }, (reason) => setError(errorMessage(reason)));
+  };
+  const megabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
+  return <div className="language-server-settings judge-settings toolchain-settings">
+    <div className="appearance-group"><span>Python</span><button className="subtle-button" disabled={scanning} onClick={() => void rescanToolchains()}>{scanning ? t("toolchainScanning") : t("toolchainRescan")}</button></div>
+    <label className="clangd-path-label">{t("toolchainPython")}<ToolchainSelect t={t} list={pythons} value={pythonPath} onChange={setPythonPath} label="Python" /></label>
+    {python && <p className="settings-help toolchain-path"><code>{python.path}</code>{python.managed && <button className="subtle-button" onClick={() => remove(python.path)}>{t("toolchainRemove")}</button>}</p>}
+    <p className="settings-help">{t("toolchainPythonHelp")}</p>
+    <div className="toolchain-install">
+      {downloads === null
+        ? <button className="subtle-button" onClick={showDownloads} disabled={Boolean(installing)}>{t("toolchainInstallPython")}</button>
+        : <>
+          <select value={wanted} onChange={(event) => setWanted(event.target.value)} disabled={Boolean(installing)} aria-label={t("toolchainInstallPython")}>
+            {downloads.map((item) => <option key={item.version} value={item.version}>Python {item.version} · {megabytes(item.size)}</option>)}
+          </select>
+          <button className="primary-button" onClick={install} disabled={!wanted || Boolean(installing)}>{installing ? t("toolchainInstalling") : t("toolchainInstall")}</button>
+        </>}
+      {installing && <span className="toolchain-progress"><i style={{ width: `${installing.total ? Math.min(100, installing.received / installing.total * 100) : 5}%` }} /><em>{installing.total ? `${megabytes(installing.received)} / ${megabytes(installing.total)}` : ""}</em></span>}
+    </div>
+    <p className="settings-help">{t("toolchainInstallHelp")}</p>
+    <div className="appearance-group"><span>C++</span></div>
+    <label className="clangd-path-label">{t("toolchainCompiler")}<ToolchainSelect t={t} list={compilers} value={cppCompiler} onChange={setCppCompiler} label="C++" /></label>
+    {compiler && <p className="settings-help toolchain-path"><code>{compiler.path}</code>{!compiler.gcc && <span className="toolchain-note">{t("toolchainNoStdcpp")}</span>}</p>}
+    <label className="clangd-path-label">{t("toolchainStandard")}<select value={cppStandard} onChange={(event) => setCppStandard(event.target.value as typeof cppStandard)}>
+      <option value="auto">{t("toolchainStandardAuto")}</option><option value="c++17">C++17</option><option value="c++20">C++20</option><option value="c++23">C++23</option>
+    </select></label>
+    <p className="settings-help">{t("toolchainCompilerHelp")}</p>
+    {error && <p className="settings-help toolchain-error" role="alert">{error}</p>}
   </div>;
 }
 

@@ -85,6 +85,38 @@ export const problemIdentity = (source: string | undefined, rawUrl: string | und
   }
 };
 
+/** The judge a page is on, by its address; "other" for anything else. */
+export const sourceOfUrl = (rawUrl: string): "atcoder" | "codeforces" | "doj" | "other" => {
+  try {
+    const host = new URL(rawUrl).hostname.replace(/^www\./, "");
+    if (host === "atcoder.jp" || host.endsWith(".atcoder.jp")) return "atcoder";
+    if (host === "codeforces.com" || host.endsWith(".codeforces.com")) return "codeforces";
+    if (host === "doj.kr" || host.endsWith(".doj.kr")) return "doj";
+  } catch { /* not an address */ }
+  return "other";
+};
+
+/** A page that is one problem's statement on a judge — not a contest, a listing or a submission. */
+const PROBLEM_PAGE: Record<string, RegExp> = {
+  atcoder: /\/tasks\/[^/]+\/?$/,
+  codeforces: /\/(contest|gym)\/\d+\/problem\/[^/]+\/?$|\/problemset\/problem\/\d+\/[^/]+\/?$/,
+  doj: /\/problems\/\d+\/?$/,
+};
+
+/** Whether `fileUrl` (a file's problem) and `pageUrl` (a page) are the same problem, under any of its addresses. */
+export const sameProblem = (fileSource: string | undefined, fileUrl: string | undefined, pageUrl: string) => {
+  if (!fileUrl || !pageUrl) return false;
+  const source = sourceOfUrl(pageUrl);
+  const pattern = PROBLEM_PAGE[source];
+  if (!pattern) return false;
+  try { if (!pattern.test(new URL(pageUrl).pathname)) return false; } catch { return false; }
+  return problemIdentity(source, pageUrl) === problemIdentity(fileSource && fileSource !== "other" ? fileSource : sourceOfUrl(fileUrl), fileUrl);
+};
+
+/** The file already made for the problem shown at `pageUrl`, if there is one. */
+export const fileForProblemPage = <File extends { source?: string; sourceUrl?: string }>(files: readonly File[], pageUrl: string) =>
+  files.find((file) => sameProblem(file.source, file.sourceUrl, pageUrl));
+
 /**
  * Folder layout for imports, used when "file imports into folders" is on.
  *

@@ -6,12 +6,14 @@ pub mod browser;
 #[cfg(not(any(target_os = "macos", all(target_os = "windows", target_env = "msvc"))))]
 #[path = "browser_stub.rs"]
 pub mod browser;
+mod app_icon;
 mod boards;
 mod checker;
 mod clangd;
 mod collab;
 mod companion;
 mod devices;
+mod discord;
 mod files;
 mod import;
 mod interactive;
@@ -26,6 +28,7 @@ mod stress;
 mod schedule;
 mod submissions;
 mod terminal;
+mod toolchains;
 mod tools;
 mod updates;
 mod workspace;
@@ -137,6 +140,7 @@ pub fn run() {
         .manage(collab::CollabState::default())
         .manage(devices::Devices::default())
         .manage(pad::PadState::default())
+        .manage(discord::DiscordState::default())
         .manage(updates::PendingUpdate::default())
         .manage(browser::BrowserState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -223,6 +227,16 @@ pub fn run() {
             pad::pad_close,
             pad::pad_send,
             pad::pad_forward_port,
+            toolchains::list_pythons,
+            toolchains::list_compilers,
+            toolchains::python_downloads,
+            toolchains::install_python,
+            toolchains::remove_python,
+            toolchains::warm_python,
+            discord::discord_set_activity,
+            discord::discord_status,
+            app_icon::set_app_icon,
+            app_icon::fetch_icon_image,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,

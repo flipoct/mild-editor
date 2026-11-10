@@ -14,7 +14,7 @@ use tauri::Emitter;
 use wait_timeout::ChildExt;
 
 use crate::stress::StressProgram;
-use crate::tools::{decode_output, find_tool, tool_search_path, CommandExtHidden};
+use crate::tools::{decode_output, tool_search_path, CommandExtHidden};
 use crate::{checker, memory, pch, sandbox};
 
 pub(crate) const MAX_CODE: usize = 100_000;
@@ -25,7 +25,7 @@ const MAX_INPUT: usize = 32 * 1024 * 1024;
 /// which must not read as a failure; past this, it is a runaway loop.
 const MAX_OUTPUT: u64 = 16 * 1024 * 1024 + 1;
 
-const MISSING_COMPILER: &str = if cfg!(target_os = "macos") {
+pub(crate) const MISSING_COMPILER: &str = if cfg!(target_os = "macos") {
     "g++ was not found. Install the Xcode Command Line Tools with `xcode-select --install`, or GCC with `brew install gcc`."
 } else if cfg!(windows) {
     "g++ was not found. Install MinGW or GCC and add it to PATH."
@@ -33,7 +33,7 @@ const MISSING_COMPILER: &str = if cfg!(target_os = "macos") {
     "g++ was not found. Install GCC with your package manager and add it to PATH."
 };
 
-const MISSING_PYTHON: &str = if cfg!(target_os = "macos") {
+pub(crate) const MISSING_PYTHON: &str = if cfg!(target_os = "macos") {
     "Python was not found. Install Python 3 from python.org or with `brew install python`."
 } else {
     "Python was not found. Install Python 3 and add it to PATH."
@@ -61,8 +61,9 @@ pub(crate) struct RunRequest {
     build: BuildOptions,
 }
 
-/// How the C++ program is built: the flags of the selected compile profile, and whether
-/// `bits/stdc++.h` may come from a precompiled header. Python ignores both.
+/// How the program is built and run: the flags of the selected compile profile, whether
+/// `bits/stdc++.h` may come from a precompiled header, and the toolchain chosen in Settings →
+/// Languages — absent, the first on `PATH` (see `toolchains.rs`).
 #[derive(Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BuildOptions {
@@ -70,6 +71,26 @@ pub(crate) struct BuildOptions {
     pub(crate) compile_flags: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) precompile_headers: bool,
+    /// The Python interpreter's path.
+    #[serde(default)]
+    pub(crate) python: Option<String>,
+    /// The C++ compiler's path.
+    #[serde(default)]
+    pub(crate) cpp_compiler: Option<String>,
+    /// `c++17`, `c++20` or `c++23`; absent, the newest the compiler takes, from C++20 down.
+    #[serde(default)]
+    pub(crate) cpp_standard: Option<String>,
+}
+
+/// The `-std=` values to try for a chosen standard, the name first and then the older
+/// spelling a compiler of that time knows it by.
+fn standards(chosen: Option<&str>) -> &'static [&'static str] {
+    match chosen {
+        Some("c++17") => &["c++17", "c++1z"],
+        Some("c++20") => &["c++20", "c++2a"],
+        Some("c++23") => &["c++23", "c++2b"],
+        _ => &["c++20", "c++17", "c++1z", "c++14"],
+    }
 }
 
 impl BuildOptions {
@@ -268,6 +289,8 @@ pub(crate) fn execute_with_cancel(
     let mut memory_exceeded = false;
     let mut timed_out = false;
     let mut memory_kb: Option<u64> = None;
+    // The last CPU time seen while it ran: a killed program is reaped without its usage.
+    let mut cpu_seen: Option<Duration> = None;
     let status = loop {
         if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
             stopped = true;
@@ -275,14 +298,15 @@ pub(crate) fn execute_with_cancel(
             break None;
         }
         let elapsed = started.elapsed();
-        if elapsed >= wall_limit || cpu_time().is_some_and(|used| used >= timeout) {
+        cpu_seen = cpu_time().or(cpu_seen);
+        if elapsed >= wall_limit || cpu_seen.is_some_and(|used| used >= timeout) {
             timed_out = true;
             kill(&mut child);
             break None;
         }
         // Short polls: they are also the memory samples, and on Linux and macOS the only ones.
         let wait = Duration::from_millis(15).min(wall_limit - elapsed);
-        let waited = child.wait_timeout(wait);
+        let waited = match &jail { Some(jail) => jail.wait(&mut child, wait), None => child.wait_timeout(wait) };
         memory_kb = memory_kb.max(memory::peak_memory_kb(&child));
         if over_memory(memory_kb) {
             memory_exceeded = true;
@@ -298,7 +322,7 @@ pub(crate) fn execute_with_cancel(
     // Whatever the program started and left running goes too; it would otherwise hold the
     // output pipes open and the reads below would never end.
     if let Some(jail) = &jail { jail.kill(); }
-    let cpu = cpu_time();
+    let cpu = cpu_time().or(cpu_seen);
     if let Some(peak) = jail.as_ref().and_then(|jail| jail.peak_memory_kb()) {
         memory_kb = Some(peak);
     }
@@ -392,7 +416,7 @@ pub(crate) fn prepare_program(
     build: &BuildOptions,
 ) -> Result<PreparedProgram, String> {
     if language == "cpp" {
-        let compiler = find_tool("g++").ok_or_else(|| MISSING_COMPILER.to_string())?;
+        let compiler = crate::toolchains::compiler_for(build.cpp_compiler.as_deref())?;
         let source = cwd.join("main.cpp");
         let binary = cwd.join(if cfg!(windows) { "main.exe" } else { "main" });
         fs::write(&source, code).map_err(|error| error.to_string())?;
@@ -400,7 +424,7 @@ pub(crate) fn prepare_program(
         let flags = build.flags();
         let wants_pch = build.precompile_headers && code.contains("bits/stdc++.h");
         let mut compile = None;
-        for standard in ["c++20", "c++17", "c++1z", "c++14"] {
+        for &standard in standards(build.cpp_standard.as_deref()) {
             let pch_include = wants_pch.then(|| pch::ensure(&compiler, standard, &flags)).flatten();
             let compile_with = |pch_include: Option<&std::path::PathBuf>| {
                 let mut compile_args = vec![format!("-std={standard}")];
@@ -453,13 +477,7 @@ pub(crate) fn prepare_program(
         }
         Ok(PreparedProgram::Ready { command: binary, args: Vec::new(), warnings: compile.stderr })
     } else {
-        // Windows keeps `python` first because its `python3` is usually the
-        // Microsoft Store execution alias, which opens the Store instead of running.
-        let candidates = if cfg!(windows) { ["python", "python3"] } else { ["python3", "python"] };
-        let python = candidates
-            .iter()
-            .find_map(|name| find_tool(name))
-            .ok_or_else(|| MISSING_PYTHON.to_string())?;
+        let python = crate::toolchains::python_for(build.python.as_deref())?;
         let source = cwd.join("main.py");
         fs::write(&source, code).map_err(|error| error.to_string())?;
         let mut args = vec!["-I".to_string()];
@@ -559,6 +577,7 @@ pub(crate) fn stop_run(state: tauri::State<'_, RunState>) {
 mod tests {
     use super::*;
     use crate::stress::{python_program, ANY_ORDER_CHECKER};
+    use crate::tools::find_tool;
 
     fn run_shell(script: &str, timeout: Duration) -> RunResult {
         let shell = which::which("sh").expect("a POSIX shell");
@@ -658,7 +677,6 @@ print('done')
     }
 
     #[test]
-    #[cfg(windows)]
     fn time_is_cpu_time_so_waiting_is_not_counted() {
         let Some(python) = python() else { return };
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -683,7 +701,7 @@ int f(int n) { volatile char pad[160]; pad[0] = (char)n; return n ? f(n - 1) + p
 int main() { std::printf(\"%d\", f(1000000) >= 0); }
 ";
         let directory = tempfile::tempdir().expect("temporary directory");
-        let build = BuildOptions { compile_flags: Some(vec!["-O0".into()]), precompile_headers: false };
+        let build = BuildOptions { compile_flags: Some(vec!["-O0".into()]), precompile_headers: false, ..Default::default() };
         let PreparedProgram::Ready { command, args, .. } = prepare_program("cpp", code, None, directory.path(), false, &build).expect("toolchain") else {
             panic!("the program should compile");
         };
@@ -752,7 +770,7 @@ int main() { std::printf(\"%d\", f(1000000) >= 0); }
         if !pch::is_gcc(&compiler) { return; }
         let code = "#include <bits/stdc++.h>\nint main() {\n#ifdef LOCAL\n  std::cout << \"local\";\n#else\n  std::cout << \"judge\";\n#endif\n}\n";
         for (flags, expected) in [(vec!["-O2".to_string()], "judge"), (vec!["-O0".to_string(), "-DLOCAL".to_string()], "local")] {
-            let build = BuildOptions { compile_flags: Some(flags), precompile_headers: true };
+            let build = BuildOptions { compile_flags: Some(flags), precompile_headers: true, ..Default::default() };
             // Twice: the first build writes the header, the second one compiles against it.
             for _ in 0..2 {
                 let directory = tempfile::tempdir().expect("temporary directory");
