@@ -6,7 +6,7 @@
  */
 
 /** The Discord application the status is shown as ("Playing Mild Editor"). */
-export const DISCORD_APPLICATION_ID = "";
+export const DISCORD_APPLICATION_ID = "1569553517616693380";
 
 /** The images, from this repository at the commit that added them (assets/discord). */
 const IMAGES = "https://raw.githubusercontent.com/flipoct/mild-editor/84e1a86f3e33a9a6d184a39aed0400eeaedd34c3/assets/discord";
