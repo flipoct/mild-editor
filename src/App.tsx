@@ -2546,17 +2546,21 @@ function App() {
   const presenceToolchain = !activeTab ? ""
     : activeTab.language === "python" ? (() => { const python = chosenToolchain(pythons, pythonPath); return python ? `Python ${minorVersion(python.version)}` : ""; })()
     : cppStandard === "auto" ? "" : cppStandard.toUpperCase();
-  const presence = JSON.stringify(discordActivity({
+  const presenceSolved = contestRunning && contest ? contestProblems.filter((file) => contest.solved[fileKey(file.filename)] !== undefined).length : 0;
+  const presenceSince = presenceSinceRef.current.at;
+  // Built again only when something it shows changes, not with every keystroke.
+  const presence = useMemo(() => JSON.stringify(discordActivity({
     locale: uiLocale === "ko" ? "ko" : "en",
     version: APP_VERSION,
     file: activeTab ? { title: activeTab.title, filename: activeTab.filename, language: activeTab.language, source: activeTab.source } : null,
     toolchain: presenceToolchain,
-    since: presenceSinceRef.current.at,
-    contest: contestRunning && contest ? { endsAt: contestEndsAt, solved: contestProblems.filter((file) => contest.solved[fileKey(file.filename)] !== undefined).length, total: contestProblems.length } : null,
+    since: presenceSince,
+    contest: contestRunning ? { endsAt: contestEndsAt, solved: presenceSolved, total: contestProblems.length } : null,
     teammates: roomTeammates,
     showFile: discordShowFile,
     showContest: discordShowContest,
-  }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })), [uiLocale, activeTab?.title, activeTab?.filename, activeTab?.language, activeTab?.source, presenceToolchain, presenceSince, contestRunning, contestEndsAt, presenceSolved, contestProblems.length, roomTeammates, discordShowFile, discordShowContest]);
   const discordClient = discordEnabled ? discordAppId || DISCORD_APPLICATION_ID : "";
   useEffect(() => {
     if (!IS_TAURI) return;
