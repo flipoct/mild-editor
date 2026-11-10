@@ -92,6 +92,11 @@ const definitions = {
     },
   } as Setting<Record<CompileProfile, string>>,
   precompileHeaders: flag("mild-precompile-headers", true),
+  // Which Python and which C++ compiler run a solution (Settings → Languages, toolchains.rs).
+  // Empty is the first one on PATH, as it always was.
+  pythonPath: text("mild-python-path", "", trimmed),
+  cppCompiler: text("mild-cpp-compiler", "", trimmed),
+  cppStandard: text<"auto" | "c++17" | "c++20" | "c++23">("mild-cpp-standard", "auto"),
   floatTolerance: stored("mild-float-tolerance", (value) => value === null ? DEFAULT_FLOAT_TOLERANCE : Number(value) || 0),
 
   snippets: { read: loadSnippets, save: (snippets) => localStorage.setItem("mild-snippets", JSON.stringify(snippets)), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,

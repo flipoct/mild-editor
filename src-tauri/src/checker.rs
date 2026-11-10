@@ -59,7 +59,7 @@ pub(crate) fn prepare(
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     // The checker is built with the release flags whatever profile the solution uses: a
     // sanitizer firing inside the checker would read as a wrong answer.
-    let release = BuildOptions { compile_flags: None, precompile_headers: build.precompile_headers };
+    let release = BuildOptions { compile_flags: None, ..build.clone() };
     Ok(match prepare_program(&program.language, &program.code, atcoder_library_path, directory, false, &release)? {
         PreparedProgram::Ready { command, args, .. } => {
             // Python only finds a syntax error when it runs, and a checker that exits 1 on one

@@ -15,12 +15,13 @@ import { loadTemplateDrafts, templates, templateSources, templateStorageKey } fr
 import type { BrowserStatus } from "./ProblemWindow";
 import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
+import { chosenToolchain, ensureToolchains, rescanToolchains, toolchainLabel, toolchains, type PythonDownload, type Toolchain } from "./toolchains";
 import type { BrowserExtension, ClangdStatus, CodeSnippet, CompanionStatus, EditorFontOption, Language, ProblemSource, SettingsPage, UiLocale, UiStyle, UiTheme, UpdateStatus, WallpaperLayout } from "./types";
 
 /** The pages in the order the navigation lists them, each with the message that names it. */
 const PAGES: Array<[SettingsPage, keyof typeof messages.en]> = [
   ["appearance", "appearance"], ["template", "template"], ["snippets", "snippets"], ["judge", "judge"],
-  ["build", "buildSettings"], ["language-server", "languageServer"], ["browser", "browserSettings"], ["updates", "updates"],
+  ["build", "buildSettings"], ["languages", "languagesSettings"], ["language-server", "languageServer"], ["browser", "browserSettings"], ["updates", "updates"],
 ];
 
 const THEME_NOTES: Record<UiTheme, string> = {
@@ -111,6 +112,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
           : page === "snippets" ? <SnippetsPage t={t} editor={snippetEditor} monaco={monaco} />
           : page === "judge" ? <JudgePage t={t} companionStatus={props.companionStatus} companionError={props.companionError} refreshingJudge={props.refreshingJudge} refreshSubmissionStatuses={props.refreshSubmissionStatuses} />
           : page === "build" ? <BuildPage t={t} />
+          : page === "languages" ? <LanguagesPage t={t} />
           : page === "browser" ? <BrowserPage t={t} extensions={extensions} browserStatus={props.browserStatus} installUserscript={props.installUserscript} />
           : page === "updates" ? <UpdatesPage t={t} appVersion={props.appVersion} updateStatus={props.updateStatus} updateRetryable={props.updateRetryable} checkForUpdates={props.checkForUpdates} installUpdate={props.installUpdate} exportSettings={props.exportSettings} importSettings={props.importSettings} />
           : <LanguageServerPage t={t} clangdPath={clangdPath} setClangdPath={setClangdPath} clangdStatus={props.clangdStatus} clangdInfo={props.clangdInfo} connectClangd={props.connectClangd} />}
@@ -430,6 +432,83 @@ function BuildPage({ t }: Pick<SettingsDialogProps, "t">) {
     <div className="appearance-group"><span>{t("judging")}</span></div>
     <label className="clangd-path-label">{t("floatTolerance")}<select value={String(floatTolerance)} onChange={(event) => setFloatTolerance(Number(event.target.value))}><option value="0">{t("floatToleranceOff")}</option><option value="0.0001">1e-4</option><option value="0.000001">1e-6</option><option value="1e-9">1e-9</option></select></label>
     <p className="settings-help">{t("floatToleranceHelp")}</p>
+  </div>;
+}
+
+/** One toolchain choice: the default (whatever is first on PATH) or one of those found, and a chosen one that has gone. */
+function ToolchainSelect({ t, list, value, onChange, label }: { t: Translate; list: Toolchain[] | null; value: string; onChange: (path: string) => void; label: string }) {
+  const fallback = list?.find((item) => item.isDefault);
+  const known = !value || list === null || list.some((item) => item.path === value);
+  return <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} disabled={list === null}>
+    <option value="">{fallback ? `${t("toolchainDefault")} (${toolchainLabel(fallback, list ?? [])})` : list === null ? t("toolchainScanning") : t("toolchainDefault")}</option>
+    {!known && <option value={value}>{t("toolchainMissing")}: {value}</option>}
+    {(list ?? []).map((item) => <option key={item.path} value={item.path} title={item.path}>{toolchainLabel(item, list ?? [])}</option>)}
+  </select>;
+}
+
+/** Which Python and which C++ compiler run a solution, and a Python of the editor's own when none fits. */
+function LanguagesPage({ t }: Pick<SettingsDialogProps, "t">) {
+  const [pythonPath, setPythonPath] = useSetting("pythonPath");
+  const [cppCompiler, setCppCompiler] = useSetting("cppCompiler");
+  const [cppStandard, setCppStandard] = useSetting("cppStandard");
+  const pythons = toolchains.use((state) => state.pythons);
+  const compilers = toolchains.use((state) => state.compilers);
+  const scanning = toolchains.use((state) => state.scanning);
+  const [downloads, setDownloads] = useState<PythonDownload[] | null>(null);
+  const [wanted, setWanted] = useState("");
+  const [installing, setInstalling] = useState<{ version: string; received: number; total: number } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { ensureToolchains(); }, []);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let stop: (() => void) | undefined;
+    void listen<{ version: string; received: number; total: number }>("python-install-progress", (event) => setInstalling(event.payload)).then((unlisten) => { stop = unlisten; });
+    return () => stop?.();
+  }, []);
+  const python = chosenToolchain(pythons, pythonPath);
+  const compiler = chosenToolchain(compilers, cppCompiler);
+  const showDownloads = () => {
+    setError("");
+    invoke<PythonDownload[]>("python_downloads").then((list) => { setDownloads(list); setWanted((current) => current || list[0]?.version || ""); }, (reason) => setError(errorMessage(reason)));
+  };
+  const install = () => {
+    if (!wanted) return;
+    setError("");
+    setInstalling({ version: wanted, received: 0, total: downloads?.find((item) => item.version === wanted)?.size ?? 0 });
+    invoke<Toolchain>("install_python", { version: wanted })
+      .then(async (installed) => { await rescanToolchains(); setPythonPath(installed.path); }, (reason) => setError(errorMessage(reason)))
+      .finally(() => setInstalling(null));
+  };
+  const remove = (path: string) => {
+    setError("");
+    invoke("remove_python", { path }).then(async () => { if (pythonPath === path) setPythonPath(""); await rescanToolchains(); }, (reason) => setError(errorMessage(reason)));
+  };
+  const megabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
+  return <div className="language-server-settings judge-settings toolchain-settings">
+    <div className="appearance-group"><span>Python</span><button className="subtle-button" disabled={scanning} onClick={() => void rescanToolchains()}>{scanning ? t("toolchainScanning") : t("toolchainRescan")}</button></div>
+    <label className="clangd-path-label">{t("toolchainPython")}<ToolchainSelect t={t} list={pythons} value={pythonPath} onChange={setPythonPath} label="Python" /></label>
+    {python && <p className="settings-help toolchain-path"><code>{python.path}</code>{python.managed && <button className="subtle-button" onClick={() => remove(python.path)}>{t("toolchainRemove")}</button>}</p>}
+    <p className="settings-help">{t("toolchainPythonHelp")}</p>
+    <div className="toolchain-install">
+      {downloads === null
+        ? <button className="subtle-button" onClick={showDownloads} disabled={Boolean(installing)}>{t("toolchainInstallPython")}</button>
+        : <>
+          <select value={wanted} onChange={(event) => setWanted(event.target.value)} disabled={Boolean(installing)} aria-label={t("toolchainInstallPython")}>
+            {downloads.map((item) => <option key={item.version} value={item.version}>Python {item.version} · {megabytes(item.size)}</option>)}
+          </select>
+          <button className="primary-button" onClick={install} disabled={!wanted || Boolean(installing)}>{installing ? t("toolchainInstalling") : t("toolchainInstall")}</button>
+        </>}
+      {installing && <span className="toolchain-progress"><i style={{ width: `${installing.total ? Math.min(100, installing.received / installing.total * 100) : 5}%` }} /><em>{installing.total ? `${megabytes(installing.received)} / ${megabytes(installing.total)}` : ""}</em></span>}
+    </div>
+    <p className="settings-help">{t("toolchainInstallHelp")}</p>
+    <div className="appearance-group"><span>C++</span></div>
+    <label className="clangd-path-label">{t("toolchainCompiler")}<ToolchainSelect t={t} list={compilers} value={cppCompiler} onChange={setCppCompiler} label="C++" /></label>
+    {compiler && <p className="settings-help toolchain-path"><code>{compiler.path}</code>{!compiler.gcc && <span className="toolchain-note">{t("toolchainNoStdcpp")}</span>}</p>}
+    <label className="clangd-path-label">{t("toolchainStandard")}<select value={cppStandard} onChange={(event) => setCppStandard(event.target.value as typeof cppStandard)}>
+      <option value="auto">{t("toolchainStandardAuto")}</option><option value="c++17">C++17</option><option value="c++20">C++20</option><option value="c++23">C++23</option>
+    </select></label>
+    <p className="settings-help">{t("toolchainCompilerHelp")}</p>
+    {error && <p className="settings-help toolchain-error" role="alert">{error}</p>}
   </div>;
 }
 

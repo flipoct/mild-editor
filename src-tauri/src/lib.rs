@@ -26,6 +26,7 @@ mod stress;
 mod schedule;
 mod submissions;
 mod terminal;
+mod toolchains;
 mod tools;
 mod updates;
 mod workspace;
@@ -217,6 +218,12 @@ pub fn run() {
             pad::pad_close,
             pad::pad_send,
             pad::pad_forward_port,
+            toolchains::list_pythons,
+            toolchains::list_compilers,
+            toolchains::python_downloads,
+            toolchains::install_python,
+            toolchains::remove_python,
+            toolchains::warm_python,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,

@@ -19,7 +19,7 @@ import { dismissExplorerOverlay, Explorer, ExplorerContextMenu, ExplorerDialogs,
 import { mergeExplorerFiles, useExplorerFiles } from "./explorerFiles";
 import { errorMessage, IS_TAURI, isMac, modLabel } from "./platform";
 import { IDLE_BROWSER_STATUS, PROBLEM_WINDOW_IMPORT_EVENT, type BrowserStatus } from "./ProblemWindow";
-import { explorerBasename, explorerParent, fileKey, findStressCompanion, fuzzyMatch, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
+import { explorerBasename, explorerParent, fileForProblemPage, fileKey, findStressCompanion, fuzzyMatch, sameProblem, isHelperFile, importFolder, importedFilename, mexFilename, normalizedExplorerPath, problemIdentity, stressCompanionName, type StressRole } from "./fileNaming";
 import { applyDrop, distributeSiblings, dropPreview, dropTargetAt, layoutGrid, nodeAt, resizeLimit, resizeSiblings, signatureOf, type DropTarget, type Rect, type Sash } from "./gridLayout";
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
@@ -40,6 +40,7 @@ import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
 import { BoardView } from "./board/BoardView";
+import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
@@ -432,7 +433,27 @@ function App() {
   const [profileFlags] = useSetting("profileFlags");
   const [precompileHeaders] = useSetting("precompileHeaders");
   const [floatTolerance] = useSetting("floatTolerance");
-  const buildOptions = () => ({ compileFlags: splitFlags(profileFlags[compileProfile]), precompileHeaders });
+  // The toolchain chosen in Settings → Languages; empty is the first one on PATH.
+  const [pythonPath, setPythonPath] = useSetting("pythonPath");
+  const pythons = toolchains.use((state) => state.pythons);
+  const [cppCompiler] = useSetting("cppCompiler");
+  const [cppStandard] = useSetting("cppStandard");
+  const buildOptions = () => ({
+    compileFlags: splitFlags(profileFlags[compileProfile]), precompileHeaders,
+    python: pythonPath || undefined, cppCompiler: cppCompiler || undefined,
+    cppStandard: cppStandard === "c++17" || cppStandard === "c++20" || cppStandard === "c++23" ? cppStandard : undefined,
+  });
+  // The interpreter is started once off the clock — when chosen, and when a Python file comes
+  // to the front after a while — so the first timed test does not wait for it to load from disk.
+  const pythonWarmedRef = useRef({ path: "\u0000", at: 0 });
+  useEffect(() => {
+    if (!IS_TAURI || language !== "python") return;
+    ensureToolchains();
+    const warmed = pythonWarmedRef.current;
+    if (warmed.path === pythonPath && Date.now() - warmed.at < 5 * 60_000) return;
+    pythonWarmedRef.current = { path: pythonPath, at: Date.now() };
+    void invoke("warm_python", { python: pythonPath || null }).catch(() => undefined);
+  }, [language, pythonPath, activeTabId]);
 
   useEffect(() => {
     if (fontOptions.length && !fontOptions.some((font) => font.id === editorFont)) setEditorFont(fontOptions[0].id);
@@ -2807,11 +2828,26 @@ function App() {
     if (!problemPanelOpen || !browserStatus.available || submitHoldRef.current) return;
     const url = activeTab?.sourceUrl || (browserStatus.open ? "" : import.meta.env.VITE_PROBLEM_PANEL_URL || "");
     if (!url || url === browserStatus.url) return;
+    // Already on the problem, under another of its addresses (a contest's rather than the problem set's).
+    if (activeTab && sameProblem(activeTab.source, activeTab.sourceUrl, browserStatus.url)) return;
     // Following a file changes the page only; the window stays where it is in the stack.
     if (problemBrowserMode === "window") invoke("problem_window_open", { url, focus: false }).catch((error) => setFileStatus(errorMessage(error)));
     else openProblemUrl(url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.sourceUrl, browserStatus.available, problemPanelOpen, problemBrowserMode]);
+
+  // The other way round: a judge's problem page opened in the browser brings its file to the
+  // front, when one was already made for it — no import, no "open the existing file".
+  const followedPageRef = useRef("");
+  useEffect(() => {
+    const url = browserStatus.url;
+    if (!url || browserStatus.loading || submitHoldRef.current || url === followedPageRef.current) return;
+    followedPageRef.current = url;
+    const file = fileForProblemPage([...tabs, ...savedFiles], url);
+    if (!file || (activeTab && fileKey(activeTab.filename) === fileKey(file.filename))) return;
+    openSavedFile(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserStatus.url, browserStatus.loading]);
 
   // Tampermonkey installs a userscript from its dashboard, which the backend drives once
   // the panel is on screen; the host element only exists after the panel renders.
@@ -3488,6 +3524,11 @@ function App() {
               else setDefaultLanguage(next);
             }} aria-label="Select language" title={activeTab ? "language of the open file" : t("defaultLanguage")}><option value="cpp">C++</option><option value="python">Python 3</option></select>
             {(activeTab ? language : defaultLanguage) === "cpp" && <select className={`run-profile ${compileProfile}`} value={compileProfile} onChange={(event) => setCompileProfile(event.target.value === "debug" ? "debug" : "release")} aria-label={t("compileProfile")} title={`${t("compileProfile")}: ${profileFlags[compileProfile]}`}><option value="release">Release</option><option value="debug">Debug</option></select>}
+            {(activeTab ? language : defaultLanguage) === "python" && pythons && pythons.length > 0 && <select className="run-profile run-python" value={pythons.some((item) => item.path === pythonPath) ? pythonPath : ""} onChange={(event) => setPythonPath(event.target.value)} aria-label="Python" title={chosenToolchain(pythons, pythonPath)?.path ?? "Python"}>
+              {/* Short labels: the full list, with where each came from, is in Settings → Languages. */}
+              <option value="">Py {minorVersion(pythons.find((item) => item.isDefault)?.version ?? "?")}</option>
+              {pythons.filter((item) => !item.isDefault).map((item) => <option key={item.path} value={item.path}>Py {item.version}</option>)}
+            </select>}
           </span>
           <button className={`run-top ${running ? "running" : ""}`} onClick={running ? stopRun : () => void run()} disabled={!tabs.length} title={`${running ? t("stop") : t("runTests")} (${modLabel}${isMac ? "↵" : "Enter"})`}>
             <Icon name={running ? "stop" : "play"} size={14} /><span>{running ? t("stop") : t("run")}</span>
