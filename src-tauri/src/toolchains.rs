@@ -103,9 +103,13 @@ fn python_candidates(app: Option<&tauri::AppHandle>) -> Vec<(PathBuf, bool)> {
         }
     }
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
+    // uv keeps its Pythons under the XDG data directory, ~/.local/share unless moved.
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local").join("share"));
     let mut globs: Vec<(PathBuf, &str)> = vec![
-        (home.join(".pyenv").join("versions"), if cfg!(windows) { "python.exe" } else { "bin/python3" }),
-        (home.join(".local/share/uv/python"), "bin/python3"),
+        (home.join(".pyenv").join("versions"), "bin/python3"),
+        // pyenv-win
+        (home.join(".pyenv").join("pyenv-win").join("versions"), "python.exe"),
+        (data.join("uv").join("python"), "bin/python3"),
     ];
     if cfg!(target_os = "macos") {
         globs.push((PathBuf::from("/Library/Frameworks/Python.framework/Versions"), "bin/python3"));
@@ -166,7 +170,8 @@ pub fn pythons(app: Option<&tauri::AppHandle>) -> Vec<Toolchain> {
     let mut real_seen = HashSet::new();
     let mut found: Vec<Toolchain> = probed.into_iter()
         .filter(|(_, real, _)| real_seen.insert(real.canonicalize().unwrap_or_else(|_| real.clone())))
-        .map(|(version, real, managed)| Toolchain { origin: origin_of(&real, managed), path: real.to_string_lossy().into_owned(), version, managed, gcc: false, is_default: false })
+        // Named for where it really is: uv links its Pythons into ~/.local/bin.
+        .map(|(version, real, managed)| Toolchain { origin: origin_of(&real.canonicalize().unwrap_or_else(|_| real.clone()), managed), path: real.to_string_lossy().into_owned(), version, managed, gcc: false, is_default: false })
         .collect();
     found.sort_by(|left, right| version_key(&right.version).cmp(&version_key(&left.version)).then(left.path.cmp(&right.path)));
     found
@@ -497,10 +502,21 @@ mod tests {
         assert_eq!(origin_of(Path::new("/usr/bin/python3"), false), "system");
     }
 
+    /// Whatever this machine has: every compiler listed answers to --version.
+    #[test]
+    fn compilers_found_here_are_real() {
+        for compiler in compilers() {
+            eprintln!("compiler: {} · gcc {} · {}", compiler.version, compiler.gcc, compiler.path);
+            assert!(Path::new(&compiler.path).is_file(), "{compiler:?}");
+        }
+        eprintln!("default python: {:?}", default_python());
+    }
+
     /// Whatever this machine has: every Python listed runs and says its version.
     #[test]
     fn pythons_found_here_are_real() {
         for python in pythons(None) {
+            eprintln!("python: {} · {} · {}", python.version, python.origin, python.path);
             assert!(Path::new(&python.path).is_file(), "{python:?}");
             assert!(python.version.contains('3'), "{python:?}");
         }

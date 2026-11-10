@@ -701,7 +701,7 @@ int f(int n) { volatile char pad[160]; pad[0] = (char)n; return n ? f(n - 1) + p
 int main() { std::printf(\"%d\", f(1000000) >= 0); }
 ";
         let directory = tempfile::tempdir().expect("temporary directory");
-        let build = BuildOptions { compile_flags: Some(vec!["-O0".into()]), precompile_headers: false };
+        let build = BuildOptions { compile_flags: Some(vec!["-O0".into()]), precompile_headers: false, ..Default::default() };
         let PreparedProgram::Ready { command, args, .. } = prepare_program("cpp", code, None, directory.path(), false, &build).expect("toolchain") else {
             panic!("the program should compile");
         };
@@ -770,7 +770,7 @@ int main() { std::printf(\"%d\", f(1000000) >= 0); }
         if !pch::is_gcc(&compiler) { return; }
         let code = "#include <bits/stdc++.h>\nint main() {\n#ifdef LOCAL\n  std::cout << \"local\";\n#else\n  std::cout << \"judge\";\n#endif\n}\n";
         for (flags, expected) in [(vec!["-O2".to_string()], "judge"), (vec!["-O0".to_string(), "-DLOCAL".to_string()], "local")] {
-            let build = BuildOptions { compile_flags: Some(flags), precompile_headers: true };
+            let build = BuildOptions { compile_flags: Some(flags), precompile_headers: true, ..Default::default() };
             // Twice: the first build writes the header, the second one compiles against it.
             for _ in 0..2 {
                 let directory = tempfile::tempdir().expect("temporary directory");
