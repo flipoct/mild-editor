@@ -101,8 +101,8 @@ const definitions = {
 
   // The user's snippets come first among the completions, above the built-in ones and clangd's.
   snippetsFirst: flag("mild-snippets-first", true),
-  // Discord's activity status (src/discord.ts): on unless turned off, and what it may say.
-  discordEnabled: flag("mild-discord-enabled", true),
+  // Discord's activity status (src/discord.ts): off until turned on, and what it may say.
+  discordEnabled: flag("mild-discord-enabled", false),
   discordShowFile: flag("mild-discord-show-file", true),
   discordShowContest: flag("mild-discord-show-contest", true),
   // Another Discord application to show the status as; empty is the editor's own.
