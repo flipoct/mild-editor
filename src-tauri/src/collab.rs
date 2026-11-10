@@ -344,7 +344,7 @@ static TUNNELS: Mutex<Option<std::collections::HashMap<String, u16>>> = Mutex::n
 const TUNNEL_CONNECT: Duration = Duration::from_secs(8);
 
 /// A loopback port that leads to `address` (`host:port`), opened on first use.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn collab_tunnel(address: String) -> Result<u16, String> {
     let address = address.trim().trim_start_matches("ws://").trim_end_matches('/').to_string();
     if address.to_socket_addrs().map(|mut found| found.next().is_none()).unwrap_or(true) {
