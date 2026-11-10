@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.20.0
+
+- **Choose the Python and the C++ compiler**, in Settings → Languages: every Python the computer has (PATH, Homebrew, pyenv, uv, python.org, Xcode, PyPy) and every C++ compiler, with the C++ standard. The run bar switches Pythons in one click. A Python can also be installed into the editor itself: a standalone CPython build, the one uv uses, checked against its release's SHA-256 sums, that changes nothing else on the computer.
+  - With nothing chosen, a Mac takes the Python a terminal would, Homebrew's for instance, rather than Apple's 3.9, which came first on an app's PATH and has no `match`. Interpreters run by their real executable, never through a launcher.
+- **No TLE on the first run.** macOS and Linux timed a run by the wall clock, so reading the interpreter back from a cold disk counted against the time limit. A run is now timed by the program's CPU time there too, as on Windows, and the interpreter is started once off the clock when a Python file comes to the front.
+- **Snippets come first among the completions**, completed by their name alone; `snippet::` is gone. The arrows in Settings → Snippets set their order among themselves, and the ordering can be turned off there.
+- **Discord activity status**, off until turned on in Settings → Discord: the problem and its judge, the language and its version, a contest's solved count and time left, the teammates in a room. Both lines are templates with placeholders, every part can be hidden, and a card like Discord's own shows the result as it is typed.
+- **An app icon of your own**: any picture, from this computer or an https address, becomes the window's, the Dock's and the title bar's icon. One given by its address is Discord's big picture too.
+- Opening a judge's problem page in the browser brings the file already made for it to the front: no import, no "open the existing file".
+- **Saving no longer holds the window up.** Commands that touch files or start processes run off the main thread, a save leaves out tests already on disk, and a keystroke does less work.
+
 ## 1.19.1
 
 - **Three more themes**, from their VS Code themes: **One Dark Pro**, **GitHub Dark Dimmed** and **Everforest Dark**. They colour the interface and the code, and work with any style. The code colours are the themes' own; a few interface colours are moved only as far as small text, buttons and verdicts need to stay readable.

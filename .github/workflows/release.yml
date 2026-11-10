@@ -57,13 +57,16 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.19.1
+            ## What's changed in v1.20.0
 
-            - **Three more themes**: One Dark Pro, GitHub Dark Dimmed and Everforest Dark, each with any style.
-            - The C++ mark beside a file has white letters on its hexagon, the same on every theme.
-            - Opening the editor no longer announces an old DOJ verdict as if it had just been judged.
+            - **Choose the Python and the C++ compiler** in Settings → Languages, or install a Python into the editor. A Mac now takes the terminal's Python instead of Apple's 3.9.
+            - **No TLE on the first run**: macOS and Linux time a run by CPU time, as Windows does.
+            - **Snippets come first** among the completions, by their name alone, in the order you set.
+            - **Discord activity status** (off until turned on), with your own lines and a live preview.
+            - **An app icon of your own**, which Discord shows too when given by its address.
+            - Opening a problem's page brings its file to the front, and saving no longer holds the window up.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.19.1/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.20.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
