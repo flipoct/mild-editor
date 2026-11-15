@@ -20,10 +20,6 @@ export const runOutcome = (tests: { name: string; status: string }[], running: b
   return { kind, passed, total: tests.length, failed: failed.map(({ name, status }) => ({ name, status })) };
 };
 
-/** After a run the failures come first, in their own order; everything else keeps its place. */
-export const failuresFirst = <T extends { status: string }>(tests: T[]): T[] =>
-  [...tests.filter((test) => FAILED.has(test.status)), ...tests.filter((test) => !FAILED.has(test.status))];
-
 /**
  * What the panel heading shows once tests have verdicts: how many passed out of all of them,
  * and the slowest time among those judged. It is green only when every test passed; a test
