@@ -385,9 +385,6 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .test-fields { display: grid; gap: 12px; padding: 4px 12px 14px 32px; }
 .test-fields label { min-width: 0; display: grid; gap: 4px; color: var(--muted-ink); font: 500 var(--fs-xs) var(--font-label); }
 /* A wrong answer opens at its diff; what was given folds beneath it. */
-.test-given > summary { width: fit-content; padding: 2px 0; color: var(--text-2); font-size: var(--fs-s); cursor: pointer; }
-.test-given > summary:hover { color: var(--text); }
-.test-given > .test-fields { padding: 8px 0 0; }
 .field-label { min-height: 20px; display: flex; align-items: center; justify-content: space-between; }
 .accept-output { height: 20px; padding: 0 4px; white-space: nowrap; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted-ink); font-size: var(--fs-xs); font-weight: 500; transition: background-color var(--dur-micro), color var(--dur-micro); }
 .accept-output:hover:not(:disabled) { background: var(--hover); color: var(--accent); }

@@ -24,7 +24,7 @@ import { applyDrop, distributeSiblings, dropPreview, dropTargetAt, layoutGrid, n
 import { fillSubmitFormScript, pressSubmitFormScript, SUBMIT_MARK, submitTarget, type PressResult } from "./submit";
 import { renderTemplateWithCursor } from "./templateParser";
 import { BuiltinTerminal, terminalHost, terminalKeyIsEditors, typedInTerminal, useTerminalStatus, type TerminalStatus } from "./BuiltinTerminal";
-import { COMMAND_PREFIX, checkerStarter, failuresFirst, isFailedVerdict, matchCommands, runOutcome, summarizeTests, type PaletteCommand, type RunOutcome } from "./workbench";
+import { COMMAND_PREFIX, checkerStarter, matchCommands, runOutcome, summarizeTests, type PaletteCommand, type RunOutcome } from "./workbench";
 import type { AvailableUpdate, ClangdStatus, CompanionProblem, CompanionStatus, ContestState, EditorFontOption, ImportCollision, ImportedAtCoderProblem, InteractiveEntry, InteractiveExitEvent, InteractiveOutputEvent, Language, LoadedWorkspace, NativeRunResult, PanelId, PanelMode, ProblemLimits, ProblemSource, ProblemTab, SettingsPage, StressChoice, StressOutcome, SubmissionStatusResult, TestCase, TestResultEvent, UpdateStatus, VerdictNotice, WorkspaceFileResult } from "./types";
 import { messages, updateStatusLine } from "./i18n";
 import { createThemeWindowIcon } from "./themeIcon";
@@ -2082,7 +2082,6 @@ function App() {
           memoryKb: result.memoryKb ?? undefined,
           status: verdict,
           checkerMessage: checked ? checked.message || (checked.accepted ? "" : t("checkerRejected")) : undefined,
-          open: verdict === "ac" ? false : test.open,
         }
         : itemIndex === index + 1 && !runCancelledRef.current ? { ...test, status: "running" } : test));
     });
@@ -2109,12 +2108,7 @@ function App() {
       setTests((items) => items.map((test) => ({ ...test, status: "re", error: message })));
     } finally {
       unlisten();
-      setTests((items) => {
-        const settled = items.map((test) => test.status === "running" ? { ...test, status: "idle" as const } : test);
-        if (settled.some((test) => test.open && isFailedVerdict(test.status))) return settled;
-        const first = settled.find((test) => isFailedVerdict(test.status));
-        return first ? settled.map((test) => test.id === first.id ? { ...test, open: true } : test) : settled;
-      });
+      setTests((items) => items.map((test) => test.status === "running" ? { ...test, status: "idle" } : test));
       setRunning(false);
     }
   };
@@ -3764,7 +3758,7 @@ function App() {
               {language === "cpp" && compileProfile === "debug" && <span className="limits-note" title={t("debugTimeNote")}>Debug ×{DEBUG_TIME_FACTOR}</span>}
             </div>
             <div className="test-list">
-              {(running ? tests : failuresFirst(tests)).map((test) => (
+              {tests.map((test) => (
                 <article className={`test-card ${test.open ? "open" : ""}`} key={test.id}>
                   <div className="test-row">
                     <button className="test-toggle" onClick={() => updateTest(test.id, { open: !test.open })}>
@@ -3784,9 +3778,8 @@ function App() {
                       <label>{t("input")}<textarea value={test.input} onChange={(event) => updateTest(test.id, { input: event.target.value, status: "idle" })} spellCheck={false} /></label>
                       <label><span className="field-label">{t("expected")}<button className="accept-output" onClick={() => updateTest(test.id, { expected: test.output, status: "idle" })} disabled={test.timeMs === undefined || Boolean(test.error)}>{t("useOutput")}</button></span><textarea value={test.expected} onChange={(event) => updateTest(test.id, { expected: event.target.value, status: "idle" })} spellCheck={false} /></label>
                     </>;
-                    const outputFirst = test.status === "wa" || test.status === "re";
                     return <div className="test-fields">
-                      {!outputFirst && given}
+                      {given}
                       <label>
                         <span className="field-label">{t("output")}{test.status === "wa" && <button className="accept-output" onClick={() => toggleRawOutput(test.id)}>{rawOutputTests.includes(test.id) ? t("showDiff") : t("showRaw")}</button>}</span>
                         {test.checkerMessage !== undefined && test.checkerMessage !== "" && <pre className={`checker-message ${test.status}`}><b>{t("checkerSays")}</b> {test.checkerMessage}</pre>}
@@ -3811,7 +3804,6 @@ function App() {
                             </div>
                           : <textarea value={combinedRunOutput(shownOutput(test.output, (size) => t("outputClipped").replace("{size}", size), test.outputBytes), test.error)} readOnly className={test.error ? "has-error" : ""} placeholder={t("runToSee")} />}
                       </label>
-                      {outputFirst && <details className="test-given"><summary>{t("inputAndExpected")}</summary><div className="test-fields">{given}</div></details>}
                     </div>;
                   })()}
                 </article>
