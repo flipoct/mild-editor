@@ -74,6 +74,13 @@ const interactiveTail = (text: string) => {
   return start === 0 ? text : `…\n${text.slice(start)}`;
 };
 
+/** The states the status line is set to, as the messages that say them. */
+const STATUS_TEXT: Record<string, keyof typeof messages.en> = {
+  ready: "statusReady", "running tests…": "statusRunning", "compile error": "statusCompileError", saved: "statusSaved", "saving…": "statusSaving",
+  "not saved": "statusNotSaved", modified: "statusModified", loaded: "statusLoaded", "project created": "statusProjectCreated", "source updated": "statusSourceUpdated",
+  "submission results updated": "statusResultsUpdated", "no matching submissions found": "statusNoSubmissions", "test cases imported": "statusTestsImported",
+};
+
 /** When this run of the editor began; a submission older than that was not made "just now". */
 const APP_STARTED_AT = Date.now();
 
@@ -3530,6 +3537,11 @@ function App() {
   // what the field held when the dialog opened rather than what it holds now.
   }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerOverlays.deleteDirectory, explorerOverlays.newFolder, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
+  /** A state of the status line as the interface's language says it; a message that is already a sentence passes through. */
+  const shownStatus = (status: string) => {
+    const key = STATUS_TEXT[status];
+    return key ? t(key) : status;
+  };
   const summary = useMemo(() => {
     if (running) return "running tests…";
     if (!tests.some((test) => test.status !== "idle")) return "ready";
@@ -3718,8 +3730,8 @@ function App() {
             {panelGrip(id)}
             <div className="panel-heading">
               <div className="panel-modes">
-                <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")}>{t("testCases")}</button>
-                <button className={panelMode === "interactive" ? "active" : ""} aria-pressed={panelMode === "interactive"} onClick={() => setPanelMode("interactive")}>{t("interactive")}</button>
+                <button className={panelMode === "tests" ? "active" : ""} aria-pressed={panelMode === "tests"} onClick={() => setPanelMode("tests")} title={t("testCases")}>{t("modeTests")}</button>
+                <button className={panelMode === "interactive" ? "active" : ""} aria-pressed={panelMode === "interactive"} onClick={() => setPanelMode("interactive")} title={t("interactive")}>{t("modeInteractive")}</button>
                 <button className={panelMode === "terminal" ? "active" : ""} aria-pressed={panelMode === "terminal"} onClick={() => setPanelMode("terminal")} title={`${t("terminal")} (${isMac ? "⌃`" : "Ctrl+`"})`}>{t("terminal")}</button>
               </div>
               {panelMode === "tests" ? <>
@@ -4233,8 +4245,8 @@ function App() {
       <footer className="statusbar">
         {updateStatus.phase === "available" && <button className="status-update" onClick={() => setSettingsPage("updates")} title={`${t("updatesAvailable")} v${updateStatus.version}`}>↑ v{updateStatus.version}</button>}
         {!contestSpan && <ContestStatusButton span={null} open={contestOpen} onToggle={() => setContestOpen((open) => !open)} title={t("contest")} overLabel={t("contestOver")} />}
-        <span className="status-copy">{summary}</span>
-        <span className="file-status">{fileStatus}</span>
+        <span className="status-copy">{shownStatus(summary)}</span>
+        <span className="file-status">{shownStatus(fileStatus)}</span>
         <span className="status-services">
           <CollabChip t={t} />
           <KeyboardChip t={t} />
