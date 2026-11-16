@@ -1,14 +1,15 @@
-import { APP_MARK } from "./icons";
 import type { UiTheme } from "./types";
 
 const themeIconCache = new Map<UiTheme, Uint8Array>();
 
+/** The window and taskbar icon: `.welcome-mark`'s tile and serif m, in the theme's colours. */
 export const createThemeWindowIcon = async (theme: UiTheme) => {
   const cached = themeIconCache.get(theme);
   if (cached) return cached;
 
   const mark = document.createElement("span");
   mark.className = "welcome-mark";
+  mark.textContent = "m";
   mark.style.position = "fixed";
   mark.style.visibility = "hidden";
   mark.style.pointerEvents = "none";
@@ -17,9 +18,10 @@ export const createThemeWindowIcon = async (theme: UiTheme) => {
   const sourceSize = Number.parseFloat(markStyle.width);
   const sourceRadius = Number.parseFloat(markStyle.borderRadius);
   const sourceBorderWidth = Number.parseFloat(markStyle.borderTopWidth);
-  const sourcePadding = Number.parseFloat(markStyle.paddingTop);
+  const sourceFontSize = Number.parseFloat(markStyle.fontSize);
   const background = markStyle.backgroundColor;
-  const border = markStyle.borderTopColor;
+  const foreground = markStyle.color;
+  const font = `${markStyle.fontStyle} ${markStyle.fontWeight} ${sourceFontSize}px ${markStyle.fontFamily}`;
   mark.remove();
 
   const canvas = document.createElement("canvas");
@@ -37,25 +39,16 @@ export const createThemeWindowIcon = async (theme: UiTheme) => {
   context.fillStyle = background;
   context.fill();
   context.lineWidth = borderWidth;
-  context.strokeStyle = border;
+  context.strokeStyle = foreground;
   context.stroke();
 
-  const [x, y, width] = APP_MARK.viewBox;
-  const artInset = (sourceBorderWidth + sourcePadding) * scale;
-  const artScale = (size - artInset * 2) / width;
-  context.translate(artInset, artInset);
-  context.scale(artScale, artScale);
-  context.translate(-x, -y);
-  for (const path of APP_MARK.fills) {
-    context.fillStyle = path.fill;
-    context.fill(new Path2D(path.d));
-  }
-  context.strokeStyle = APP_MARK.stem.stroke;
-  context.lineWidth = APP_MARK.stem.width;
-  context.lineCap = "round";
-  context.stroke(new Path2D(APP_MARK.stem.d));
-  context.fillStyle = APP_MARK.cap.fill;
-  context.fill(new Path2D(APP_MARK.cap.d));
+  context.fillStyle = foreground;
+  context.font = font.replace(`${sourceFontSize}px`, `${sourceFontSize * scale}px`);
+  context.textAlign = "center";
+  context.textBaseline = "alphabetic";
+  const metrics = context.measureText("m");
+  const baseline = size / 2 + (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+  context.fillText("m", size / 2, baseline);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not create the theme icon.")), "image/png");

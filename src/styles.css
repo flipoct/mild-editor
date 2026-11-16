@@ -152,7 +152,7 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 .window-titlebar { display: flex; align-items: center; min-width: 0; background: var(--bg-0); border-bottom: 1px solid var(--border-subtle); user-select: none; }
 .titlebar-identity { min-width: 0; height: 100%; flex: 1 1 0; display: flex; align-items: center; gap: 8px; padding-left: 12px; overflow: hidden; }
 /* The brand mark: the same serif italic m as the app icon (src-tauri/icons/icon.svg). */
-.titlebar-logo { width: 22px; height: 22px; display: grid; flex: 0 0 auto; box-sizing: border-box; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-m); background: var(--bg-3); }
+.titlebar-logo { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; box-sizing: border-box; padding-bottom: 2px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--r-m); background: var(--bg-3); color: var(--accent); font: italic 700 15px/1 Georgia, "Times New Roman", serif; }
 .titlebar-dev { flex: 0 0 auto; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--r-s); color: var(--warning); font: 500 var(--fs-xs)/16px var(--font-label); }
 /* File: the commands that have shortcuts of their own, kept out of the bar and one click away. */
 .file-menu { position: relative; flex: 0 0 auto; }
@@ -441,7 +441,7 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .welcome-screen { width: min(480px, 88%); min-height: 100%; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; margin: auto; padding: 40px 24px; text-align: left; color: var(--muted-ink); }
 /* createThemeWindowIcon in App.tsx draws the window and taskbar icon from this element's
    computed style, so it has to stay the brand tile: size, radius, border, padding, fill. */
-.welcome-mark { width: 58px; height: 58px; display: grid; box-sizing: border-box; margin-bottom: 24px; padding: 9px; border: 1px solid var(--border); border-radius: 17px; background: var(--bg-3); }
+.welcome-mark { width: 58px; height: 58px; display: grid; place-items: center; box-sizing: border-box; margin-bottom: 24px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 17px; background: var(--bg-3); color: var(--accent); font: italic 700 35px/1 Georgia, "Times New Roman", serif; }
 .welcome-screen h1 { margin: 0 0 8px; color: var(--text); font: var(--head-weight) var(--fs-display)/1.15 var(--font-head); overflow-wrap: break-word; min-width: 0; text-wrap: balance; }
 .welcome-tagline { margin: 0; color: var(--text-2); font-size: var(--fs-l); }
 .welcome-screen p:not(.welcome-tagline) { margin: 8px 0 0; font-size: var(--fs-m); line-height: 1.5; }

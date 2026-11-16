@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The serif `m` is the mark again, in place of the chili: on the theme's tile in the title bar and on the welcome screen, as the window, taskbar and installer icon, and as Discord's big picture.
+
 ## 1.20.0
 
 - **Choose the Python and the C++ compiler**, in Settings → Languages: every Python the computer has (PATH, Homebrew, pyenv, uv, python.org, Xcode, PyPy) and every C++ compiler, with the C++ standard. The run bar switches Pythons in one click. A Python can also be installed into the editor itself: a standalone CPython build, the one uv uses, checked against its release's SHA-256 sums, that changes nothing else on the computer.

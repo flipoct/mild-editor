@@ -10,7 +10,9 @@ export const DISCORD_APPLICATION_ID = "1569553517616693380";
 
 /** The images, from this repository at the commit that added them (assets/discord). */
 const IMAGES = "https://raw.githubusercontent.com/flipoct/mild-editor/84e1a86f3e33a9a6d184a39aed0400eeaedd34c3/assets/discord";
-export const DISCORD_IMAGES = { mild: `${IMAGES}/mild.png`, cpp: `${IMAGES}/cpp.png`, python: `${IMAGES}/python.png` };
+/** The app icon as Discord shows it: the serif m, at a commit where it is the bundled icon. */
+const MILD_IMAGE = "https://raw.githubusercontent.com/flipoct/mild-editor/f52ddbca2ece2432bf98b7729da18ffc487c3adf/src-tauri/icons/128x128@2x.png";
+export const DISCORD_IMAGES = { mild: MILD_IMAGE, cpp: `${IMAGES}/cpp.png`, python: `${IMAGES}/python.png` };
 
 export const PROJECT_URL = "https://github.com/flipoct/mild-editor";
 
