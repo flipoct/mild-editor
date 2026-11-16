@@ -910,7 +910,7 @@ pub(crate) fn open_workspace_folder_location(request: WorkspaceFolderRequest) ->
 
 /// Shows `target` selected in Explorer or Finder. `xdg-open` cannot select anything, so
 /// on Linux `linux_directory` is opened instead.
-fn reveal_in_file_manager(target: &Path, linux_directory: &Path, kind: &str) -> Result<(), String> {
+pub(crate) fn reveal_in_file_manager(target: &Path, linux_directory: &Path, kind: &str) -> Result<(), String> {
     let shown = if cfg!(any(windows, target_os = "macos")) { target } else { linux_directory };
     #[cfg(windows)]
     let mut command = {
