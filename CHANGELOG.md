@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.21.0
+
+- **Templates and snippets are files**, in a folder of your choosing: `templates/default.cpp`, `templates/atcoder.py` and the like, `snippets/<name>.cpp` or `.py`, and `snippets/order.json` for their order. Edit them in any editor, keep them in git or a synced folder, carry them to another computer with it. The folder is in the app's own data unless Settings → Template or Snippets points it elsewhere; an empty folder gets a copy of what you have.
+  - A file changed outside the editor is picked up when you come back to it, and Save in Settings writes only what changed.
+  - A judge without a template of its own uses your default template before the built-in one.
+  - Templates and snippets kept by an earlier version are moved into the folder the first time it opens. Paths that belong to one computer (this folder, the chosen Python and compiler) no longer travel in a settings backup.
+- **The m is back** as the app's mark, in the theme's accent; a picture chosen in Settings → Appearance still takes its place.
+- **Quieter chrome.** Run is the one button filled with the accent, the test panel's modes read Tests / Interactive / Terminal without being cut off, the status line speaks the interface's language, and spacing sits on a 4px grid.
+- **Test cards keep their place after a run.** A card shows its input, its expected output and then the result; the list keeps its order, and every card stays open or folded as it was.
+
 ## Unreleased
 
 - The serif `m` is the mark again, in place of the chili: on the theme's tile in the title bar and on the welcome screen, as the window, taskbar and installer icon, and as Discord's big picture.
