@@ -107,9 +107,22 @@ Outputs are compared by the same rule the test cases use, float tolerance includ
 
 **Contest** in the status bar starts a countdown of the length you give it and opens a board of the problems in the current folder. While it runs, the remaining time sits in the title bar beside **Run**, turning amber in the last ten minutes, and opens the board. On the board a problem shows the judge's verdict when there is one and the local test results otherwise, and is marked solved with its time when the judge reports AC. The contest is remembered per workspace until you end it.
 
+## Templates and snippets are files
+
+Templates and snippets live in a folder, as plain files, so they can be edited in any editor, kept in git or a synced folder, and carried to another computer with it:
+
+```
+templates/default.cpp     what a new C++ file starts as
+templates/atcoder.py      a Python file imported from AtCoder (codeforces, doj likewise)
+snippets/segtree.cpp      the snippet "segtree", for C++
+snippets/order.json       the order snippets are offered in
+```
+
+The folder is in the app's own data unless **Settings → Template** (or **Snippets**) points it elsewhere; a folder with nothing in it gets a copy of what you have. A judge without a template of its own uses `default`, then the editor's built-in one. A file changed outside the editor is picked up when you come back to it. Templates and snippets kept in the settings by an older version are moved into the folder the first time it opens.
+
 ## Snippets
 
-Open **Settings → Snippets**, create a snippet name, select C++ or Python, write the snippet body in Monaco, and press **Save snippet**. Snippets are stored locally on the current device.
+Open **Settings → Snippets**, create a snippet name, select C++ or Python, write the snippet body in Monaco, and press **Save snippet**. The name is the snippet's file name in the library folder.
 
 There are two ways to insert a snippet into a file:
 

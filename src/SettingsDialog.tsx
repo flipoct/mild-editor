@@ -11,7 +11,8 @@ import { updateStatusLine, type messages, type Translate } from "./i18n";
 import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { setupMonaco } from "./monacoSetup";
 import { errorMessage, IS_TAURI } from "./platform";
-import { loadTemplateDrafts, templates, templateSources, templateStorageKey } from "./problems";
+import { loadTemplateDrafts, storedTemplate, templates, templateSources, templateStorageKey } from "./problems";
+import { changeLibraryFolder, library, revealLibrary, saveTemplate } from "./library";
 import type { BrowserStatus } from "./ProblemWindow";
 import { ATCODER_BETTER_USERSCRIPT, clampEditorFontSize, clampUiZoom, DEFAULT_PROFILE_FLAGS, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, IS_DEV_BUILD, pickEditorFont, TAMPERMONKEY_ID, UI_STYLES, UI_THEMES, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss } from "./settings";
 import { adjustUiZoom, getSetting, setSetting, useSetting } from "./settingsStore";
@@ -262,8 +263,9 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
 }
 
 /**
- * The templates as they are being edited, one per site and language. Nothing reaches
- * localStorage until "Save"; "Apply to editor" uses the draft as it stands.
+ * The templates as they are being edited, one per site and language. Nothing reaches the
+ * library folder until "Save", and then only the ones that changed; "Apply to editor" uses
+ * the draft as it stands.
  */
 function useTemplateDrafts(activeLanguage: Language, dialogOpen: boolean) {
   const [language, setLanguage] = useState<Language>("cpp");
@@ -276,12 +278,20 @@ function useTemplateDrafts(activeLanguage: Language, dialogOpen: boolean) {
   // Each time the dialog comes up, the template tab starts on the language being written.
   const wasOpenRef = useRef(dialogOpen);
   useEffect(() => {
-    if (dialogOpen && !wasOpenRef.current) setLanguage(activeLanguage);
+    // …and with the templates as the folder has them now: they may have been edited elsewhere.
+    if (dialogOpen && !wasOpenRef.current) { setLanguage(activeLanguage); setDrafts(loadTemplateDrafts()); }
     wasOpenRef.current = dialogOpen;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogOpen]);
 
-  const save = () => Object.entries(drafts).forEach(([draftKey, value]) => localStorage.setItem(draftKey, value));
+  const save = () => {
+    for (const site of templateSources) {
+      for (const lang of ["cpp", "python"] as Language[]) {
+        const value = drafts[templateStorageKey(site, lang)];
+        if (value !== undefined && value !== storedTemplate(lang, site)) void saveTemplate(site, lang, value);
+      }
+    }
+  };
 
   const setCursor = () => {
     const editor = editorRef.current;
@@ -331,6 +341,7 @@ function TemplatePage({ t, drafts, monaco, applyTemplate, close }: Pick<Settings
       {templateSources.map((site) => <button key={site} className={source === site ? "active" : ""} onClick={() => drafts.setSource(site)}>{site === "other" ? t("local") : site === "atcoder" ? "AtCoder" : site === "codeforces" ? "Codeforces" : "DOJ"}</button>)}
     </div>
     <p className="settings-help">{t("templateHelp")}</p>
+    <LibraryFolder t={t} />
     <div className="template-monaco"><Editor beforeMount={setupMonaco} onMount={(editor) => { drafts.editorRef.current = editor; }} height="100%" language={language === "cpp" ? "cpp" : "python"} value={drafts.draft} onChange={(code) => drafts.setDraft(code || "")} theme={monaco.theme} options={{ minimap: { enabled: false }, fontFamily: monaco.fontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 4, padding: { top: 10, bottom: 10 } }} /></div>
     <footer className="settings-footer">
       <button className="subtle-button" onClick={() => drafts.setDraft(templates[language])}>{t("reset")}</button>
@@ -342,6 +353,40 @@ function TemplatePage({ t, drafts, monaco, applyTemplate, close }: Pick<Settings
   </>;
 }
 
+/** Where templates and snippets are kept, and the way to keep them somewhere else. */
+function LibraryFolder({ t }: Pick<SettingsDialogProps, "t">) {
+  const folder = library.use((state) => state.folder);
+  const error = library.use((state) => state.error);
+  const [custom] = useSetting("libraryFolder");
+  const [busy, setBusy] = useState(false);
+  const move = async (next: string) => {
+    setBusy(true);
+    try { await changeLibraryFolder(next); } catch { /* the error is in the store */ } finally { setBusy(false); }
+  };
+  const choose = async () => {
+    const picked = await open({ directory: true, multiple: false, title: t("libraryChoose") });
+    if (typeof picked === "string") await move(picked);
+  };
+  if (!IS_TAURI) return null;
+  return <div className="library-folder">
+    <Icon name="folder" size={14} />
+    <code title={folder}>{folder || "…"}</code>
+    <button className="subtle-button" onClick={() => void revealLibrary()} disabled={!folder}>{t("libraryReveal")}</button>
+    <button className="subtle-button" onClick={() => void choose()} disabled={busy}>{t("libraryChange")}</button>
+    {custom && <button className="subtle-button" onClick={() => void move("")} disabled={busy}>{t("libraryDefault")}</button>}
+    {error && <small className="toolchain-error" role="alert">{error}</small>}
+  </div>;
+}
+
+/** What is wrong with `name` for a snippet, which is also its file's name; empty when nothing is. */
+const snippetNameProblem = (name: string, language: Language, id: string, snippets: CodeSnippet[]) => {
+  const trimmed = name.trim();
+  if (!trimmed) return "snippetNameEmpty";
+  if (trimmed.startsWith(".") || [...trimmed].length > 60 || /[<>:"/\\|?*\u0000-\u001f]/.test(trimmed)) return "snippetNameBad";
+  if (snippets.some((other) => other.id !== id && other.language === language && other.name.trim().toLowerCase() === trimmed.toLowerCase())) return "snippetNameTaken";
+  return "";
+};
+
 const blankSnippet = (language: Language): CodeSnippet => ({ id: crypto.randomUUID(), name: "", language, code: "" });
 
 /** The snippet in the form: a saved one being changed, or a new one that has no entry yet. */
@@ -352,7 +397,7 @@ function useSnippetEditor(activeLanguage: Language) {
   const startNew = () => setDraft(blankSnippet(activeLanguage));
 
   const save = () => {
-    if (!draft.name.trim() || !draft.code.trim()) return;
+    if (snippetNameProblem(draft.name, draft.language, draft.id, snippets) || !draft.code.trim()) return;
     setSnippets(snippets.some((snippet) => snippet.id === draft.id)
       ? snippets.map((snippet) => snippet.id === draft.id ? { ...draft, name: draft.name.trim() } : snippet)
       : [...snippets, { ...draft, name: draft.name.trim() }]);
@@ -395,7 +440,8 @@ function useSnippetEditor(activeLanguage: Language) {
     return next;
   });
 
-  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove, move };
+  const problem = draft.name.trim() ? snippetNameProblem(draft.name, draft.language, draft.id, snippets) : "";
+  return { snippets, draft, setDraft, editorRef, startNew, save, setCursor, remove, move, problem };
 }
 
 function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { editor: ReturnType<typeof useSnippetEditor>; monaco: MonacoLook }) {
@@ -422,12 +468,13 @@ function SnippetsPage({ t, editor, monaco }: Pick<SettingsDialogProps, "t"> & { 
         <span>{t("snippetsHelp")}</span>
         <span>Monaco placeholders are supported: <code>{"${1:value}"}</code> selects the first editable field and <code>{"${0}"}</code> sets the final cursor position. Snippets are stored locally on this device.</span>
       </div>
+      <LibraryFolder t={t} />
       <div className="snippet-meta">
         <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Snippet name" aria-label="Snippet name" />
         <select value={draft.language} onChange={(event) => setDraft((current) => ({ ...current, language: event.target.value as Language }))} aria-label="Snippet language"><option value="cpp">C++</option><option value="python">Python</option></select>
       </div>
       <div className="snippet-monaco"><Editor beforeMount={setupMonaco} onMount={(mounted) => { editor.editorRef.current = mounted; }} height="100%" language={draft.language === "cpp" ? "cpp" : "python"} value={draft.code} onChange={(code) => setDraft((current) => ({ ...current, code: code || "" }))} theme={monaco.theme} options={{ minimap: { enabled: false }, fontFamily: monaco.fontFamily, fontSize: 12, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, padding: { top: 10, bottom: 10 } }} /></div>
-      <footer className="settings-footer"><button className="subtle-button" onClick={editor.setCursor}>Set cursor here</button><span className="footer-spacer" /><button className="primary-button" onClick={editor.save} disabled={!draft.name.trim() || !draft.code.trim()}>Save snippet</button></footer>
+      <footer className="settings-footer"><button className="subtle-button" onClick={editor.setCursor}>Set cursor here</button><span className="footer-spacer" />{editor.problem && <small className="toolchain-error" role="alert">{t(editor.problem as "snippetNameBad")}</small>}<button className="primary-button" onClick={editor.save} disabled={!draft.name.trim() || !draft.code.trim() || Boolean(editor.problem)}>Save snippet</button></footer>
     </div>
   </div>;
 }

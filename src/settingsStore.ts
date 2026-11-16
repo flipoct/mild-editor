@@ -120,7 +120,11 @@ const definitions = {
   // which Discord can show too. Both empty is the editor's own mark.
   appIcon: { read: () => localStorage.getItem("mild-app-icon") || "", save: (icon) => { if (icon) localStorage.setItem("mild-app-icon", icon); else localStorage.removeItem("mild-app-icon"); } } as Setting<string>,
   appIconUrl: text("mild-app-icon-url", "", trimmed),
-  snippets: { read: loadSnippets, save: (snippets) => localStorage.setItem("mild-snippets", JSON.stringify(snippets)), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,
+  // The snippets live in the library folder (src/library.ts), which is told of every change;
+  // until it has been read, the list kept here before there was a folder stands in.
+  snippets: { read: loadSnippets, save: (snippets) => snippetsSaved(snippets), lazy: true } as Setting<ReturnType<typeof loadSnippets>>,
+  // The folder templates and snippets are kept in; empty is one in the app's own data.
+  libraryFolder: text("mild-library-folder", "", trimmed),
   // Empty means "find clangd on PATH", which is stored as no key at all.
   clangdPath: {
     read: () => localStorage.getItem("mild-clangd-path") || "",
@@ -129,6 +133,10 @@ const definitions = {
   } as Setting<string>,
   atcoderLibraryPath: text("mild-atcoder-library-path", "", trimmed),
 };
+
+/** Where a changed list of snippets goes: the library folder, once src/library.ts has said so. */
+let snippetsSaved: (snippets: ReturnType<typeof loadSnippets>) => void = () => undefined;
+export const onSnippetsSaved = (save: typeof snippetsSaved) => { snippetsSaved = save; };
 
 export type Settings = { [K in keyof typeof definitions]: (typeof definitions)[K] extends Setting<infer T> ? T : never };
 export type SettingName = keyof Settings;
@@ -150,6 +158,14 @@ export const setSetting = <K extends SettingName>(name: K, update: Update<Settin
   if (Object.is(value, current)) return;
   store.set({ [name]: value } as unknown as Partial<Settings>);
   definition(name).save(value);
+};
+
+/**
+ * Puts a value in the store without storing it: for a preference that lives somewhere else
+ * (the snippets, in the library folder) and was read back from there.
+ */
+export const refreshSetting = <K extends SettingName>(name: K, value: Settings[K]) => {
+  if (!Object.is(value, store.get()[name])) store.set({ [name]: value } as unknown as Partial<Settings>);
 };
 
 /** One stable setter per preference, so it can sit in a dependency list like a `useState` one. */

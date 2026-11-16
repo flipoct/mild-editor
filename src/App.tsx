@@ -32,7 +32,7 @@ import { renderReleaseNotes } from "./releaseNotes";
 import { DEMO_MODE, demoTabs } from "./demo";
 import { isPendingVerdict, newVerdicts, type SeenVerdict } from "./verdictNotice";
 import { blankTest, combinedRunOutput, shownOutput, companionCannotParse, companionToImported, CONTEST_PENALTY_MINUTES, contestStorageKey, DEBUG_TIME_FACTOR, DEFAULT_TIME_LIMIT_MS, filenameForLanguage, finalVerdicts, formatClock, formatMemory, hydrateTests, inferredSourceUrl, isAccepted, isContestImportUrl, isSamePage, judge, languageFromFilename, loadContest, makeTab, NEEDS_BROWSER, nextDefaultFilename, rekeyContest, sameSavedTests, savedProblem, savedTestsKey, storedTemplate, STRESS_CREATE, stressChoiceKey, VERDICT_NOTICE_MS, verdictLabels, visibleWhitespace } from "./problems";
-import { alwaysInstalledFontIds, APP_VERSION, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_STYLES, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
+import { alwaysInstalledFontIds, APP_VERSION, LIBRARY_IMPORT_KEY, defaultPanelGrid, editorLineHeightFor, fallbackEditorFont, IS_DEV_BUILD, isPortableSetting, knownEditorFonts, OPEN_TABS_KEY, PANEL_DIVIDER_HIT, PANEL_DOCK_BAND, PANEL_IDS, pickEditorFont, RELEASE_NOTES_KEY, SETTINGS_BACKUP_KIND, shortcutLabel, UI_STYLES, UI_THEMES, UI_ZOOM_STEP, UPDATES_SUPPORTED, wallpaperCss, WORKSPACE_KEY } from "./settings";
 import { setSnippetCompletions, setupMonaco } from "./monacoSetup";
 import { useLatest, useNextRender, useStableCallback } from "./hooks";
 import { SettingsDialog } from "./SettingsDialog";
@@ -2229,6 +2229,8 @@ function App() {
         if (key && isPortableSetting(key)) localStorage.removeItem(key);
       }
       for (const [key, value] of entries) localStorage.setItem(key, value);
+      // Templates and snippets live in the library folder now: an older backup's are written there on the restart.
+      if (entries.some(([key]) => key === "mild-snippets" || key.startsWith("mild-template-"))) localStorage.setItem(LIBRARY_IMPORT_KEY, "1");
       setFileStatus(t("settingsImported"));
       // Almost every setting is read once at start-up, so the only honest way to apply a
       // restored set is to start again.

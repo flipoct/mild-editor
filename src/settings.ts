@@ -173,7 +173,16 @@ export const WORKSPACE_KEY = IS_DEV_BUILD ? "mild-dev-last-workspace" : "mild-la
  * backup restored on another machine should not drag these along, and `:` marks the ones
  * that are keyed by workspace path.
  */
-export const SESSION_SETTING_KEYS = ["mild-last-workspace", "mild-dev-last-workspace", "mild-last-open-tabs", "mild-dev-last-open-tabs", "mild-release-notes"];
+/** Set by a settings import that brought templates or snippets: they go into the library folder on the next start. */
+export const LIBRARY_IMPORT_KEY = "mild-library-import";
+/** Set once the templates and snippets of the settings went into a library folder: they are not brought again. */
+export const LIBRARY_MOVED_KEY = "mild-library-moved";
+
+export const SESSION_SETTING_KEYS = [
+  "mild-last-workspace", "mild-dev-last-workspace", "mild-last-open-tabs", "mild-dev-last-open-tabs", "mild-release-notes",
+  // Paths on this computer: another one has its own Python, compiler and folders.
+  "mild-python-path", "mild-cpp-compiler", "mild-library-folder", LIBRARY_IMPORT_KEY, LIBRARY_MOVED_KEY,
+];
 
 export const isPortableSetting = (key: string) => key.startsWith("mild-") && !key.includes(":") && !SESSION_SETTING_KEYS.includes(key);
 

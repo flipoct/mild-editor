@@ -101,7 +101,33 @@ export const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces
 
 export const templateStorageKey = (source: ProblemSource, language: Language) => `mild-template-${source}-${language}`;
 
-export const storedTemplate = (language: Language, source: ProblemSource = "other") => localStorage.getItem(templateStorageKey(source, language)) || localStorage.getItem(`mild-template-${language}`) || templates[language];
+/** A template's file in the library folder (src/library.ts): `default.cpp`, `atcoder.py`… */
+export const templateFile = (source: ProblemSource, language: Language) => `${source === "other" ? "default" : source}.${language === "cpp" ? "cpp" : "py"}`;
+
+/** The library folder's templates by file name, once it has been read; null until then. */
+let folderTemplates: Record<string, string> | null = null;
+export const setFolderTemplates = (templates: Record<string, string> | null) => { folderTemplates = templates; };
+
+/**
+ * The template a new file of `source` starts from: the judge's own in the library folder, the
+ * default one there, then the editor's. Until the folder has been read, the copies kept in
+ * the settings before there was a folder.
+ */
+export const storedTemplate = (language: Language, source: ProblemSource = "other") => folderTemplates
+  ? folderTemplates[templateFile(source, language)] ?? folderTemplates[templateFile("other", language)] ?? templates[language]
+  : localStorage.getItem(templateStorageKey(source, language)) || localStorage.getItem(`mild-template-${language}`) || templates[language];
+
+/** The templates kept in the settings before there was a library folder, by their file there. */
+export const legacyTemplates = () => {
+  const found: Record<string, string> = {};
+  for (const language of ["cpp", "python"] as Language[]) {
+    for (const source of templateSources) {
+      const text = localStorage.getItem(templateStorageKey(source, language)) ?? (source === "other" ? localStorage.getItem(`mild-template-${language}`) : null);
+      if (text !== null && text !== templates[language]) found[templateFile(source, language)] = text;
+    }
+  }
+  return found;
+};
 
 export const loadTemplateDrafts = () => Object.fromEntries(templateSources.flatMap((source) => (["cpp", "python"] as Language[]).map((language) => [templateStorageKey(source, language), storedTemplate(language, source)])));
 

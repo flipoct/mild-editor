@@ -912,6 +912,12 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .discord-button-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; margin: 2px 0 6px 23px; }
 .discord-settings .settings-help code { margin-right: 4px; }
 
+/* Settings → Templates and Snippets: the folder they are kept in. */
+.library-folder { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: var(--r-m); background: var(--bg-2); color: var(--muted); font-size: var(--fs-xs); }
+.library-folder code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-2); font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.library-folder .subtle-button { height: 22px; padding: 0 8px; font-size: var(--fs-xs); }
+.library-folder small { flex-basis: 100%; }
+
 /* Settings → Languages */
 .toolchain-settings .appearance-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .toolchain-settings .appearance-group .subtle-button { height: 24px; padding: 0 8px; font-size: var(--fs-xs); }

@@ -17,6 +17,7 @@ mod discord;
 mod files;
 mod import;
 mod interactive;
+mod library;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod memory;
@@ -237,6 +238,12 @@ pub fn run() {
             discord::discord_status,
             app_icon::set_app_icon,
             app_icon::fetch_icon_image,
+            library::library_default_folder,
+            library::library_read,
+            library::library_stamp,
+            library::library_write_template,
+            library::library_write_snippets,
+            library::library_reveal,
             import::import_problem,
             submissions::refresh_submission_statuses,
             clangd::start_clangd,
