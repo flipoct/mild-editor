@@ -679,7 +679,7 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
     }).collect::<Vec<_>>();
     let disk_keys = disk_files.iter().map(|(filename, _, _)| filename_key(filename)).collect::<std::collections::HashSet<_>>();
     let (kept, gone): (Vec<_>, Vec<_>) = metadata.problems.drain(..).partition(|problem| disk_keys.contains(&filename_key(&problem.filename)));
-    metadata.problems = kept;
+    metadata.problems = merge_same_files(kept);
     for problem in gone {
         metadata.detached.retain(|item| filename_key(&item.filename) != filename_key(&problem.filename));
         metadata.detached.insert(0, problem);
@@ -713,6 +713,41 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
     }
     metadata.problems.sort_by_key(|problem| filename_key(&problem.filename));
     Ok(())
+}
+
+/// Folds entries that name the same file into one. A save that spelled a folder in another
+/// case than the disk (`Codeforces/` for `codeforces/`) used to add a second entry, and the
+/// explorer showed the file twice; the entry with the most behind it is kept, and the
+/// other's tests, verdicts and judge details fill in what it lacks.
+fn merge_same_files(problems: Vec<WorkspaceProblemMetadata>) -> Vec<WorkspaceProblemMetadata> {
+    let weight = |problem: &WorkspaceProblemMetadata| problem.tests.len() + problem.submissions.len() + problem.judge_status.is_some() as usize;
+    let mut merged: Vec<WorkspaceProblemMetadata> = Vec::with_capacity(problems.len());
+    for problem in problems {
+        let Some(index) = merged.iter().position(|item| filename_key(&item.filename) == filename_key(&problem.filename)) else {
+            merged.push(problem);
+            continue;
+        };
+        let (mut keep, other) = if weight(&problem) > weight(&merged[index]) {
+            (problem, merged.remove(index))
+        } else {
+            (merged.remove(index), problem)
+        };
+        if keep.tests.is_empty() { keep.tests = other.tests; }
+        for record in other.submissions {
+            if !keep.submissions.iter().any(|seen| seen.status == record.status && seen.url == record.url && seen.at == record.at) {
+                keep.submissions.push(record);
+            }
+        }
+        keep.submissions.sort_by_key(|record| record.at);
+        keep.source = keep.source.or(other.source);
+        keep.source_url = keep.source_url.or(other.source_url);
+        keep.judge_status = keep.judge_status.or(other.judge_status);
+        keep.limits = keep.limits.or(other.limits);
+        keep.order = keep.order.or(other.order);
+        keep.modified_at = keep.modified_at.max(other.modified_at);
+        merged.insert(index, keep);
+    }
+    merged
 }
 
 pub(crate) fn filename_key(filename: &str) -> String {
@@ -794,7 +829,9 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
         let logical_modified_at = problem.modified_at.unwrap_or(modified_at);
         // The arranged position and the submission history are not the frontend's to
         // send, so a problem saved again keeps the ones it had.
-        let existing = metadata_problems.iter().position(|item| item.filename == filename);
+        // Windows and macOS do not tell `Codeforces/A.cpp` from `codeforces/A.cpp`, so neither
+        // does the metadata: the import's folder name and the one on disk may differ in case.
+        let existing = metadata_problems.iter().position(|item| filename_key(&item.filename) == filename_key(&filename));
         let tests = match problem.tests {
             Some(tests) => tests,
             None => existing.map(|index| std::mem::take(&mut metadata_problems[index].tests)).unwrap_or_default(),
@@ -952,7 +989,7 @@ pub(crate) fn duplicate_workspace_file(request: RenameWorkspaceFileRequest) -> R
     let mut metadata = read_workspace_metadata(&metadata_path)?;
     let new_filename = unique_workspace_filename(&folder, &requested_filename, &metadata, None);
     let (_, new_language) = workspace_source_filename(&new_filename)?;
-    let source_problem = metadata.problems.iter().find(|problem| problem.filename == filename).cloned().ok_or("Workspace file metadata was not found.")?;
+    let source_problem = metadata.problems.iter().find(|problem| filename_key(&problem.filename) == filename_key(&filename)).cloned().ok_or("Workspace file metadata was not found.")?;
     let source = folder.join(&filename);
     let destination = folder.join(&new_filename);
     fs::copy(&source, &destination).map_err(|error| format!("Could not duplicate source file: {error}"))?;
@@ -975,7 +1012,7 @@ pub(crate) fn rename_workspace_file(request: RenameWorkspaceFileRequest) -> Resu
     let mut metadata = read_workspace_metadata(&metadata_path)?;
     let new_filename = unique_workspace_filename(&folder, &requested_filename, &metadata, Some(&filename));
     let (_, new_language) = workspace_source_filename(&new_filename)?;
-    let problem = metadata.problems.iter_mut().find(|problem| problem.filename == filename).ok_or("Workspace file metadata was not found.")?;
+    let problem = metadata.problems.iter_mut().find(|problem| filename_key(&problem.filename) == filename_key(&filename)).ok_or("Workspace file metadata was not found.")?;
     let source_path = folder.join(&filename);
     let destination_path = folder.join(&new_filename);
     // A rename that carries the file into another folder is how the explorer moves it, and
@@ -1237,6 +1274,35 @@ mod tests {
         fs::remove_file(directory.path().join("B.cpp")).expect("delete B");
         let pruned = reload_workspace_files(WorkspaceRequest { folder_path }).expect("final rescan");
         assert!(!pruned.iter().any(|problem| problem.filename == "B.cpp"));
+    }
+
+    #[test]
+    fn a_folder_spelled_in_another_case_is_one_file_not_two() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let folder_path = directory.path().to_string_lossy().into_owned();
+        create_workspace(WorkspaceRequest { folder_path: folder_path.clone() }).expect("create workspace");
+        let input = |filename: &str, tests: Option<Vec<SavedTestCase>>| WorkspaceProblemInput {
+            filename: filename.into(), title: "A".into(), language: "cpp".into(), code: "int main() {}".into(), tests, source: Some("codeforces".into()), source_url: None, judge_status: None, limits: None, modified_at: None,
+        };
+        fs::create_dir(directory.path().join("codeforces")).expect("folder on disk");
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("codeforces/A.cpp", Some(Vec::new()))] }).expect("first save");
+        if !directory.path().join("Codeforces").join("A.cpp").exists() { return; } // a case-sensitive file system: two real folders
+        // The import names the judge's folder with a capital, the disk has it in lower case.
+        save_workspace(SaveWorkspaceRequest { folder_path: folder_path.clone(), problems: vec![input("Codeforces/A.cpp", None)] }).expect("save in other case");
+        let files = reload_workspace_files(WorkspaceRequest { folder_path: folder_path.clone() }).expect("rescan");
+        assert_eq!(files.len(), 1);
+
+        // A metadata file an earlier version already doubled is mended by the next rescan.
+        let metadata_path = workspace_metadata_path(directory.path());
+        let mut metadata = read_workspace_metadata(&metadata_path).expect("metadata");
+        let mut twin = metadata.problems[0].clone();
+        twin.filename = "Codeforces/A.cpp".into();
+        twin.judge_status = Some("OK".into());
+        metadata.problems.push(twin);
+        write_workspace_metadata(&metadata_path, &metadata, "double the entry").expect("write");
+        let mended = reload_workspace_files(WorkspaceRequest { folder_path }).expect("rescan again");
+        assert_eq!(mended.len(), 1);
+        assert_eq!(mended[0].judge_status.as_deref(), Some("OK"));
     }
 
     #[test]
