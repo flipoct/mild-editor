@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.21.1
 
 - **Each file shows once in the explorer.** On Windows and macOS a problem imported into a judge's folder spelled in another case than the one on disk (`Codeforces/` and `codeforces/`) was listed twice. A save now finds it either way, and the next rescan folds a doubled entry into one, keeping its tests and verdicts.
 - The 1.21.0 notes no longer list the m twice.

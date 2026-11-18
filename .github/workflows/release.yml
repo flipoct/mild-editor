@@ -57,14 +57,11 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.21.0
+            ## What's changed in v1.21.1
 
-            - **Templates and snippets are files** in a folder you choose (git or a synced folder works): edit them in any editor and the app picks them up. Existing ones move in by themselves.
-            - **The m is back** as the app's mark.
-            - **Quieter chrome**: one accent button, the status line in your language, a 4px grid.
-            - **Test cards keep their place** and their folding after a run.
+            - **Each file shows once in the explorer.** On Windows and macOS, problems imported into a judge's folder whose name differed only in case from the one on disk were listed twice. The doubled entries fold back into one the next time the workspace is read, keeping their tests and verdicts.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.21.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.21.1/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update
