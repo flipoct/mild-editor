@@ -43,6 +43,7 @@ import { BoardView } from "./board/BoardView";
 import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
 import { DEFAULT_PRESENCE_OPTIONS, DISCORD_APPLICATION_ID, discordActivity, type PresenceOptions } from "./discord";
 import { iconBytes } from "./appIcon";
+import { libraryBackupEntries } from "./library";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
@@ -100,6 +101,7 @@ function App() {
   // The workspace on disk lives in a store of its own, which the explorer follows by itself.
   const workspacePath = useWorkspacePath();
   const savedFiles = useSavedFiles();
+  const savedKeys = useMemo(() => new Set(savedFiles.map((file) => fileKey(file.filename))), [savedFiles]);
   const workspaceDirectories = useWorkspaceDirectories();
   const workspaceBoards = useWorkspaceBoards();
   // The drawing board shown in the editor's place, by workspace path (src/board).
@@ -196,6 +198,12 @@ function App() {
   const submitRef = useRef<() => void>(() => {});
   const paletteRef = useRef<() => void>(() => {});
   const hasUnsavedChangesRef = useRef(false);
+  /** Tabs whose file was on disk once: a tab like that whose file is gone was deleted or renamed behind the editor. */
+  const onDiskOnceRef = useRef(new Set<string>());
+  /** Tab ids of files deleted behind the editor, waiting for the user to say whether a save writes them again. */
+  const [recreateConfirm, setRecreateConfirm] = useState<string[] | null>(null);
+  /** Opening or creating a workspace that waits for the user's answer about unsaved changes. */
+  const [switchConfirm, setSwitchConfirm] = useState<{ run: () => void } | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const diagnosticDecorationsRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
   const clangdClientRef = useRef<ClangdClient | null>(null);
@@ -254,10 +262,14 @@ function App() {
    * editor stayed live while it ran: a tab whose code or tests moved on in the meantime
    * keeps them, and stays unsaved.
    */
-  const settleSavedTabs = (snapshot: ProblemTab[], before: ProblemTab[]) => setTabs((items) => snapshot.map((saved) => {
-    const live = items.find((tab) => tab.id === saved.id);
-    const sent = before.find((tab) => tab.id === saved.id);
-    return live && sent && (live.codes !== sent.codes || live.tests !== sent.tests)
+  // The tab list is the live one: a tab opened while the save ran (an explorer click, an
+  // import) stays, and one closed meanwhile does not come back. Built from the snapshot, it
+  // used to undo both.
+  const settleSavedTabs = (snapshot: ProblemTab[], before: ProblemTab[]) => setTabs((items) => items.map((live) => {
+    const saved = snapshot.find((tab) => tab.id === live.id);
+    if (!saved) return live;
+    const sent = before.find((tab) => tab.id === live.id);
+    return sent && (live.codes !== sent.codes || live.tests !== sent.tests)
       ? { ...saved, codes: live.codes, tests: live.tests, dirty: live.dirty, modifiedAt: live.modifiedAt }
       : saved;
   }));
@@ -308,6 +320,10 @@ function App() {
     t("collabRoomOver"), t("collabLost"), t("collabLocked")];
   const hasFileStatusError = !reportedStatuses.includes(fileStatus) && !fileStatus.startsWith(t("submitCopied"))
     && !fileStatus.startsWith("imported ") && !fileStatus.startsWith(t("contestAutoStarted")) && !fileStatus.startsWith(t("importingContest"));
+
+  for (const tab of tabs) if (savedKeys.has(fileKey(tab.filename))) onDiskOnceRef.current.add(tab.id);
+  /** Open tabs whose file was on disk and is not any more (deleted or renamed in another program). */
+  const goneTabIds = useMemo(() => new Set(workspacePath ? tabs.filter((tab) => onDiskOnceRef.current.has(tab.id) && !savedKeys.has(fileKey(tab.filename))).map((tab) => tab.id) : []), [tabs, savedKeys, workspacePath]);
 
   useEffect(() => {
     hasUnsavedChangesRef.current = tabs.some((tab) => tab.dirty) || fileStatus === "modified";
@@ -479,8 +495,11 @@ function App() {
   }, [language, pythonPath, activeTabId]);
 
   useEffect(() => {
+    // Only once the installed fonts are known: before that the options hold just the custom
+    // ones, and a built-in choice (Consolas, JetBrains Mono) was replaced on every launch.
+    if (!systemFonts.length) return;
     if (fontOptions.length && !fontOptions.some((font) => font.id === editorFont)) setEditorFont(fontOptions[0].id);
-  }, [fontOptions, editorFont]);
+  }, [systemFonts, fontOptions, editorFont]);
 
   useEffect(() => {
     const canvas = document.createElement("canvas");
@@ -936,7 +955,18 @@ function App() {
     deleteBoard,
   };
 
-  const createWorkspace = async () => {
+  /**
+   * Runs `proceed`, which replaces the open tabs, once nothing would be lost: with unsaved
+   * changes it asks first. Opening or creating a workspace used to drop them silently.
+   */
+  const guardUnsaved = (proceed: () => void) => {
+    if (hasUnsavedChangesRef.current) setSwitchConfirm({ run: proceed });
+    else proceed();
+  };
+
+  const createWorkspace = async () => guardUnsaved(() => void createWorkspaceNow());
+
+  const createWorkspaceNow = async () => {
     try {
       const folderPath = await open({ directory: true, multiple: false, title: "Create Mild Editor project" });
       if (!folderPath || Array.isArray(folderPath)) return;
@@ -1062,14 +1092,17 @@ function App() {
     }
     const remaining = tabs.filter((tab) => tab.id !== id);
     tabHistoryRef.current = tabHistoryRef.current.filter((item) => item !== id);
+    // From the live list: called after a save (the close dialog's "Save and close"), `tabs`
+    // here is the list from before it, and writing that back undid what the save settled.
+    const dropClosed = (items: ProblemTab[]) => items.filter((tab) => tab.id !== id);
     if (!remaining.length) {
       clearDiagnostics();
-      setTabs([]);
+      setTabs(dropClosed);
       setActiveTabId("");
       setFileStatus("not saved");
       return;
     }
-    setTabs(remaining);
+    setTabs(dropClosed);
     if (id === activeTabId) {
       // Go back to the tab that was active before this one, so Ctrl+W lands where you
       // came from every time. With no history left, the neighbour on the left: the same
@@ -1436,7 +1469,31 @@ function App() {
     setSettingsPage(null);
   };
 
-  const saveProblem = async (): Promise<boolean> => {
+  /** The unsaved-changes dialog's "Save and continue": the workspace changes only once the save went through. */
+  const saveAndSwitch = (run: () => void) => {
+    setSwitchConfirm(null);
+    void saveProblem({ explicit: true }).then((saved) => { if (saved) run(); });
+  };
+
+  /** The close-tab dialog's "Save and close": the tab closes only once the save went through. */
+  const saveAndCloseTab = (id: string) => {
+    setCloseConfirmTabId(null);
+    void saveProblem({ explicit: true }).then((saved) => { if (saved) closeProblem(id); });
+  };
+  /**
+   * Saves every open tab. A tab whose file was deleted behind the editor is not written back
+   * on its own: an explicit save (Ctrl+S, the menus, a dialog's "Save") asks first when such
+   * a tab is the one in front or holds edits, and every other save leaves it out.
+   */
+  const saveProblem = async (options: { explicit?: boolean; recreate?: string[]; dropGone?: boolean } = {}): Promise<boolean> => {
+    const gone = tabs.filter((tab) => goneTabIds.has(tab.id) && !options.recreate?.includes(tab.id));
+    if (options.explicit && !options.dropGone) {
+      const ask = gone.filter((tab) => tab.dirty || tab.id === activeTabId);
+      if (ask.length) {
+        setRecreateConfirm(ask.map((tab) => tab.id));
+        return false;
+      }
+    }
     try {
       let folderPath = workspacePath;
       if (!folderPath) {
@@ -1445,7 +1502,11 @@ function App() {
       if (!folderPath || Array.isArray(folderPath)) return false;
       setFileStatus("saving…");
       const startedAt = Date.now();
-      const sent = tabs.map((tab) => ({ ...tab, dirty: false }));
+      const sent = tabs.filter((tab) => !gone.includes(tab)).map((tab) => ({ ...tab, dirty: false }));
+      if (!sent.length) {
+        setFileStatus("saved");
+        return true;
+      }
       const saved = await invoke<LoadedWorkspace>("save_workspace", {
         request: {
           folderPath,
@@ -1510,7 +1571,7 @@ function App() {
   };
 
   const saveAndCloseApplication = async () => {
-    if (await saveProblem()) closeApplication();
+    if (await saveProblem({ explicit: true })) closeApplication();
   };
 
   const requestApplicationClose = () => {
@@ -1518,7 +1579,9 @@ function App() {
     else closeApplication();
   };
 
-  const openProblem = async () => {
+  const openProblem = async () => guardUnsaved(() => void openWorkspaceNow());
+
+  const openWorkspaceNow = async () => {
     try {
       const selected = await open({
         multiple: false,
@@ -1634,13 +1697,19 @@ function App() {
   const addImportedProblemsNow = async (imported: ImportedAtCoderProblem[], renameDuplicates = false, contestImport = imported.length > 1, options: { activate?: boolean; contestClock?: boolean } = {}) => {
     const activate = options.activate !== false;
     const existingFiles = [...savedFiles, ...tabs].filter((file, index, files) => files.findIndex((item) => fileKey(item.filename) === fileKey(file.filename)) === index);
-    const existingProblemIds = new Set(existingFiles.map((file) => problemIdentity(file.source, file.sourceUrl)).filter(Boolean));
+    // A contest's problem is skipped only when the folder it would go into has it already. One
+    // that sits in another folder (the problemset, an earlier contest, the round a joint task
+    // came from, a DOJ contest now taken as a virtual one) is imported again into this one:
+    // skipping it left the contest folder without it.
+    const folderOf = (filename: string) => fileKey(filename.slice(0, filename.lastIndexOf("/") + 1));
+    const existingProblemIds = new Set(existingFiles.map((file) => `${folderOf(file.filename)}|${problemIdentity(file.source, file.sourceUrl)}`));
     const incomingProblemIds = new Set<string>();
     const candidates = imported.filter((problem) => {
       const identity = problemIdentity(problem.source, problem.sourceUrl);
       if (identity && incomingProblemIds.has(identity)) return false;
       if (identity) incomingProblemIds.add(identity);
-      return !(contestImport && identity && existingProblemIds.has(identity));
+      const target = folderOf(importFolder(organizeImports, contestImport, problem));
+      return !(contestImport && identity && existingProblemIds.has(`${target}|${identity}`));
     });
     if (!candidates.length) {
       setAtCoderOpen(false);
@@ -2202,6 +2271,13 @@ function App() {
       for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);
         if (key && isPortableSetting(key)) settings[key] = localStorage.getItem(key) ?? "";
+      }
+      // Templates and snippets as the library folder has them now, in place of the copies the
+      // settings kept from before there was a folder.
+      const fromLibrary = await libraryBackupEntries().catch(() => null);
+      if (fromLibrary) {
+        for (const key of Object.keys(settings)) if (key === "mild-snippets" || key.startsWith("mild-template-")) delete settings[key];
+        Object.assign(settings, fromLibrary);
       }
       const contents = JSON.stringify({ kind: SETTINGS_BACKUP_KIND, version: appVersion, savedAt: new Date().toISOString(), settings }, null, 2);
       await invoke("export_settings_file", { request: { path, contents } });
@@ -3228,7 +3304,7 @@ function App() {
         case "file:reveal": explorerRef.current?.revealSelection(); break;
         case "file:delete": explorerRef.current?.deleteSelection(); break;
         case "file:open": void openProblem(); break;
-        case "file:save": void saveProblem(); break;
+        case "file:save": void saveProblem({ explicit: true }); break;
         case "file:import": beginImport(); break;
         case "file:close-tab": closeWithShortcutRef.current(); break;
         case "view:toggle-explorer": setExplorerVisible((visible) => !visible); break;
@@ -3302,7 +3378,7 @@ function App() {
       { id: "file.folder", label: t("cmdNewFolder"), keywords: "directory 디렉터리", shortcut: shortcutLabel("N", { shift: true }), disabled: !workspacePath, run: () => explorerRef.current?.newFolder() },
       { id: "file.import", label: t("cmdImport"), keywords: "import url atcoder codeforces doj 가져오기", shortcut: shortcutLabel("T"), run: beginImport },
       { id: "file.open", label: t("cmdOpen"), keywords: "open folder workspace 열기", shortcut: shortcutLabel("O"), run: () => void openProblem() },
-      { id: "file.save", label: t("cmdSave"), keywords: "save 저장", shortcut: shortcutLabel("S"), disabled: noFile, run: () => void saveProblem() },
+      { id: "file.save", label: t("cmdSave"), keywords: "save 저장", shortcut: shortcutLabel("S"), disabled: noFile, run: () => void saveProblem({ explicit: true }) },
       { id: "file.reopen", label: t("cmdReopen"), keywords: "reopen undo close 복원", shortcut: shortcutLabel("T", { shift: true }), run: reopenClosedTab },
       { id: "file.close", label: t("cmdCloseTab"), keywords: "close 닫기", shortcut: shortcutLabel("W"), disabled: noFile, run: () => closeWithShortcutRef.current() },
       { id: "terminal.toggle", label: terminalShown ? t("cmdTerminalHide") : t("cmdTerminalShow"), keywords: "terminal shell console cli cmd powershell 터미널 콘솔 셸 명령줄", shortcut: isMac ? "⌃`" : "Ctrl+`", run: toggleTerminal },
@@ -3383,7 +3459,7 @@ function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void saveProblem();
+        void saveProblem({ explicit: true });
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
@@ -3429,6 +3505,23 @@ function App() {
         event.preventDefault();
         setProblemPanelOpen((open) => !open);
       }
+      // The rest of the menu's accelerators. On macOS the menu bar runs them; Windows and
+      // Linux have no such menu, so Ctrl+, Ctrl+B, Ctrl+. and the others shown in the
+      // palette did nothing there. Physical keys, so a Korean layout reaches them too.
+      if (!(isMac && IS_TAURI) && (event.ctrlKey || event.metaKey)) {
+        const command =
+          !event.altKey && !event.shiftKey && event.code === "Comma" ? "app:settings"
+          : !event.altKey && event.code === "KeyB" ? (event.shiftKey ? "view:toggle-tests" : "view:toggle-explorer")
+          : !event.altKey && !event.shiftKey && event.code === "Period" ? "run:stop"
+          : event.altKey && !event.shiftKey && event.code === "Digit1" ? "view:panel-tests"
+          : event.altKey && !event.shiftKey && event.code === "Digit2" ? "view:panel-interactive"
+          : event.altKey && !event.shiftKey && event.code === "KeyR" ? "file:reveal"
+          : null;
+        if (command) {
+          event.preventDefault();
+          menuHandlerRef.current(command);
+        }
+      }
       // Cmd+Alt+1/2 selects a side-panel mode, so plain tab switching ignores Alt.
       if ((event.ctrlKey || event.metaKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
         const tab = tabs[Number(event.key) - 1];
@@ -3452,6 +3545,8 @@ function App() {
         event.stopImmediatePropagation();
         setFileStatus("ready");
       }
+      else if (recreateConfirm) setRecreateConfirm(null);
+      else if (switchConfirm) setSwitchConfirm(null);
       else if (appCloseConfirm) setAppCloseConfirm(false);
       else if (closeConfirmTabId) setCloseConfirmTabId(null);
       else if (deleteConfirmFile) setDeleteConfirmFile(null);
@@ -3475,7 +3570,7 @@ function App() {
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmFile, fileMenuOpen, explorerOverlays.deleteDirectory, explorerOverlays.menu, explorerOverlays.moveEntry, explorerOverlays.newFolder, explorerOverlays.rename, hasFileStatusError, importCollision, quickOpen, releaseNotes, settingsPage, sourceFile, stressOpen]);
+  }, [recreateConfirm, switchConfirm, appCloseConfirm, atCoderOpen, blankFilenameOpen, closeConfirmTabId, contestOpen, deleteConfirmFile, fileMenuOpen, explorerOverlays.deleteDirectory, explorerOverlays.menu, explorerOverlays.moveEntry, explorerOverlays.newFolder, explorerOverlays.rename, hasFileStatusError, importCollision, quickOpen, releaseNotes, settingsPage, sourceFile, stressOpen]);
 
   useEffect(() => {
     const isAllowedContextTarget = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".file-explorer, .monaco-editor, textarea"));
@@ -3507,14 +3602,18 @@ function App() {
         return;
       }
       if (event.defaultPrevented) return;
-      if (!(appCloseConfirm || closeConfirmTabId || deleteConfirmFile || explorerOverlays.deleteDirectory || sourceFile || explorerOverlays.newFolder || blankFilenameOpen || importCollision || atCoderOpen)) return;
+      if (event.target instanceof HTMLButtonElement && event.target.closest("[role=dialog], dialog, .modal, .confirm-dialog")) return;
+      if (!(switchConfirm || appCloseConfirm || closeConfirmTabId || deleteConfirmFile || explorerOverlays.deleteDirectory || sourceFile || explorerOverlays.newFolder || blankFilenameOpen || importCollision || atCoderOpen)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (appCloseConfirm) {
+      if (switchConfirm) {
+        saveAndSwitch(switchConfirm.run);
+      } else if (appCloseConfirm) {
         void saveAndCloseApplication();
       } else if (closeConfirmTabId) {
-        closeProblem(closeConfirmTabId);
-        setCloseConfirmTabId(null);
+        // The dialog's default is "Save and close", as for the app's own close: Enter
+        // used to close the tab without saving and the edits were lost.
+        saveAndCloseTab(closeConfirmTabId);
       } else if (deleteConfirmFile) {
         void deleteSavedFile();
       } else if (explorerOverlays.deleteDirectory) {
@@ -3537,7 +3636,7 @@ function App() {
     return () => window.removeEventListener("keydown", handleConfirm, true);
   // Every value a confirm handler reads has to be listed here, or Enter submits
   // what the field held when the dialog opened rather than what it holds now.
-  }, [appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerOverlays.deleteDirectory, explorerOverlays.newFolder, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
+  }, [switchConfirm, appCloseConfirm, atCoderOpen, atCoderUrl, blankFilename, blankFilenameOpen, closeConfirmTabId, deleteConfirmFile, explorerOverlays.deleteDirectory, explorerOverlays.newFolder, hasFileStatusError, importCollision, sourceFile, sourceUrlValue, sourceValue]);
 
   /** A state of the status line as the interface's language says it; a message that is already a sentence passes through. */
   const shownStatus = (status: string) => {
@@ -3614,7 +3713,7 @@ function App() {
                 {([
                   [t("newWorkspace"), shortcutLabel("N"), newProblem, false],
                   [t("openWorkspace"), shortcutLabel("O"), () => void openProblem(), false],
-                  [t("save"), shortcutLabel("S"), () => void saveProblem(), !activeTab],
+                  [t("save"), shortcutLabel("S"), () => void saveProblem({ explicit: true }), !activeTab],
                   null,
                   [t("cmdImport"), shortcutLabel("T"), beginImport, !workspacePath],
                   [t("cmdNewFile"), "", () => beginBlankFile(explorerRef.current?.creationParent()), !workspacePath],
@@ -3698,8 +3797,8 @@ function App() {
               {sharedFiles.has(tab.id) && <span className={`tab-shared ${roomLink === "online" ? "" : "ended"}`} title={roomLink === "online" ? t("collabTabLive") : t("collabOffline")}><Icon name="users" size={12} /></span>}
               {tab.id === activeTabId ? <div className="tab-edit"><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} />{tabRenameDraft?.id === tab.id
                 ? <input autoFocus value={tabRenameDraft.value} onBlur={finishTabRename} onKeyDown={(event) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTabRenameDraft(null); event.currentTarget.blur(); } }} onChange={(event) => setTabRenameDraft({ id: tab.id, value: event.target.value })} aria-label="Active tab filename" spellCheck={false} />
-                : <span className="tab-label"><button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span>}</div>
-                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} /><span className="tab-label"><span className="tab-title">{explorerBasename(tab.filename)}</span>{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span></button>}
+                : <span className="tab-label"><button className="tab-rename-trigger" onClick={() => setTabRenameDraft({ id: tab.id, value: tab.filename })} title="click to rename"><span className="tab-title">{explorerBasename(tab.filename)}</span></button>{goneTabIds.has(tab.id) && <span className="tab-gone" title={t("deletedOnDiskHelp")}>{t("deletedOnDisk")}</span>}{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span>}</div>
+                : <button className="tab-select" onClick={() => activateTab(tab)} title={tab.filename}><span className={`tab-status ${tab.dirty ? "dirty" : ""}`} /><span className="tab-label"><span className="tab-title">{explorerBasename(tab.filename)}</span>{goneTabIds.has(tab.id) && <span className="tab-gone" title={t("deletedOnDiskHelp")}>{t("deletedOnDisk")}</span>}{tab.judgeStatus && <VerdictBadge status={tab.judgeStatus} />}</span></button>}
               <button className="tab-close" onClick={() => requestCloseProblem(tab.id)} aria-label={`Close ${tab.title} tab${tab.dirty ? " (unsaved)" : ""}`}><Icon name="close" size={12} /></button>
             </div>
           ))}
@@ -3967,10 +4066,18 @@ function App() {
 
       {closeConfirmTabId && (() => {
         const tab = tabs.find((item) => item.id === closeConfirmTabId);
-        return <ConfirmDialog id="close-confirm-title" eyebrow={t("unsavedChanges")} title={<>{t("tabNotSaved").replace("{name}", tab?.filename || "file")}</>} cancel={t("cancel")} onCancel={() => setCloseConfirmTabId(null)} actions={<><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>{t("closeWithoutSaving")}</button><button className="primary-button" autoFocus onClick={() => { const id = closeConfirmTabId; setCloseConfirmTabId(null); void saveProblem().then((saved) => { if (saved) closeProblem(id); }); }}>{t("saveAndClose")}</button></>}>
+        return <ConfirmDialog id="close-confirm-title" eyebrow={t("unsavedChanges")} title={<>{t("tabNotSaved").replace("{name}", tab?.filename || "file")}</>} cancel={t("cancel")} onCancel={() => setCloseConfirmTabId(null)} actions={<><button className="danger-button" onClick={() => { closeProblem(closeConfirmTabId); setCloseConfirmTabId(null); }}>{t("closeWithoutSaving")}</button><button className="primary-button" autoFocus onClick={() => saveAndCloseTab(closeConfirmTabId)}>{t("saveAndClose")}</button></>}>
           <p>{t("tabNotSavedBody")}</p>
         </ConfirmDialog>;
       })()}
+
+      {recreateConfirm && <ConfirmDialog id="recreate-confirm-title" eyebrow={t("deletedOnDisk")} title={<>{t("recreateTitle").replace("{name}", recreateConfirm.map((id) => explorerBasename(tabs.find((tab) => tab.id === id)?.filename ?? "")).join(", "))}</>} cancel={t("cancel")} onCancel={() => setRecreateConfirm(null)} actions={<><button className="danger-button" onClick={() => { setRecreateConfirm(null); void saveProblem({ explicit: true, dropGone: true }); }}>{t("recreateNo")}</button><button className="primary-button" autoFocus onClick={() => { const ids = recreateConfirm; setRecreateConfirm(null); void saveProblem({ explicit: true, recreate: ids }); }}>{t("recreateYes")}</button></>}>
+        <p>{t("recreateBody")}</p>
+      </ConfirmDialog>}
+
+      {switchConfirm && <ConfirmDialog id="switch-confirm-title" eyebrow={t("unsavedChanges")} title={<>{t("switchNotSaved")}</>} cancel={t("cancel")} onCancel={() => setSwitchConfirm(null)} actions={<><button className="danger-button" onClick={() => { const { run } = switchConfirm; setSwitchConfirm(null); run(); }}>{t("continueWithoutSaving")}</button><button className="primary-button" autoFocus onClick={() => saveAndSwitch(switchConfirm.run)}>{t("saveAndContinue")}</button></>}>
+        <p>{t("switchNotSavedBody")}</p>
+      </ConfirmDialog>}
 
       {appCloseConfirm && <ConfirmDialog id="app-close-confirm-title" eyebrow={t("unsavedChanges")} title={<>{t("appNotSaved")}</>} cancel={t("cancel")} onCancel={() => setAppCloseConfirm(false)} actions={<><button className="danger-button" onClick={closeApplication}>{t("closeWithoutSaving")}</button><button className="primary-button" onClick={() => void saveAndCloseApplication()}>{t("saveAndClose")}</button></>}>
         <p>{t("appNotSavedBody")}</p>

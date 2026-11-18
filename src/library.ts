@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { legacyTemplates, setFolderTemplates, templateFile } from "./problems";
+import { legacyTemplates, setFolderTemplates, templateFile, templateSources, templateStorageKey } from "./problems";
 import { IS_TAURI } from "./platform";
 import { LIBRARY_IMPORT_KEY, LIBRARY_MOVED_KEY, loadSnippets } from "./settings";
 import { getSetting, onSnippetsSaved, refreshSetting, setSetting } from "./settingsStore";
@@ -118,6 +118,26 @@ export const changeLibraryFolder = async (folder: string) => {
     fail(error);
     throw error;
   }
+};
+
+/**
+ * The templates and snippets a settings backup carries, read from the folder now and put
+ * under the keys they had in the settings before there was a folder, which a restore writes
+ * back into it (see `open`). The settings' own copies stopped changing when the folder came,
+ * so a backup made from them brought old templates back and dropped newer snippets.
+ */
+export const libraryBackupEntries = async (): Promise<Record<string, string> | null> => {
+  const { folder, ready } = library.get();
+  if (!IS_TAURI || !ready) return null;
+  const found = await read(folder);
+  const entries: Record<string, string> = { "mild-snippets": JSON.stringify(toSnippets(found.snippets)) };
+  for (const language of ["cpp", "python"] as Language[]) {
+    for (const source of templateSources) {
+      const text = found.templates[templateFile(source, language)];
+      if (text !== undefined) entries[templateStorageKey(source, language)] = text;
+    }
+  }
+  return entries;
 };
 
 export const revealLibrary = () => invoke("library_reveal", { folder: library.get().folder });

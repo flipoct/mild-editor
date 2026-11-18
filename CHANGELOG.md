@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.21.2
+
+- **Unsaved tabs are asked about before another workspace opens.** Opening or creating a workspace with unsaved changes shows Save and continue / Continue without saving / Cancel; it used to drop the changes.
+- **A file deleted or renamed outside the editor is marked "deleted" on its tab.** Autosave leaves it alone, and saving it yourself asks whether to write it again; written again, it gets its tests back.
+- **Settings backups carry the templates and snippets in the library folder**, not the copies left from before 1.21.0, and restoring one puts them back in the folder.
+- **A contest import skips only the problems already in that contest's folder.** One that sits in another folder (the problemset, an earlier round) is imported into the contest too.
+- A tab opened while a save ran stays open, and one closed meanwhile does not come back. "Save and close" no longer undoes the save it made.
+- **Python reads and prints UTF-8 on Windows** (`-X utf8`), so Korean input and output are no longer mangled by the console code page, and packages installed with `pip install --user` are found again.
+- **C++ compiles under a non-ASCII user name on Windows.** MinGW GCC before 13 could not open `C:\Users\김…` paths: the source and the program are passed relative to the problem's folder, and its temporary files go there too.
+- On Linux, file names that differ only in case are two files; Windows and macOS still treat them as one.
+- Renaming a snippet to another case (`Segtree` to `segtree`) no longer deletes it.
+- The stress tester compares outputs as the test panel does: trailing spaces, CRLF and number tolerance agree.
+- Codeforces samples keep their leading spaces and blank lines. AtCoder problems get the letter shown in their title, a contest import skips a task that fails instead of stopping, and a submission made in a joint round links to the contest it was made in.
+- Up to 200 tests run at once (was 30), with a clear message past that. A compiler that rejects `-std=c++23` falls back to an older standard.
+- Enter in the close-tab dialog saves and closes; on a focused button it presses that button. On Windows and Linux, Ctrl+, opens Settings, Ctrl+B and Ctrl+Shift+B toggle the explorer and the test panel, Ctrl+. stops a run, Ctrl+Alt+1/2 pick the test or interactive panel and Ctrl+Alt+R reveals the file.
+- A chosen code font is no longer reset before the system's font list has loaded.
+
 ## 1.21.1
 
 - **Each file shows once in the explorer.** On Windows and macOS a problem imported into a judge's folder spelled in another case than the one on disk (`Codeforces/` and `codeforces/`) was listed twice. A save now finds it either way, and the next rescan folds a doubled entry into one, keeping its tests and verdicts.

@@ -346,7 +346,10 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                         status = submission.get("result").and_then(|value| value.as_str()).map(str::to_string);
                         submitted_at = submission.get("epoch_second").and_then(|value| value.as_u64()).unwrap_or_default();
                         if let Some(id) = submission.get("id").and_then(|value| value.as_i64()) {
-                            submission_url = Some(format!("https://atcoder.jp/contests/{contest}/submissions/{id}"));
+                            // The contest the submission was made in: in a joint round the
+                            // file's (abc042) may not be the one it went to (arc058).
+                            let submitted_in = submission.get("contest_id").and_then(|value| value.as_str()).filter(|value| !value.is_empty()).unwrap_or(contest.as_str());
+                            submission_url = Some(format!("https://atcoder.jp/contests/{submitted_in}/submissions/{id}"));
                         }
                     }
                 }

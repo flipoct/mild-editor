@@ -5,7 +5,18 @@ export const normalizedExplorerPath = (path: string) => path.replace(/\\/g, "/")
 export const explorerBasename = (path: string) => normalizedExplorerPath(path).split("/").at(-1) || path;
 export const explorerParent = (path: string) => normalizedExplorerPath(path).split("/").slice(0, -1).join("/");
 
-export const fileKey = (filename: string) => filename.trim().normalize("NFC").toLocaleLowerCase();
+/**
+ * Linux tells `A.cpp` from `a.cpp`, so there two names are two files; Windows and macOS do
+ * not. Matches `filename_key` in src-tauri/src/workspace.rs. Outside a window (the checks run
+ * under Node) names fold, as on the other two.
+ */
+const caseSensitivePaths = typeof window !== "undefined" && typeof navigator !== "undefined"
+  && /linux/i.test(navigator.platform || navigator.userAgent) && !/android/i.test(navigator.userAgent);
+
+export const fileKey = (filename: string) => {
+  const key = filename.trim().normalize("NFC");
+  return caseSensitivePaths ? key : key.toLocaleLowerCase();
+};
 
 const splitFilename = (filename: string) => {
   const dot = filename.lastIndexOf(".");

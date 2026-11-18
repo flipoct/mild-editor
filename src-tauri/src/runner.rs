@@ -224,6 +224,20 @@ pub(crate) fn execute_with_cancel(
     cancelled: Option<&AtomicBool>,
     memory_limit_kb: Option<u64>,
 ) -> RunResult {
+    execute_with_env(command, args, cwd, input, timeout, cancelled, memory_limit_kb, &[])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_with_env(
+    command: &Path,
+    args: &[String],
+    cwd: &Path,
+    input: &str,
+    timeout: Duration,
+    cancelled: Option<&AtomicBool>,
+    memory_limit_kb: Option<u64>,
+    env: &[(&str, &str)],
+) -> RunResult {
     let started = Instant::now();
     let jail = sandbox::Sandbox::new(memory_limit_kb);
     let mut process = Command::new(command);
@@ -231,6 +245,7 @@ pub(crate) fn execute_with_cancel(
         .args(args)
         .current_dir(cwd)
         .env("PATH", tool_search_path())
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -422,10 +437,18 @@ pub(crate) fn prepare_program(
         fs::write(&source, code).map_err(|error| error.to_string())?;
 
         let flags = build.flags();
+        // MinGW GCC older than 13 has no UTF-8 manifest and turns its arguments and the temporary
+        // folder into the system code page, so under a user name like `김` every absolute path
+        // (the source, the output, %TEMP%) arrived as `C:\Users\?\…` and nothing compiled.
+        // The files are passed relative to the folder the compiler runs in, and when that folder
+        // is not plain ASCII its temporary files go there too.
+        let ansi_only = cfg!(windows) && !cwd.to_string_lossy().is_ascii();
         let wants_pch = build.precompile_headers && code.contains("bits/stdc++.h");
         let mut compile = None;
         for &standard in standards(build.cpp_standard.as_deref()) {
-            let pch_include = wants_pch.then(|| pch::ensure(&compiler, standard, &flags)).flatten();
+            let pch_include = wants_pch.then(|| pch::ensure(&compiler, standard, &flags)).flatten()
+                // See `ansi_only` below: a header under a non-ASCII path is not one it can open.
+                .filter(|directory| !ansi_only || directory.to_string_lossy().is_ascii());
             let compile_with = |pch_include: Option<&std::path::PathBuf>| {
                 let mut compile_args = vec![format!("-std={standard}")];
                 compile_args.extend(flags.iter().cloned());
@@ -442,11 +465,14 @@ pub(crate) fn prepare_program(
                 if let Some(path) = atcoder_library_path.filter(|path| !path.trim().is_empty()) {
                     compile_args.push(format!("-I{path}"));
                 }
-                compile_args.push(source.to_string_lossy().into_owned());
+                // Relative to `cwd`, where the compiler runs: see `ansi_only`.
+                compile_args.push("main.cpp".into());
                 compile_args.push("-o".into());
-                compile_args.push(binary.to_string_lossy().into_owned());
+                compile_args.push(binary.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "main".into()));
+                // Its temporary files beside the source, in the same case.
+                let env: &[(&str, &str)] = if ansi_only { &[("TMPDIR", "."), ("TMP", "."), ("TEMP", ".")] } else { &[] };
                 // Sanitizers and debug containers are slow to build.
-                execute(&compiler, &compile_args, cwd, "", Duration::from_secs(30))
+                execute_with_env(&compiler, &compile_args, cwd, "", Duration::from_secs(30), None, None, env)
             };
             let mut result = compile_with(pch_include.as_ref());
             // A header GCC cannot load back is its own failure, not the program's. One built
@@ -460,7 +486,11 @@ pub(crate) fn prepare_program(
                     result = compile_with(None);
                 }
             }
-            let unsupported = result.stderr.contains("unrecognized command line option");
+            // GCC 10 and later spell it "command-line", older ones "command line"; clang says
+            // "invalid value 'c++23' in '-std=c++23'". Any of them means: try the older name.
+            let unsupported = ["unrecognized command line option", "unrecognized command-line option", "invalid value 'c++"]
+                .iter()
+                .any(|message| result.stderr.contains(message));
             compile = Some(result);
             if compile.as_ref().is_some_and(|value| value.ok) || !unsupported {
                 break;
@@ -480,7 +510,11 @@ pub(crate) fn prepare_program(
         let python = crate::toolchains::python_for(build.python.as_deref())?;
         let source = cwd.join("main.py");
         fs::write(&source, code).map_err(|error| error.to_string())?;
-        let mut args = vec!["-I".to_string()];
+        // UTF-8 mode: on Windows a piped stdin and stdout otherwise use the system code page
+        // (cp949 on Korean Windows), so `print("안녕")` arrived garbled and was judged WA.
+        // -E rather than -I: -I also drops the user site-packages, where `pip install
+        // --user` puts sortedcontainers or numpy.
+        let mut args = vec!["-E".to_string(), "-X".to_string(), "utf8".to_string()];
         if unbuffered {
             args.push("-u".into());
         }
@@ -488,6 +522,9 @@ pub(crate) fn prepare_program(
         Ok(PreparedProgram::Ready { command: python, args, warnings: String::new() })
     }
 }
+
+/// How many tests one run takes.
+const MAX_TESTS: usize = 200;
 
 fn run_sync(request: RunRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBool>) -> Result<RunResponse, String> {
     run_tests(&request, &cancelled, &|event| { let _ = app.emit("test-result", event); })
@@ -499,13 +536,12 @@ fn run_tests(request: &RunRequest, cancelled: &AtomicBool, report: &dyn Fn(TestR
     if !matches!(request.language.as_str(), "cpp" | "python") {
         return Err("Unsupported language.".into());
     }
-    if request.code.len() > MAX_CODE
-        || request.tests.len() > 30
-        || request
-            .tests
-            .iter()
-            .any(|test| test.input.len() > MAX_INPUT)
-    {
+    // Counterexamples kept from the stress search add tests one at a time, and the panel sets
+    // no limit of its own, so the 31st used to fail every test as "too large".
+    if request.tests.len() > MAX_TESTS {
+        return Err(format!("Too many tests: at most {MAX_TESTS} run at once."));
+    }
+    if request.code.len() > MAX_CODE || request.tests.iter().any(|test| test.input.len() > MAX_INPUT) {
         return Err("The source code or test input is too large.".into());
     }
 

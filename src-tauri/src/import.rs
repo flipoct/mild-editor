@@ -195,7 +195,14 @@ fn fetch_atcoder_problem(
         .path_segments()
         .and_then(|mut segments| segments.next_back())
         .unwrap_or("problem");
-    let letter = task_id.rsplit('_').next().unwrap_or(task_id).to_uppercase();
+    // The heading starts with the letter the contest gives the task ("C - Iroha's Obsession").
+    // The task id's suffix is wrong in the ABC/ARC joint rounds, where ABC042 C is arc058_a.
+    let letter = title
+        .split_once(" - ")
+        .map(|(prefix, _)| prefix.trim())
+        .filter(|prefix| !prefix.is_empty() && prefix.len() <= 3 && prefix.chars().all(|character| character.is_ascii_alphanumeric()))
+        .map(str::to_uppercase)
+        .unwrap_or_else(|| task_id.rsplit('_').next().unwrap_or(task_id).to_uppercase());
     Ok(ImportedAtCoderProblem {
         title,
         suggested_filename: format!("{letter}.cpp"),
@@ -206,14 +213,18 @@ fn fetch_atcoder_problem(
     })
 }
 
+/// A sample as the judge reads it. Leading spaces and blank lines inside are part of the
+/// answer (a rhombus of digits, an empty list): trimming them made a correct solution WA.
+/// Only whitespace at the end of a line and blank lines around the whole sample go.
 fn codeforces_pre_text(pre: scraper::ElementRef<'_>) -> String {
     let line_selector = scraper::Selector::parse(".test-example-line").unwrap();
-    let lines = pre.select(&line_selector).map(|line| line.text().collect::<String>().trim().to_string()).filter(|line| !line.is_empty()).collect::<Vec<_>>();
-    if !lines.is_empty() {
+    let lines = pre.select(&line_selector).map(|line| line.text().collect::<String>().trim_end().to_string()).collect::<Vec<_>>();
+    let text = if !lines.is_empty() {
         lines.join("\n")
     } else {
-        pre.text().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
-    }
+        pre.text().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("\n")
+    };
+    text.trim_end().trim_start_matches(['\n', '\r']).to_string()
 }
 
 fn parse_codeforces_html(html: &str) -> Option<(String, Vec<SavedTestCase>)> {
@@ -715,14 +726,25 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String, stream: O
             return Err("No problems were found in this contest.".into());
         }
         let mut problems = Vec::new();
+        let mut errors = Vec::new();
         let total = task_urls.len().min(30);
         (progress.first_page)(&task_urls[0]);
+        // As for Codeforces: one task that cannot be imported (an interactive one has no
+        // samples) is skipped, instead of ending the import with the rest never fetched.
         for task_url in task_urls.into_iter().take(30) {
-            let problem = fetch_atcoder_problem(&client, &task_url)?;
-            (progress.problem)(problems.len(), total, &problem);
-            problems.push(problem);
+            match fetch_atcoder_problem(&client, &task_url) {
+                Ok(problem) => {
+                    (progress.problem)(problems.len(), total, &problem);
+                    problems.push(problem);
+                }
+                Err(error) => errors.push(error),
+            }
         }
-        Ok(problems)
+        if problems.is_empty() {
+            Err(errors.into_iter().next().unwrap_or_else(|| "No AtCoder samples could be imported.".into()))
+        } else {
+            Ok(problems)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1034,6 +1056,17 @@ mod tests {
         let html = "<div class=\"problem-statement\"><div class=\"header\"><div class=\"title\">B. Emotes</div></div><div class=\"sample-tests\"><div class=\"sample-test\"><div class=\"input\"><div class=\"title\">Input</div><pre>\n6 9 2\n1 3 3 7 4 2\n</pre></div><div class=\"output\"><div class=\"title\">Output</div><pre>\n54\n</pre></div><div class=\"input\"><div class=\"title\">Input</div><pre>\n3 1000000000 1\n1000000000 987654321 1000000000\n</pre></div><div class=\"output\"><div class=\"title\">Output</div><pre>\n1000000000000000000\n</pre></div></div></div></div>";
         let (_, tests) = parse_codeforces_html(html).expect("parse both examples");
         assert_eq!(tests.iter().map(|test| (test.name.as_str(), test.input.as_str(), test.expected.as_str())).collect::<Vec<_>>(), vec![("test 1", "6 9 2\n1 3 3 7 4 2", "54"), ("test 2", "3 1000000000 1\n1000000000 987654321 1000000000", "1000000000000000000")]);
+    }
+
+    #[test]
+    fn codeforces_samples_keep_leading_spaces_and_inner_blank_lines() {
+        // codeforces.com/problemset/problem/118/B: the answer is a rhombus of digits.
+        let line = |text: &str| format!("<div class=\"test-example-line\">{text}</div>");
+        let output = ["    0", "  0 1 0", "0 1 2 1 0", "", "  0 1 0 ", "    0"].map(line).concat();
+        let html = format!("<div class=\"problem-statement\"><div class=\"header\"><div class=\"title\">B. Present from Lena</div></div><div class=\"sample-test\"><div class=\"input\"><pre>{}</pre></div><div class=\"output\"><pre>{output}{}</pre></div></div></div>", line("2"), line(""));
+        let (_, tests) = parse_codeforces_html(&html).expect("parse the rhombus");
+        assert_eq!(tests[0].input, "2");
+        assert_eq!(tests[0].expected, "    0\n  0 1 0\n0 1 2 1 0\n\n  0 1 0\n    0");
     }
 
     #[test]

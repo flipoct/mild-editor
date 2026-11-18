@@ -44,7 +44,9 @@ const PROBE: &str = "import platform, sys\nprint(platform.python_version())\npri
 /// The version and real executable of the Python at `path`, or None for anything that is
 /// not one that runs.
 fn probe_python(path: &Path) -> Option<(String, PathBuf)> {
-    let result = execute(path, &["-I".into(), "-c".into(), PROBE.into()], &std::env::temp_dir(), "", Duration::from_secs(10));
+    // UTF-8 mode, so a path under a non-ASCII user name (C:\Users\김철수) is printed whole
+    // rather than through the console code page and lost.
+    let result = execute(path, &["-I".into(), "-X".into(), "utf8".into(), "-c".into(), PROBE.into()], &std::env::temp_dir(), "", Duration::from_secs(10));
     if !result.ok { return None; }
     let mut lines = result.stdout.lines();
     let version = lines.next()?.trim().to_string();

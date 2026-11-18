@@ -232,6 +232,8 @@ input[type="checkbox"], input[type="range"], progress { accent-color: var(--acce
 .tab-edit input { min-width: 0; width: 100%; height: 22px; padding: 0 5px; border-radius: var(--r-s); font-size: var(--fs-s); }
 .tab-rename-trigger { min-width: 0; flex: 1; height: 100%; display: flex; align-items: center; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font-size: var(--fs-s); cursor: text; }
 .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The tab of a file deleted or renamed outside the editor (App.tsx goneTabIds). */
+.tab-gone { flex: 0 0 auto; color: var(--danger); font-size: var(--fs-xs); }
 /* The name and its verdict sit on one baseline, whatever faces the two are set in. */
 .tab-label { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 6px; }
 .tab-label .tab-rename-trigger { height: auto; flex: 0 1 auto; }

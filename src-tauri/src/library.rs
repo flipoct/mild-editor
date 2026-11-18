@@ -136,6 +136,14 @@ pub(crate) fn write_template(folder: &Path, name: &str, text: Option<&str>) -> R
     }
 }
 
+/// The name a file of `directory` has when it is `file` spelled in another case, if one is.
+fn same_file_other_case(directory: &Path, file: &str) -> Option<String> {
+    let wanted = file.to_lowercase();
+    fs::read_dir(directory).ok()?.flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name != file && name.to_lowercase() == wanted)
+}
+
 /// Makes the snippets folder hold exactly `snippets`, in that order. Files of a name it does
 /// not use are removed, and only those: anything else in the folder is left alone.
 pub(crate) fn write_snippets(folder: &Path, snippets: &[LibrarySnippet]) -> Result<(), String> {
@@ -148,13 +156,20 @@ pub(crate) fn write_snippets(folder: &Path, snippets: &[LibrarySnippet]) -> Resu
         let file = format!("{}.{ext}", snippet.name);
         if files.iter().any(|known: &String| known.eq_ignore_ascii_case(&file)) { return Err(format!("Two snippets are called \"{}\".", snippet.name)); }
         let path = directory.join(&file);
+        // Windows and macOS keep a file's old spelling when it is written under another case,
+        // so a snippet renamed from `Segtree` to `segtree` is renamed on disk first; otherwise
+        // the clean-up below took `Segtree.cpp` for a leftover and deleted the snippet.
+        if let Some(existing) = same_file_other_case(&directory, &file) {
+            fs::rename(directory.join(&existing), &path).map_err(|error| error.to_string())?;
+        }
         if read_small(&path).as_deref() != Some(snippet.code.as_str()) { write_whole(&path, &snippet.code)?; }
         files.push(file);
     }
     for entry in fs::read_dir(&directory).map_err(|error| error.to_string())?.flatten() {
         let file = entry.file_name().to_string_lossy().into_owned();
         let is_snippet = file.rsplit_once('.').is_some_and(|(name, ext)| language_of(ext).is_some() && snippet_name_ok(name));
-        if is_snippet && !files.contains(&file) { let _ = fs::remove_file(entry.path()); }
+        let kept = files.iter().any(|known| known.to_lowercase() == file.to_lowercase());
+        if is_snippet && !kept { let _ = fs::remove_file(entry.path()); }
     }
     let order = serde_json::to_string_pretty(&files).map_err(|error| error.to_string())?;
     write_whole(&directory.join(ORDER), &format!("{order}\n"))
@@ -255,6 +270,19 @@ mod tests {
         let before = stamp(&folder);
         fs::write(folder.join(TEMPLATES).join("default.py"), "x").unwrap();
         assert_ne!(stamp(&folder), before);
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn renaming_a_snippet_to_another_case_keeps_it() {
+        let folder = scratch("case");
+        write_snippets(&folder, &[snippet("Segtree", "cpp", "// seg")]).unwrap();
+        // Same code, new case: nothing to write, and the old spelling must not be cleaned up.
+        write_snippets(&folder, &[snippet("segtree", "cpp", "// seg")]).unwrap();
+        assert_eq!(read(&folder).unwrap().snippets, vec![snippet("segtree", "cpp", "// seg")]);
+        // New code under a new case too.
+        write_snippets(&folder, &[snippet("SegTree", "cpp", "// seg v2")]).unwrap();
+        assert_eq!(read(&folder).unwrap().snippets, vec![snippet("SegTree", "cpp", "// seg v2")]);
         let _ = fs::remove_dir_all(&folder);
     }
 

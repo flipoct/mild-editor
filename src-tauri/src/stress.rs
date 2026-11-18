@@ -65,32 +65,76 @@ pub(crate) enum StressOutcome {
     Stopped { rounds: u32 },
 }
 
-/// Mirrors `outputsMatch` in src/judge.ts: lines are compared exactly, and with a tolerance
-/// a differing line gets a second chance token by token, where two decimals pass if they
-/// are within the tolerance absolutely or relatively. Integers never take that path.
+/// Mirrors `outputsMatch` in src/judge.ts, so the search calls a case different exactly when
+/// the test panel would: line endings of any platform, no whitespace at the end of a line or
+/// blank lines at the end, spacing inside a line compared exactly, and with a tolerance a
+/// differing line gets a second chance token by token, where two decimals pass if they are
+/// within it absolutely or relatively. Integers never take that path.
 fn outputs_match(expected: &str, actual: &str, tolerance: f64) -> bool {
-    let normalise = |value: &str| value.replace("\r\n", "\n").trim_end().to_string();
-    let (expected, actual) = (normalise(expected), normalise(actual));
+    let (expected, actual) = (normalize(expected), normalize(actual));
     if expected == actual { return true; }
     if !(tolerance > 0.0) { return false; }
     let left: Vec<&str> = expected.split('\n').collect();
     let right: Vec<&str> = actual.split('\n').collect();
-    if left.len() != right.len() { return false; }
-    left.iter().zip(right.iter()).all(|(want, got)| {
-        if want == got { return true; }
-        let want_tokens: Vec<&str> = want.split_whitespace().collect();
-        let got_tokens: Vec<&str> = got.split_whitespace().collect();
-        if want_tokens.len() != got_tokens.len() { return false; }
-        want_tokens.iter().zip(got_tokens.iter()).all(|(want, got)| {
-            if want == got { return true; }
-            // The expected output decides whether the answer is a real number at all.
-            if !want.contains(['.', 'e', 'E']) { return false; }
-            let (Ok(want), Ok(got)) = (want.parse::<f64>(), got.parse::<f64>()) else { return false };
-            if !want.is_finite() || !got.is_finite() { return false; }
-            let error = (want - got).abs();
-            error <= tolerance || error <= tolerance * want.abs()
-        })
-    })
+    left.len() == right.len() && left.iter().zip(right.iter()).all(|(want, got)| lines_match(want, got, tolerance))
+}
+
+/// `normalize` in src/judge.ts.
+fn normalize(value: &str) -> String {
+    let unified = value.replace("\r\n", "\n").replace('\r', "\n");
+    unified.split('\n').map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string()
+}
+
+/// The line with every run of non-space characters replaced by `x`: two lines with the same
+/// shape differ only in their tokens, which is the only leeway a tolerance gives.
+fn spacing(line: &str) -> String {
+    let mut shape = String::with_capacity(line.len());
+    let mut in_token = false;
+    for character in line.chars() {
+        if character.is_whitespace() {
+            shape.push(character);
+            in_token = false;
+        } else if !in_token {
+            shape.push('x');
+            in_token = true;
+        }
+    }
+    shape
+}
+
+fn lines_match(want: &str, got: &str, tolerance: f64) -> bool {
+    if want == got { return true; }
+    if spacing(want) != spacing(got) { return false; }
+    let want_tokens: Vec<&str> = want.split_whitespace().collect();
+    let got_tokens: Vec<&str> = got.split_whitespace().collect();
+    want_tokens.len() == got_tokens.len() && want_tokens.iter().zip(got_tokens.iter()).all(|(want, got)| tokens_match(want, got, tolerance))
+}
+
+/// `NUMBER` in src/judge.ts: a sign, digits with at most one point, an optional exponent.
+fn is_number(token: &str) -> bool {
+    let body = token.strip_prefix(['+', '-']).unwrap_or(token);
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(index) => (&body[..index], Some(&body[index + 1..])),
+        None => (body, None),
+    };
+    let digits_ok = |text: &str| !text.is_empty() && text.chars().all(|character| character.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((whole, fraction)) => (whole.is_empty() || digits_ok(whole)) && (fraction.is_empty() || digits_ok(fraction)) && !(whole.is_empty() && fraction.is_empty()),
+        None => digits_ok(mantissa),
+    };
+    let exponent_ok = exponent.map_or(true, |exponent| digits_ok(exponent.strip_prefix(['+', '-']).unwrap_or(exponent)));
+    mantissa_ok && exponent_ok
+}
+
+fn tokens_match(want: &str, got: &str, tolerance: f64) -> bool {
+    if want == got { return true; }
+    if !is_number(want) || !is_number(got) { return false; }
+    // The expected output decides whether the answer is a real number at all.
+    if !want.contains(['.', 'e', 'E']) { return false; }
+    let (Ok(want), Ok(got)) = (want.parse::<f64>(), got.parse::<f64>()) else { return false };
+    if !want.is_finite() || !got.is_finite() { return false; }
+    let error = (want - got).abs();
+    error <= tolerance || error <= tolerance * want.abs()
 }
 
 fn stress_sync(request: StressRequest, app: tauri::AppHandle, cancelled: Arc<AtomicBool>) -> Result<StressOutcome, String> {
@@ -326,5 +370,24 @@ mod tests {
         // Tolerance never rescues a different shape.
         assert!(!outputs_match("1.0\n2.0", "1.0", 1e-6));
         assert!(!outputs_match("abc", "abd", 1e-6));
+    }
+}
+
+#[cfg(test)]
+mod comparison_tests {
+    use super::outputs_match;
+
+    #[test]
+    fn outputs_are_compared_as_the_test_panel_compares_them() {
+        // Trailing spaces on a line and a lone \r are not differences.
+        assert!(outputs_match("1 \n2 \n", "1\n2\n", 0.0));
+        assert!(outputs_match("1\r2", "1\n2", 0.0));
+        // Spacing inside a line still is, with a tolerance too.
+        assert!(!outputs_match("1.0 2.0", "1.0  2.0", 1e-6));
+        assert!(outputs_match("0.5 2.0", "0.5000001 2.0", 1e-6));
+        // Integers never get the tolerance; words are compared exactly.
+        assert!(!outputs_match("7", "7.0000001", 1e-6));
+        assert!(!outputs_match("inf", "inf2", 1e-6));
+        assert!(!outputs_match("1.0", "nan", 1e-6));
     }
 }

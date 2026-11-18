@@ -101,7 +101,13 @@ fn text_hash(text: &str) -> u64 {
 }
 
 fn known_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/").to_lowercase()
+    fold_case(path.to_string_lossy().replace('\\', "/"))
+}
+
+/// Windows and macOS do not tell `A.cpp` from `a.cpp`; Linux does, and there they are two
+/// files, so the names are compared as they are.
+fn fold_case(name: String) -> String {
+    if cfg!(target_os = "linux") { name } else { name.to_lowercase() }
 }
 
 fn remember_text(path: &Path, text: &str) {
@@ -250,7 +256,12 @@ pub(crate) fn list_workspace_directories(request: WorkspaceRequest) -> Result<Ve
 }
 
 fn valid_folder_name(name: &str) -> bool {
-    !name.is_empty() && Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name) && !matches!(name, "." | "..")
+    !name.is_empty()
+        && Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name)
+        && !matches!(name, "." | "..")
+        // Windows drops a trailing dot or space, so the folder on disk would not be the one
+        // the metadata names, and the next rescan lost its files' tests.
+        && !name.ends_with(['.', ' '])
 }
 
 #[tauri::command(async)]
@@ -563,7 +574,7 @@ pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result
     let metadata_path = workspace_metadata_path(&folder);
     let json = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}"))?;
     let mut metadata: WorkspaceMetadata = serde_json::from_str(&json).map_err(|error| format!("Invalid workspace metadata: {error}"))?;
-    let problem = metadata.problems.iter_mut().find(|problem| problem.filename.eq_ignore_ascii_case(&request.filename)).ok_or("Workspace file metadata was not found.")?;
+    let problem = metadata.problems.iter_mut().find(|problem| filename_key(&problem.filename) == filename_key(&request.filename)).ok_or("Workspace file metadata was not found.")?;
     problem.tests = request.tests;
     if request.source.is_some() {
         problem.source = request.source;
@@ -587,7 +598,7 @@ pub(crate) fn update_workspace_source(request: UpdateWorkspaceSourceRequest) -> 
     let metadata_path = workspace_metadata_path(&folder);
     let json = fs::read_to_string(&metadata_path).map_err(|error| format!("Could not read workspace metadata: {error}"))?;
     let mut metadata: WorkspaceMetadata = serde_json::from_str(&json).map_err(|error| format!("Invalid workspace metadata: {error}"))?;
-    let problem = metadata.problems.iter_mut().find(|problem| problem.filename.eq_ignore_ascii_case(&request.filename)).ok_or("Workspace file metadata was not found.")?;
+    let problem = metadata.problems.iter_mut().find(|problem| filename_key(&problem.filename) == filename_key(&request.filename)).ok_or("Workspace file metadata was not found.")?;
     problem.source = Some(request.source.clone());
     problem.source_url = if request.source == "other" { None } else { request.source_url.map(|url| url.trim().to_string()).filter(|url| !url.is_empty()) };
     problem.judge_status = None;
@@ -751,7 +762,7 @@ fn merge_same_files(problems: Vec<WorkspaceProblemMetadata>) -> Vec<WorkspacePro
 }
 
 pub(crate) fn filename_key(filename: &str) -> String {
-    filename.trim().replace('\\', "/").to_lowercase()
+    fold_case(filename.trim().replace('\\', "/"))
 }
 
 fn strip_copy_suffix(stem: &str) -> &str {
@@ -810,7 +821,7 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
     }
     let previous_metadata = metadata_to_update(&workspace_metadata_path(&folder))?;
     let panel_mode = previous_metadata.panel_mode;
-    let detached = previous_metadata.detached;
+    let mut detached = previous_metadata.detached;
     let mut metadata_problems = previous_metadata.problems;
     let mut outputs = Vec::new();
     for (problem, filename) in supported_problems {
@@ -831,7 +842,15 @@ pub(crate) fn save_workspace(request: SaveWorkspaceRequest) -> Result<LoadedWork
         // send, so a problem saved again keeps the ones it had.
         // Windows and macOS do not tell `Codeforces/A.cpp` from `codeforces/A.cpp`, so neither
         // does the metadata: the import's folder name and the one on disk may differ in case.
-        let existing = metadata_problems.iter().position(|item| filename_key(&item.filename) == filename_key(&filename));
+        let mut existing = metadata_problems.iter().position(|item| filename_key(&item.filename) == filename_key(&filename));
+        // A file that went missing and is written again (the user chose to keep the tab of
+        // a file deleted behind the editor) gets back the tests, verdicts and place it had.
+        if existing.is_none() {
+            if let Some(index) = detached.iter().position(|item| filename_key(&item.filename) == filename_key(&filename)) {
+                metadata_problems.push(detached.remove(index));
+                existing = Some(metadata_problems.len() - 1);
+            }
+        }
         let tests = match problem.tests {
             Some(tests) => tests,
             None => existing.map(|index| std::mem::take(&mut metadata_problems[index].tests)).unwrap_or_default(),
@@ -918,7 +937,7 @@ pub(crate) fn delete_workspace_file(request: WorkspaceFileRequest) -> Result<(),
     let (filename, _) = workspace_source_filename(&request.filename)?;
     let metadata_path = workspace_metadata_path(&folder);
     let mut metadata = read_workspace_metadata(&metadata_path)?;
-    metadata.problems.retain(|problem| problem.filename != filename);
+    metadata.problems.retain(|problem| filename_key(&problem.filename) != filename_key(&filename));
     let source = folder.join(&filename);
     if source.exists() { fs::remove_file(&source).map_err(|error| format!("Could not delete source file: {error}"))?; }
     write_workspace_metadata(&metadata_path, &metadata, "update workspace metadata")
@@ -1155,7 +1174,7 @@ pub(crate) fn reorder_workspace_files(request: ReorderWorkspaceFilesRequest) -> 
         .iter().map(|filename| filename_key(filename)).collect();
     for problem in &mut metadata.problems {
         let parent = Path::new(&problem.filename).parent().map(|parent| parent.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-        if !parent.eq_ignore_ascii_case(&directory) { continue; }
+        if filename_key(&parent) != filename_key(&directory) { continue; }
         // A file of this folder that the caller did not list keeps no position, so it
         // falls in with the ones that were never arranged.
         problem.order = wanted.iter().position(|key| *key == filename_key(&problem.filename)).map(|index| index as u32);
