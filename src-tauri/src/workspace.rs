@@ -251,7 +251,7 @@ pub(crate) fn list_workspace_directories(request: WorkspaceRequest) -> Result<Ve
     walk_workspace(&folder, &folder, &mut |relative, is_directory| {
         if is_directory { directories.push(relative); }
     })?;
-    directories.sort_by_key(|name| filename_key(name));
+    directories.sort_by_key(|name| sort_key(name));
     Ok(directories)
 }
 
@@ -678,7 +678,7 @@ fn workspace_source_filenames(folder: &Path) -> Result<Vec<String>, String> {
     walk_workspace(folder, folder, &mut |relative, is_directory| {
         if !is_directory && workspace_source_filename(&relative).is_ok() { filenames.push(relative); }
     })?;
-    filenames.sort_by_key(|filename| filename_key(filename));
+    filenames.sort_by_key(|filename| sort_key(filename));
     Ok(filenames)
 }
 
@@ -722,7 +722,7 @@ fn sync_workspace_source_files(folder: &Path, metadata: &mut WorkspaceMetadata) 
             });
         }
     }
-    metadata.problems.sort_by_key(|problem| filename_key(&problem.filename));
+    metadata.problems.sort_by_key(|problem| sort_key(&problem.filename));
     Ok(())
 }
 
@@ -763,6 +763,12 @@ fn merge_same_files(problems: Vec<WorkspaceProblemMetadata>) -> Vec<WorkspacePro
 
 pub(crate) fn filename_key(filename: &str) -> String {
     fold_case(filename.trim().replace('\\', "/"))
+}
+
+/// The order names are listed in: alphabetical regardless of case on every system, Linux too,
+/// where `filename_key` keeps the case to tell two files apart.
+pub(crate) fn sort_key(filename: &str) -> String {
+    filename.trim().replace('\\', "/").to_lowercase()
 }
 
 fn strip_copy_suffix(stem: &str) -> &str {
@@ -1204,7 +1210,9 @@ mod tests {
         let metadata = WorkspaceMetadata::empty();
 
         assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, None), "A (1).cpp");
-        assert_eq!(unique_workspace_filename(directory.path(), "A (2).cpp", &metadata, None), "A (1).cpp");
+        // `A (2).CPP` is the same file as `A (2).cpp` except on Linux, where the name is free.
+        let taken = if cfg!(target_os = "linux") { "A (2).cpp" } else { "A (1).cpp" };
+        assert_eq!(unique_workspace_filename(directory.path(), "A (2).cpp", &metadata, None), taken);
         assert_eq!(unique_workspace_filename(directory.path(), "A.py", &metadata, None), "A (1).py");
         assert_eq!(unique_workspace_filename(directory.path(), "A.cpp", &metadata, Some("A.cpp")), "A.cpp");
         assert_eq!(safe_filename("346.CPP", "cpp").unwrap(), "346.CPP");

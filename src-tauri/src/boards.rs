@@ -2,7 +2,7 @@
 //! the frontend). A board is a JSON document of strokes; this side only lists, reads, writes
 //! and deletes them, and checks that what it is asked about is a board inside the workspace.
 
-use crate::workspace::{filename_key, metadata_lock, walk_workspace, workspace_relative_filename};
+use crate::workspace::{metadata_lock, walk_workspace, workspace_relative_filename};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ pub(crate) fn list_workspace_boards(request: BoardsRequest) -> Result<Vec<String
             boards.push(relative);
         }
     })?;
-    boards.sort_by_key(|name| filename_key(name));
+    boards.sort_by_key(|name| crate::workspace::sort_key(name));
     Ok(boards)
 }
 
