@@ -998,6 +998,12 @@ function App() {
     });
     setWorkspacePath(saved.folderPath);
     settleSavedTabs(snapshot, nextTabs);
+    // The tabs this save brought (a new file, a copy, an import) are not open yet: they open
+    // here, or the editor was left on a tab id it did not have and showed the first tab.
+    setTabs((items) => {
+      const added = snapshot.filter((tab) => !items.some((live) => live.id === tab.id));
+      return added.length ? [...items, ...added] : items;
+    });
     setSavedFiles(persistedTabs);
     const nextActive = snapshot.find((tab) => tab.id === nextActiveId);
     if (nextActive) activateTab(nextActive);
