@@ -128,10 +128,27 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
 
     if (document.querySelector(".doj-local-ide")) {
       // The IDE at `/problems/<slug>/ide`: a workspace of files, of which the entry file is sent.
-      const mainEditor = () => document.querySelector(".doj-local-ide-code-pane.is-main-group .cm-content");
+      // Two panes carry the main group's class; the one not hidden is the code (the other is the AI chat).
+      const mainEditor = () => document.querySelector(".doj-local-ide-code-pane.is-main-group:not([hidden]) .cm-content") ?? document.querySelector(".doj-local-ide-code-pane.is-main-group .cm-content");
       const ready = () => !document.querySelector(".doj-local-ide-loading") && Boolean(mainEditor());
       await until(ready);
-      const languageList = () => document.querySelector<HTMLSelectElement>('.doj-local-ide select[aria-label="제출 언어"], .doj-local-ide select[aria-label="Submission language"], .doj-local-ide-language select');
+      // The language list is DOJ's own dropdown: a combobox button carrying the list's class, and
+      // beside it, in the same root, the native select it keeps in step and reads from. Older
+      // pages had the native select itself, or one inside an element of that class.
+      const languageList = () => {
+        const marked = document.querySelector(".doj-local-ide .doj-local-ide-language");
+        if (marked instanceof HTMLSelectElement) return marked;
+        return marked?.closest("[data-select-root]")?.querySelector<HTMLSelectElement>("select")
+          ?? document.querySelector<HTMLSelectElement>('.doj-local-ide-language select, .doj-local-ide select[aria-label="제출 언어"], .doj-local-ide select[aria-label="Submission language"]');
+      };
+      // A problem that limits its languages shows a button to list them in the list's place.
+      if (!languageList()) {
+        const reveal = [...document.querySelectorAll<HTMLButtonElement>(".doj-local-ide button.button-ghost")].find((button) => !button.disabled && /언어|language/i.test(button.textContent ?? ""));
+        if (reveal) {
+          reveal.click();
+          await until(() => Boolean(languageList()));
+        }
+      }
       const list = languageList();
       if (list) {
         const value = pick([...list.options].map((option) => ({ value: option.value, text: option.text, selected: option.selected })), payload.language);
