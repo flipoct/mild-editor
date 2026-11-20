@@ -95,7 +95,7 @@ export const filenameForLanguage = (filename: string, language: Language) => fil
 export const inferredSourceUrl = (source: ProblemSource | undefined, filename: string) => {
   const problemId = filename.replace(/\.[^.]+$/, "");
   if (!/^\d+$/.test(problemId)) return undefined;
-  return source === "doj" ? `https://doj.kr/ko/problems/${problemId}` : source === "boj" ? `https://www.acmicpc.net/problem/${problemId}` : undefined;
+  return source === "doj" ? `https://doj.kr/ko/problems/${problemId}` : source === "boj" ? `https://acmicpc.net/problem/${problemId}` : undefined;
 };
 
 export const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj", "boj"];
@@ -165,11 +165,13 @@ export const NEEDS_BROWSER = "needs-browser: ";
  * Pages the bundled Competitive Companion has no parser for although the built-in importer
  * reads them: a DOJ contest, or the category page a virtual contest runs on (the extension's
  * DOJ parser knows a problem page only). Asking the extension there ends in "found no
- * problem" and nothing imported.
+ * problem" and nothing imported. And BOJ altogether: it moved from www.acmicpc.net to
+ * acmicpc.net, and the extension's BOJ parser still matches only the old host.
  */
 export const companionCannotParse = (rawUrl: string) => {
   try {
     const url = new URL(rawUrl);
+    if (url.hostname === "acmicpc.net" || url.hostname.endsWith(".acmicpc.net")) return true;
     return url.hostname.replace(/^www\./, "") === "doj.kr" && (/\/contests\/[^/]+\/?$/.test(url.pathname) || (isDojListing(url) && url.pathname.includes("/categories/")));
   } catch { return false; }
 };

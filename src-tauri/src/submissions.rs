@@ -240,7 +240,7 @@ fn parse_boj_status(html: &str) -> Vec<BojSubmission> {
 }
 
 fn boj_status_page(client: &reqwest::blocking::Client, handle: &str, problem: Option<&str>) -> Option<Vec<BojSubmission>> {
-    let mut url = reqwest::Url::parse("https://www.acmicpc.net/status").unwrap();
+    let mut url = reqwest::Url::parse("https://acmicpc.net/status").unwrap();
     url.query_pairs_mut().append_pair("problem_id", problem.unwrap_or("")).append_pair("user_id", handle).append_pair("language_id", "-1").append_pair("result_id", "-1");
     let response = client.get(url).send().ok()?;
     let status = response.status().as_u16();
@@ -498,7 +498,7 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                     if let Some(found) = poll.submission(&problem_id) {
                         status = Some(found.verdict);
                         submitted_at = found.at;
-                        submission_url = Some(format!("https://www.acmicpc.net/source/{}", found.id));
+                        submission_url = Some(format!("https://acmicpc.net/source/{}", found.id));
                     }
                     settled = !poll.unsettled;
                     answered_by = Some(format!("public:{boj_handle}"));
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn only_archive_problems_are_polled_on_boj() {
-        assert_eq!(boj_problem_id("https://www.acmicpc.net/problem/1000"), Some("1000".into()));
-        assert_eq!(boj_problem_id("https://www.acmicpc.net/contest/problem/1684/1"), None);
+        assert_eq!(boj_problem_id("https://acmicpc.net/problem/1000"), Some("1000".into()));
+        assert_eq!(boj_problem_id("https://acmicpc.net/contest/problem/1684/1"), None);
     }
 }

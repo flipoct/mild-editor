@@ -651,8 +651,8 @@ fn boj_public_page(client: &reqwest::blocking::Client, url: &str) -> Result<Opti
 fn fetch_boj_problem(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<(ImportedAtCoderProblem, bool), String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid BOJ problem URL.".to_string())?;
     let (page_url, number) = match boj_page(&parsed) {
-        BojPage::Problem(id) => (format!("https://www.acmicpc.net/problem/{id}"), Some(id)),
-        BojPage::ContestProblem(contest, index) => (format!("https://www.acmicpc.net/contest/problem/{contest}/{index}"), None),
+        BojPage::Problem(id) => (format!("https://acmicpc.net/problem/{id}"), Some(id)),
+        BojPage::ContestProblem(contest, index) => (format!("https://acmicpc.net/contest/problem/{contest}/{index}"), None),
         BojPage::Listing => return Err("This is not a BOJ problem URL.".into()),
     };
     let mut from_session = false;
@@ -680,7 +680,7 @@ fn boj_listed_problems(html: &str) -> Vec<(Option<String>, String)> {
     let document = scraper::Html::parse_document(html);
     let link_selector = scraper::Selector::parse("a[href]").unwrap();
     let cell_selector = scraper::Selector::parse("td").unwrap();
-    let base = reqwest::Url::parse("https://www.acmicpc.net/").unwrap();
+    let base = reqwest::Url::parse("https://acmicpc.net/").unwrap();
     let mut contest = Vec::new();
     let mut archive = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -692,7 +692,7 @@ fn boj_listed_problems(html: &str) -> Vec<(Option<String>, String)> {
         let row = link.ancestors().filter_map(scraper::ElementRef::wrap).find(|element| element.value().name() == "tr");
         let letter = row.and_then(|row| row.select(&cell_selector).next()).map(|cell| cell.text().collect::<String>().trim().to_string())
             .filter(|text| (1..=3).contains(&text.len()) && text.starts_with(|first: char| first.is_ascii_uppercase()) && text.chars().all(|character| character.is_ascii_alphanumeric()));
-        let address = format!("https://www.acmicpc.net{}", url.path());
+        let address = format!("https://acmicpc.net{}", url.path());
         match kind {
             BojPage::ContestProblem(..) => contest.push((letter, address)),
             _ => archive.push((None, address)),
@@ -1295,8 +1295,8 @@ mod tests {
         assert_eq!(page.archive_id, None);
         // The login page a contest problem shows a visitor is no problem.
         assert!(parse_boj_problem(r#"<form id="login_form"></form>"#).is_none());
-        assert!(boj_wants_login("https://www.acmicpc.net/login?next=%2Fcontest%2Fproblem%2F1%2F1", ""));
-        assert!(!boj_wants_login("https://www.acmicpc.net/problem/1000", BOJ_PROBLEM));
+        assert!(boj_wants_login("https://acmicpc.net/login?next=%2Fcontest%2Fproblem%2F1%2F1", ""));
+        assert!(!boj_wants_login("https://acmicpc.net/problem/1000", BOJ_PROBLEM));
     }
 
     #[test]
@@ -1308,10 +1308,10 @@ mod tests {
     #[test]
     fn boj_addresses_are_told_apart() {
         let page = |url: &str| boj_page(&reqwest::Url::parse(url).unwrap());
-        assert_eq!(page("https://www.acmicpc.net/problem/1000"), BojPage::Problem("1000".into()));
+        assert_eq!(page("https://acmicpc.net/problem/1000"), BojPage::Problem("1000".into()));
         assert_eq!(page("https://acmicpc.net/problem/1000/"), BojPage::Problem("1000".into()));
-        assert_eq!(page("https://www.acmicpc.net/contest/problem/1684/3"), BojPage::ContestProblem("1684".into(), "3".into()));
-        for listing in ["https://www.acmicpc.net/contest/view/1684", "https://www.acmicpc.net/workbook/view/1152", "https://www.acmicpc.net/step/1", "https://www.acmicpc.net/problem/added"] {
+        assert_eq!(page("https://acmicpc.net/contest/problem/1684/3"), BojPage::ContestProblem("1684".into(), "3".into()));
+        for listing in ["https://acmicpc.net/contest/view/1684", "https://acmicpc.net/workbook/view/1152", "https://acmicpc.net/step/1", "https://acmicpc.net/problem/added"] {
             assert_eq!(page(listing), BojPage::Listing, "{listing}");
         }
         assert!(is_boj_host("acmicpc.net") && is_boj_host("www.acmicpc.net") && !is_boj_host("acmicpc.net.example.com"));
@@ -1323,11 +1323,11 @@ mod tests {
             <tr><td> A </td><td><a href = "/contest/problem/1684/1"> !!New Game Start!! </a></td></tr>
             <tr><td> B </td><td><a href = "/contest/problem/1684/2"> 11 싫어 수 </a></td></tr></tbody></table>"#;
         assert_eq!(boj_listed_problems(contest), vec![
-            (Some("A".to_string()), "https://www.acmicpc.net/contest/problem/1684/1".to_string()),
-            (Some("B".to_string()), "https://www.acmicpc.net/contest/problem/1684/2".to_string()),
+            (Some("A".to_string()), "https://acmicpc.net/contest/problem/1684/1".to_string()),
+            (Some("B".to_string()), "https://acmicpc.net/contest/problem/1684/2".to_string()),
         ]);
         let workbook = r#"<a href="/problem/13460">구슬 탈출 2</a><a href="/problem/12100">2048</a><a href="/problem/13460">again</a><a href="/problem/tags">tags</a>"#;
-        assert_eq!(boj_listed_problems(workbook).into_iter().map(|(_, url)| url).collect::<Vec<_>>(), vec!["https://www.acmicpc.net/problem/13460", "https://www.acmicpc.net/problem/12100"]);
+        assert_eq!(boj_listed_problems(workbook).into_iter().map(|(_, url)| url).collect::<Vec<_>>(), vec!["https://acmicpc.net/problem/13460", "https://acmicpc.net/problem/12100"]);
         assert_eq!(boj_listing_name("<title>UCPC 2026 본선</title>").as_deref(), Some("UCPC 2026 본선"));
         assert_eq!(boj_listing_name("<title>Baekjoon Online Judge</title>"), None);
     }

@@ -57,9 +57,9 @@ eq("the contest's own page is no problem", fileForProblemPage(saved, "https://at
 eq("nor its submissions", fileForProblemPage(saved, "https://atcoder.jp/contests/abc300/submissions/me"), undefined);
 eq("a DOJ contest whose number is some problem's", fileForProblemPage([{ filename: "x.py", source: "doj", sourceUrl: "https://doj.kr/ko/problems/77" }], "https://doj.kr/ko/contests/77"), undefined);
 eq("a page elsewhere", fileForProblemPage(saved, "https://example.org/problems/1234"), undefined);
-eq("a BOJ problem, with or without www", [fileForProblemPage([{ filename: "1000_A+B.py", source: "boj", sourceUrl: "https://www.acmicpc.net/problem/1000" }], "https://acmicpc.net/problem/1000")?.filename, sourceOfUrl("https://www.acmicpc.net/problem/1000")], ["1000_A+B.py", "boj"]);
-eq("a BOJ contest problem is its own", fileForProblemPage([{ filename: "A.cpp", source: "boj", sourceUrl: "https://www.acmicpc.net/contest/problem/1684/1" }], "https://www.acmicpc.net/contest/problem/1684/1")?.filename, "A.cpp");
-eq("BOJ's other pages are no problem", [fileForProblemPage([{ filename: "x.py", source: "boj", sourceUrl: "https://www.acmicpc.net/problem/1000" }], "https://www.acmicpc.net/status?problem_id=1000"), fileForProblemPage([{ filename: "x.py", source: "boj", sourceUrl: "https://www.acmicpc.net/problem/1000" }], "https://www.acmicpc.net/workbook/view/1000")], [undefined, undefined]);
+eq("a BOJ problem, with or without www", [fileForProblemPage([{ filename: "1000_A+B.py", source: "boj", sourceUrl: "https://acmicpc.net/problem/1000" }], "https://acmicpc.net/problem/1000")?.filename, sourceOfUrl("https://acmicpc.net/problem/1000")], ["1000_A+B.py", "boj"]);
+eq("a BOJ contest problem is its own", fileForProblemPage([{ filename: "A.cpp", source: "boj", sourceUrl: "https://acmicpc.net/contest/problem/1684/1" }], "https://acmicpc.net/contest/problem/1684/1")?.filename, "A.cpp");
+eq("BOJ's other pages are no problem", [fileForProblemPage([{ filename: "x.py", source: "boj", sourceUrl: "https://acmicpc.net/problem/1000" }], "https://acmicpc.net/status?problem_id=1000"), fileForProblemPage([{ filename: "x.py", source: "boj", sourceUrl: "https://acmicpc.net/problem/1000" }], "https://acmicpc.net/workbook/view/1000")], [undefined, undefined]);
 eq("same problem, other address", sameProblem("codeforces", "https://codeforces.com/problemset/problem/1900/B", "https://codeforces.com/contest/1900/problem/b"), true);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

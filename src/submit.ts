@@ -53,9 +53,9 @@ export const submitTarget = (sourceUrl: string | undefined): SubmitTarget | null
   // BOJ submits from `/submit/<id>`, and a contest's problem from `/contest/submit/<contest>/<number>`.
   if (host === "acmicpc.net") {
     const archive = path.match(/^\/(?:problem|submit)\/(\d+)$/);
-    if (archive) return { judge: "boj", url: `https://www.acmicpc.net/submit/${archive[1]}`, problemSlug: archive[1] };
+    if (archive) return { judge: "boj", url: `https://acmicpc.net/submit/${archive[1]}`, problemSlug: archive[1] };
     const contest = path.match(/^\/contest\/(?:problem|submit)\/(\d+)\/(\d+)$/);
-    if (contest) return { judge: "boj", url: `https://www.acmicpc.net/contest/submit/${contest[1]}/${contest[2]}`, problemSlug: `${contest[1]}/${contest[2]}` };
+    if (contest) return { judge: "boj", url: `https://acmicpc.net/contest/submit/${contest[1]}/${contest[2]}`, problemSlug: `${contest[1]}/${contest[2]}` };
   }
   return null;
 };

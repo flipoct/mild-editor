@@ -12,10 +12,10 @@ const eq = (label: string, got: unknown, want: unknown) => {
 };
 
 // --- DOJ: the problem's IDE page --------------------------------------------------------
-eq("BOJ problem", submitTarget("https://www.acmicpc.net/problem/1000"), { judge: "boj", url: "https://www.acmicpc.net/submit/1000", problemSlug: "1000" });
-eq("BOJ without www, from its submit page", submitTarget("https://acmicpc.net/submit/1000/"), { judge: "boj", url: "https://www.acmicpc.net/submit/1000", problemSlug: "1000" });
-eq("BOJ contest problem", submitTarget("https://www.acmicpc.net/contest/problem/1684/3"), { judge: "boj", url: "https://www.acmicpc.net/contest/submit/1684/3", problemSlug: "1684/3" });
-eq("BOJ pages that are no problem", [submitTarget("https://www.acmicpc.net/status?problem_id=1000"), submitTarget("https://www.acmicpc.net/workbook/view/1")], [null, null]);
+eq("BOJ problem", submitTarget("https://acmicpc.net/problem/1000"), { judge: "boj", url: "https://acmicpc.net/submit/1000", problemSlug: "1000" });
+eq("BOJ without www, from its submit page", submitTarget("https://acmicpc.net/submit/1000/"), { judge: "boj", url: "https://acmicpc.net/submit/1000", problemSlug: "1000" });
+eq("BOJ contest problem", submitTarget("https://acmicpc.net/contest/problem/1684/3"), { judge: "boj", url: "https://acmicpc.net/contest/submit/1684/3", problemSlug: "1684/3" });
+eq("BOJ pages that are no problem", [submitTarget("https://acmicpc.net/status?problem_id=1000"), submitTarget("https://acmicpc.net/workbook/view/1")], [null, null]);
 eq("practice problem", submitTarget("https://doj.kr/ko/problems/1"),
   { judge: "doj", url: "https://doj.kr/ko/problems/1/ide", problemSlug: "1" });
 eq("contest problem keeps its contest", submitTarget("https://doj.kr/ko/problems/421?contest=cmt7b6o9w00063827xfnbigsa"),
