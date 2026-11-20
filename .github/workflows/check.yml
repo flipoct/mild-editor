@@ -46,6 +46,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The embedded Chromium wrapper is built with CMake, which took cl.exe from the newest
+      # MSVC on the runner and link.exe from an older one and failed its compiler check.
+      # vcvars puts one toolset's compiler and linker on PATH, as the release workflow does.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.platform == 'windows-latest'
+
       # Compiling the dependency graph from scratch is almost the whole of this job, and
       # Windows builds the embedded Chromium wrapper as well.
       - uses: Swatinem/rust-cache@v2
