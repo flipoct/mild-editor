@@ -244,7 +244,7 @@ export const safePath = (path: unknown, file: boolean): string | null => {
 export const safeFolderName = (name: unknown) =>
   (typeof name === "string" ? name : "").replace(/[<>:"|?*\\/\u0000-\u001f]/g, "").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 60) || "shared";
 
-const SOURCES = ["atcoder", "codeforces", "doj", "other"] as const;
+const SOURCES = ["atcoder", "codeforces", "doj", "boj", "other"] as const;
 const record = (json: unknown): Record<string, unknown> => {
   try { const parsed: unknown = JSON.parse(typeof json === "string" ? json : ""); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; }
 };

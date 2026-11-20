@@ -19,7 +19,7 @@ const TEMPLATES: &str = "templates";
 const SNIPPETS: &str = "snippets";
 const ORDER: &str = "order.json";
 /// The template names: one for files of no judge, one per judge.
-const TEMPLATE_STEMS: [&str; 4] = ["default", "atcoder", "codeforces", "doj"];
+const TEMPLATE_STEMS: [&str; 5] = ["default", "atcoder", "codeforces", "doj", "boj"];
 /// A file larger than this is not a template or a snippet.
 const MOST_BYTES: u64 = 1024 * 1024;
 

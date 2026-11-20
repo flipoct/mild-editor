@@ -28,6 +28,13 @@ runs:
       with:
         targets: ${{ startsWith(inputs.platform, 'macos') && inputs.target || '' }}
 
+    # The cached build of the Chromium wrapper keeps the MSVC paths CMake found, which a new
+    # runner image moves; rust-cache keys on CMAKE_* variables, so each image gets its own.
+    - name: Key the Rust cache on the runner image
+      if: inputs.platform == 'windows-latest'
+      shell: bash
+      run: echo "CMAKE_RUNNER_IMAGE=${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
     # A cache is only reachable from the branch that saved it or from main. A release runs
     # on a tag, so its own saves are never found again; the warm-cache workflow saves from
     # main after every merge and the release restores that. Keyed by target rather than by

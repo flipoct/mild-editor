@@ -1932,7 +1932,7 @@ pub fn browser_import_page(window: Window, state: tauri::State<'_, BrowserState>
 
 /// Judges whose submit form the editor may fill in. The script comes from the editor's own
 /// frontend, and it still only ever runs on one of these hosts.
-const SUBMIT_HOSTS: [&str; 3] = ["atcoder.jp", "codeforces.com", "doj.kr"];
+const SUBMIT_HOSTS: [&str; 4] = ["atcoder.jp", "codeforces.com", "doj.kr", "acmicpc.net"];
 
 fn is_submit_host(url: &str) -> bool {
     let host = url.split("://").nth(1).and_then(|rest| rest.split(['/', '?', '#']).next()).unwrap_or("");
@@ -1988,7 +1988,7 @@ fn session_fetch_target(url: &str) -> Result<reqwest::Url, String> {
     let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "Not a valid URL.".to_string())?;
     let on_judge = parsed.host_str().is_some_and(|host| SUBMIT_HOSTS.iter().any(|site| host == *site || host.ends_with(&format!(".{site}"))));
     if parsed.scheme() != "https" || !on_judge || !parsed.username().is_empty() || parsed.password().is_some() || parsed.port().is_some() {
-        return Err("Only https pages of AtCoder, Codeforces and DOJ can be read through the problem browser.".into());
+        return Err("Only https pages of AtCoder, Codeforces, DOJ and BOJ can be read through the problem browser.".into());
     }
     Ok(parsed)
 }

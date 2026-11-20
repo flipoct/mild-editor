@@ -46,6 +46,21 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The embedded Chromium wrapper is built with CMake, which took cl.exe from the newest
+      # MSVC on the runner and link.exe from an older one and failed its compiler check.
+      # vcvars puts one toolset's compiler and linker on PATH, as the release workflow does.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.platform == 'windows-latest'
+
+      # The cached build of the Chromium wrapper keeps the MSVC paths CMake found (in its
+      # CMakeCache.txt), and a new runner image moves them: the linker of the old toolset
+      # met objects of the new one. rust-cache keys on CMAKE_* variables, so the image's
+      # version in one gives each image its own cache.
+      - name: Key the Rust cache on the runner image
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: echo "CMAKE_RUNNER_IMAGE=${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       # Compiling the dependency graph from scratch is almost the whole of this job, and
       # Windows builds the embedded Chromium wrapper as well.
       - uses: Swatinem/rust-cache@v2

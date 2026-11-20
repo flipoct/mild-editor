@@ -94,10 +94,11 @@ export const filenameForLanguage = (filename: string, language: Language) => fil
 
 export const inferredSourceUrl = (source: ProblemSource | undefined, filename: string) => {
   const problemId = filename.replace(/\.[^.]+$/, "");
-  return source === "doj" && /^\d+$/.test(problemId) ? `https://doj.kr/ko/problems/${problemId}` : undefined;
+  if (!/^\d+$/.test(problemId)) return undefined;
+  return source === "doj" ? `https://doj.kr/ko/problems/${problemId}` : source === "boj" ? `https://acmicpc.net/problem/${problemId}` : undefined;
 };
 
-export const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj"];
+export const templateSources: ProblemSource[] = ["other", "atcoder", "codeforces", "doj", "boj"];
 
 export const templateStorageKey = (source: ProblemSource, language: Language) => `mild-template-${source}-${language}`;
 
@@ -147,6 +148,8 @@ export const isContestImportUrl = (rawUrl: string) => {
     if (url.hostname.endsWith("atcoder.jp")) return url.pathname.includes("/contests/") && !url.pathname.includes("/tasks/");
     // A DOJ contest problem is `/problems/<id>?contest=<key>`: the contest is in the query, not the path.
     if (url.hostname.endsWith("doj.kr")) return isDojListing(url);
+    // BOJ: anything but a problem is a list of them — a contest, a workbook, a step.
+    if (url.hostname === "acmicpc.net" || url.hostname.endsWith(".acmicpc.net")) return !/^\/(problem\/\d+|contest\/problem\/\d+\/\d+)\/?$/.test(url.pathname);
     return url.hostname.endsWith("codeforces.com") && url.pathname.includes("/contest/") && !url.pathname.includes("/problem/");
   } catch { return false; }
 };
@@ -162,11 +165,13 @@ export const NEEDS_BROWSER = "needs-browser: ";
  * Pages the bundled Competitive Companion has no parser for although the built-in importer
  * reads them: a DOJ contest, or the category page a virtual contest runs on (the extension's
  * DOJ parser knows a problem page only). Asking the extension there ends in "found no
- * problem" and nothing imported.
+ * problem" and nothing imported. And BOJ altogether: it moved from www.acmicpc.net to
+ * acmicpc.net, and the extension's BOJ parser still matches only the old host.
  */
 export const companionCannotParse = (rawUrl: string) => {
   try {
     const url = new URL(rawUrl);
+    if (url.hostname === "acmicpc.net" || url.hostname.endsWith(".acmicpc.net")) return true;
     return url.hostname.replace(/^www\./, "") === "doj.kr" && (/\/contests\/[^/]+\/?$/.test(url.pathname) || (isDojListing(url) && url.pathname.includes("/categories/")));
   } catch { return false; }
 };
@@ -199,12 +204,16 @@ export const nextDefaultFilename = (filenames: Iterable<string>, language: Langu
 };
 
 export const companionSource = (url: string): ProblemSource =>
-  /atcoder\.jp/i.test(url) ? "atcoder" : /codeforces\.com/i.test(url) ? "codeforces" : /doj\.kr/i.test(url) ? "doj" : "other";
+  /atcoder\.jp/i.test(url) ? "atcoder" : /codeforces\.com/i.test(url) ? "codeforces" : /doj\.kr/i.test(url) ? "doj" : /acmicpc\.net/i.test(url) ? "boj" : "other";
 
 /** `"A. Theatre Square"` and `"A - Sum"` both become `A.cpp`, matching what the URL importer produces. */
 export const companionFilename = (problem: CompanionProblem, source: ProblemSource) => {
   if (source === "doj") {
     const problemId = /\/problems\/(\d+)/.exec(problem.url)?.[1];
+    if (problemId) return `${problemId}.cpp`;
+  }
+  if (source === "boj") {
+    const problemId = /\/problem\/(\d+)/.exec(problem.url)?.[1];
     if (problemId) return `${problemId}.cpp`;
   }
   const letter = /^([A-Za-z][0-9]?)\s*[.)\-–—]/.exec(problem.name.trim())?.[1];
