@@ -61,7 +61,7 @@ export type PresenceInput = {
   options: PresenceOptions;
 };
 
-const JUDGES: Record<string, string> = { atcoder: "AtCoder", codeforces: "Codeforces", doj: "DOJ" };
+const JUDGES: Record<string, string> = { atcoder: "AtCoder", codeforces: "Codeforces", doj: "DOJ", boj: "BOJ" };
 
 const WORDS = {
   en: {

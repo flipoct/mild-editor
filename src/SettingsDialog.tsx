@@ -338,7 +338,7 @@ function TemplatePage({ t, drafts, monaco, applyTemplate, close }: Pick<Settings
       <button className={language === "python" ? "active" : ""} onClick={() => drafts.setLanguage("python")}>Python</button>
     </div>
     <div className="template-tabs template-source-tabs" role="tablist" aria-label="Template site">
-      {templateSources.map((site) => <button key={site} className={source === site ? "active" : ""} onClick={() => drafts.setSource(site)}>{site === "other" ? t("local") : site === "atcoder" ? "AtCoder" : site === "codeforces" ? "Codeforces" : "DOJ"}</button>)}
+      {templateSources.map((site) => <button key={site} className={source === site ? "active" : ""} onClick={() => drafts.setSource(site)}>{site === "other" ? t("local") : site === "atcoder" ? "AtCoder" : site === "codeforces" ? "Codeforces" : site === "boj" ? "BOJ" : "DOJ"}</button>)}
     </div>
     <p className="settings-help">{t("templateHelp")}</p>
     <LibraryFolder t={t} />
@@ -489,6 +489,7 @@ function JudgePage({ t, companionStatus, companionError, refreshingJudge, refres
   const [atcoderHandle, setAtcoderHandle] = useSetting("atcoderHandle");
   const [codeforcesHandle, setCodeforcesHandle] = useSetting("codeforcesHandle");
   const [dojHandle, setDojHandle] = useSetting("dojHandle");
+  const [bojHandle, setBojHandle] = useSetting("bojHandle");
   return <div className="language-server-settings judge-settings">
     <p className="settings-help">{t("judgeHelp")}</p>
     <div className={`lsp-state ${companionStatus.listening ? "ready" : companionError ? "error" : "idle"}`}>
@@ -514,6 +515,7 @@ function JudgePage({ t, companionStatus, companionError, refreshingJudge, refres
     <label className="clangd-path-label">AtCoder handle<input value={atcoderHandle} onChange={(event) => setAtcoderHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
     <label className="clangd-path-label">Codeforces handle<input value={codeforcesHandle} onChange={(event) => setCodeforcesHandle(event.target.value)} placeholder="tourist" spellCheck={false} /></label>
     <label className="clangd-path-label">DOJ handle<input value={dojHandle} onChange={(event) => setDojHandle(event.target.value)} placeholder="username" spellCheck={false} /></label>
+    <label className="clangd-path-label">BOJ handle<input value={bojHandle} onChange={(event) => setBojHandle(event.target.value)} placeholder="baekjoon" spellCheck={false} /></label>
     <footer className="settings-footer"><span className="footer-spacer" /><button className="primary-button" disabled={refreshingJudge} onClick={refreshSubmissionStatuses}>{refreshingJudge ? t("refreshing") : t("refreshNow")}</button></footer>
   </div>;
 }

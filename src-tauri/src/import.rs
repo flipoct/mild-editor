@@ -1,10 +1,10 @@
-//! Importing problems and their sample tests from AtCoder, Codeforces and DOJ.
+//! Importing problems and their sample tests from AtCoder, Codeforces, DOJ and BOJ.
 
 use serde::Serialize;
 use std::time::Duration;
 
 use crate::submissions::codeforces_problem_key;
-use crate::workspace::SavedTestCase;
+use crate::workspace::{ProblemLimits, SavedTestCase};
 use crate::HTTP_CONNECT_TIMEOUT;
 
 use tauri::Emitter;
@@ -20,6 +20,9 @@ pub(crate) struct ImportedAtCoderProblem {
     /// The contest's name, where the importer reads one; it names the contest's folder.
     #[serde(skip_serializing_if = "Option::is_none")]
     contest: Option<String>,
+    /// The time and memory limits, where the page states them in a form read here (BOJ).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limits: Option<ProblemLimits>,
 }
 
 /// Leads the error of an import that only a browser can make: Cloudflare's check in front of
@@ -210,6 +213,7 @@ fn fetch_atcoder_problem(
         source: "atcoder".into(),
         source_url: parsed.to_string(),
         contest: None,
+        limits: None,
     })
 }
 
@@ -286,7 +290,7 @@ fn fetch_codeforces_problem(client: &reqwest::blocking::Client, url: &str) -> Re
         // the user's own browser session is the way through.
         if let Some(html) = fetch_unless_challenged(client, &direct_url, "Codeforces")? {
             if let Some((title, tests)) = parse_codeforces_html(&html) {
-                return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None });
+                return Ok(ImportedAtCoderProblem { title, suggested_filename: format!("{}.cpp", letter.to_uppercase()), tests, source: "codeforces".into(), source_url: url.to_string(), contest: None, limits: None });
             }
         }
     }
@@ -409,7 +413,7 @@ fn fetch_doj_problem_from(client: &reqwest::blocking::Client, session: SessionGe
     // The name alone is the title, as it is from Competitive Companion: the number is the
     // file's name already, and "#286 49" would make the file `286_286_49.cpp`.
     let title = page.name.unwrap_or_else(|| format!("DOJ #{number}"));
-    Ok((ImportedAtCoderProblem { title, suggested_filename: format!("{number}.cpp"), tests: page.tests, source: "doj".into(), source_url: source_url.to_string(), contest: None }, from_session))
+    Ok((ImportedAtCoderProblem { title, suggested_filename: format!("{number}.cpp"), tests: page.tests, source: "doj".into(), source_url: source_url.to_string(), contest: None, limits: None }, from_session))
 }
 
 fn fetch_doj_problem(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<ImportedAtCoderProblem, String> {
@@ -552,6 +556,191 @@ fn fetch_doj_contest(client: &reqwest::blocking::Client, session: SessionGet, ur
     Ok(problems)
 }
 
+// ── BOJ (Baekjoon Online Judge, acmicpc.net) ──
+
+/// Whether `host` is BOJ's. The site answers `www.` with a redirect to the bare name.
+pub(crate) fn is_boj_host(host: &str) -> bool {
+    matches!(host, "acmicpc.net" | "www.acmicpc.net")
+}
+
+/// What a BOJ address is: a problem of the archive (`/problem/<id>`), a problem of a contest
+/// (`/contest/problem/<contest>/<number>`, which only its participants may read while it
+/// runs), or a page listing problems — a contest (`/contest/view/<id>`), a workbook
+/// (`/workbook/view/<id>`), a step (`/step/<id>`), anything else with problem links.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BojPage {
+    Problem(String),
+    ContestProblem(String, String),
+    Listing,
+}
+
+pub(crate) fn boj_page(url: &reqwest::Url) -> BojPage {
+    let parts = url.path_segments().map(|parts| parts.filter(|part| !part.is_empty()).collect::<Vec<_>>()).unwrap_or_default();
+    let number = |part: &&str| !part.is_empty() && part.chars().all(|character| character.is_ascii_digit());
+    match parts.as_slice() {
+        ["problem", id] if number(id) => BojPage::Problem(id.to_string()),
+        ["contest", "problem", contest, index] if number(contest) && number(index) => BojPage::ContestProblem(contest.to_string(), index.to_string()),
+        _ => BojPage::Listing,
+    }
+}
+
+/// What a BOJ problem page says. `None` for a page that is not one: the login form a
+/// contest problem shows a visitor, or BOJ's own 404.
+struct BojProblemPage {
+    title: String,
+    tests: Vec<SavedTestCase>,
+    limits: Option<ProblemLimits>,
+    /// The problem's number in the archive, where the page links to it: a contest problem
+    /// that has been added to the archive since.
+    archive_id: Option<String>,
+}
+
+/// `2 초`, `0.5 초 (추가 시간 없음)`, `1 seconds` as milliseconds.
+fn boj_time_ms(text: &str) -> Option<u64> {
+    let value: f64 = text.split_whitespace().next()?.parse().ok()?;
+    (value > 0.0 && value < 1000.0).then(|| (value * 1000.0).round() as u64)
+}
+
+/// `128 MB`, `1024 MB` as megabytes; a limit given in KB is rounded up.
+fn boj_memory_mb(text: &str) -> Option<u64> {
+    let mut words = text.split_whitespace();
+    let value: f64 = words.next()?.parse().ok()?;
+    let unit = words.next().unwrap_or("MB").to_ascii_uppercase();
+    let megabytes = match unit.as_str() { "KB" => value / 1024.0, "GB" => value * 1024.0, _ => value };
+    (megabytes > 0.0 && megabytes < 1_048_576.0).then(|| megabytes.ceil() as u64)
+}
+
+fn parse_boj_problem(html: &str) -> Option<BojProblemPage> {
+    let document = scraper::Html::parse_document(html);
+    let select = |css: &str| scraper::Selector::parse(css).unwrap();
+    let text = |element: scraper::ElementRef| element.text().collect::<String>();
+    let title = text(document.select(&select("#problem_title")).next()?).trim().to_string();
+    if title.is_empty() { return None; }
+    let mut tests = Vec::new();
+    for index in 1..=50 {
+        let sample = |side: &str| document.select(&select(&format!("#sample-{side}-{index}"))).next().map(|element| text(element).replace("\r\n", "\n"));
+        let (Some(input), Some(expected)) = (sample("input"), sample("output")) else { break };
+        // BOJ keeps the newline before `</pre>`; a test is compared without it.
+        tests.push(SavedTestCase { name: format!("test {index}"), input: input.trim_end().to_string() + "\n", expected: expected.trim_end().to_string() });
+    }
+    // `#problem-info`: time limit, memory limit, then the counts; the first row of the body.
+    let cells = document.select(&select("#problem-info tbody tr td")).map(|cell| text(cell).trim().to_string()).collect::<Vec<_>>();
+    let limits = (cells.len() >= 2).then(|| ProblemLimits::new(boj_time_ms(&cells[0]), boj_memory_mb(&cells[1]))).filter(|limits| *limits != ProblemLimits::default());
+    let archive_id = document.select(&select("a[href]")).filter_map(|link| link.value().attr("href"))
+        .find_map(|href| href.strip_prefix("/problem/").filter(|id| !id.is_empty() && id.chars().all(|character| character.is_ascii_digit())).map(str::to_string));
+    Some(BojProblemPage { title, tests, limits, archive_id })
+}
+
+/// Whether BOJ sent its login page instead of the one asked for.
+fn boj_wants_login(url: &str, html: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|parsed| parsed.path().starts_with("/login")) || html.contains("id=\"login_form\"")
+}
+
+/// A BOJ page through the session of the problem browser, or `None` without one, or logged out.
+fn boj_session_page(session: SessionGet, url: &str) -> Option<String> {
+    let (final_url, html) = session(url).ok()?;
+    (!boj_wants_login(&final_url, &html)).then_some(html)
+}
+
+fn boj_public_page(client: &reqwest::blocking::Client, url: &str) -> Result<Option<String>, String> {
+    fetch_unless_challenged(client, url, "BOJ")
+}
+
+/// A BOJ problem, read publicly and through the session where only a participant may.
+/// Returns whether the session was needed.
+fn fetch_boj_problem(client: &reqwest::blocking::Client, session: SessionGet, url: &str) -> Result<(ImportedAtCoderProblem, bool), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid BOJ problem URL.".to_string())?;
+    let (page_url, number) = match boj_page(&parsed) {
+        BojPage::Problem(id) => (format!("https://www.acmicpc.net/problem/{id}"), Some(id)),
+        BojPage::ContestProblem(contest, index) => (format!("https://www.acmicpc.net/contest/problem/{contest}/{index}"), None),
+        BojPage::Listing => return Err("This is not a BOJ problem URL.".into()),
+    };
+    let mut from_session = false;
+    let mut page = boj_public_page(client, &page_url)?.as_deref().and_then(parse_boj_problem);
+    if page.is_none() {
+        // A running contest's problems are there for its participants only.
+        page = boj_session_page(session, &page_url).as_deref().and_then(parse_boj_problem);
+        from_session = page.is_some();
+    }
+    let Some(page) = page else {
+        return Err(if number.is_none() {
+            format!("{NEEDS_BROWSER}BOJ shows this contest problem only to a participant who is logged in. Open it in the problem browser and import it from there.")
+        } else {
+            "BOJ did not return this problem. Check the problem number.".into()
+        });
+    };
+    let id = number.or(page.archive_id);
+    let suggested_filename = format!("{}.cpp", id.as_deref().unwrap_or("problem"));
+    Ok((ImportedAtCoderProblem { title: page.title, suggested_filename, tests: page.tests, source: "boj".into(), source_url: page_url, contest: None, limits: page.limits }, from_session))
+}
+
+/// The problems a BOJ page lists, in its order: a contest's `/contest/problem/<contest>/<n>`
+/// rows with their letters, or any page's `/problem/<id>` links (a workbook, a step).
+fn boj_listed_problems(html: &str) -> Vec<(Option<String>, String)> {
+    let document = scraper::Html::parse_document(html);
+    let link_selector = scraper::Selector::parse("a[href]").unwrap();
+    let cell_selector = scraper::Selector::parse("td").unwrap();
+    let base = reqwest::Url::parse("https://www.acmicpc.net/").unwrap();
+    let mut contest = Vec::new();
+    let mut archive = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for link in document.select(&link_selector) {
+        let Some(href) = link.value().attr("href") else { continue };
+        let Ok(url) = base.join(href.trim()) else { continue };
+        let kind = boj_page(&url);
+        if kind == BojPage::Listing || !seen.insert(url.path().to_string()) { continue; }
+        let row = link.ancestors().filter_map(scraper::ElementRef::wrap).find(|element| element.value().name() == "tr");
+        let letter = row.and_then(|row| row.select(&cell_selector).next()).map(|cell| cell.text().collect::<String>().trim().to_string())
+            .filter(|text| (1..=3).contains(&text.len()) && text.starts_with(|first: char| first.is_ascii_uppercase()) && text.chars().all(|character| character.is_ascii_alphanumeric()));
+        let address = format!("https://www.acmicpc.net{}", url.path());
+        match kind {
+            BojPage::ContestProblem(..) => contest.push((letter, address)),
+            _ => archive.push((None, address)),
+        }
+    }
+    // A contest page also links to problems of the archive (the menu's); its own rows are the list.
+    if contest.is_empty() { archive } else { contest }
+}
+
+/// The name of a BOJ listing: its heading, or the `<title>` without the site's name.
+fn boj_listing_name(html: &str) -> Option<String> {
+    let document = scraper::Html::parse_document(html);
+    ["title"].iter().find_map(|selector| {
+        let text = document.select(&scraper::Selector::parse(selector).unwrap()).next()?.text().collect::<String>();
+        let name = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        Some(name).filter(|name| !name.is_empty() && name != "Baekjoon Online Judge")
+    })
+}
+
+/// A BOJ contest, workbook or step, as a whole: at most 30 problems.
+fn fetch_boj_listing(client: &reqwest::blocking::Client, session: SessionGet, url: &str, progress: &Progress) -> Result<Vec<ImportedAtCoderProblem>, String> {
+    let mut html = boj_public_page(client, url)?;
+    let mut listed = html.as_deref().map(boj_listed_problems).unwrap_or_default();
+    if listed.is_empty() {
+        html = boj_session_page(session, url);
+        listed = html.as_deref().map(boj_listed_problems).unwrap_or_default();
+    }
+    if listed.is_empty() {
+        return Err(format!("{NEEDS_BROWSER}BOJ lists no problems on this page for a visitor. Open it in the problem browser, logged in, and import it from there."));
+    }
+    let name = html.as_deref().and_then(boj_listing_name);
+    let in_contest = listed.iter().any(|(_, address)| address.contains("/contest/problem/"));
+    let total = listed.len().min(30);
+    (progress.first_page)(&listed[0].1);
+    let mut problems = Vec::new();
+    for (index, (letter, address)) in listed.into_iter().take(30).enumerate() {
+        let (mut problem, _) = fetch_boj_problem(client, session, &address)?;
+        if in_contest {
+            // In a contest the letter names the problem, and its folder is the contest's.
+            problem.suggested_filename = format!("{}.cpp", letter.unwrap_or_else(|| contest_letter(index)));
+            problem.contest = name.clone();
+        }
+        (progress.problem)(index, total, &problem);
+        problems.push(problem);
+    }
+    Ok(problems)
+}
+
 fn fetch_codeforces_contest(client: &reqwest::blocking::Client, url: &str, progress: &Progress) -> Result<Vec<ImportedAtCoderProblem>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid Codeforces contest URL.".to_string())?;
     let segments = parsed.path_segments().map(|values| values.collect::<Vec<_>>()).unwrap_or_default();
@@ -670,7 +859,7 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String, stream: O
             .build()
             .map_err(|error| error.to_string())?;
         let parsed = reqwest::Url::parse(&url)
-            .map_err(|_| "Problem not found. Enter a valid AtCoder, Codeforces, or DOJ URL.".to_string())?;
+            .map_err(|_| "Problem not found. Enter a valid AtCoder, Codeforces, DOJ or BOJ URL.".to_string())?;
         if matches!(parsed.host_str(), Some("codeforces.com") | Some("www.codeforces.com")) {
             if parsed.path().contains("/problem/") {
                 return fetch_codeforces_problem(&client, &url).map(|problem| vec![problem]);
@@ -683,8 +872,14 @@ pub(crate) async fn import_problem(app: tauri::AppHandle, url: String, stream: O
             }
             return fetch_doj_problem(&client, &session, &url).map(|problem| vec![problem]);
         }
+        if parsed.host_str().is_some_and(is_boj_host) {
+            if boj_page(&parsed) == BojPage::Listing {
+                return fetch_boj_listing(&client, &session, &url, &progress);
+            }
+            return fetch_boj_problem(&client, &session, &url).map(|(problem, _)| vec![problem]);
+        }
         if parsed.host_str() != Some("atcoder.jp") {
-            return Err("Problem not found. Enter a valid AtCoder, Codeforces, or DOJ URL.".into());
+            return Err("Problem not found. Enter a valid AtCoder, Codeforces, DOJ or BOJ URL.".into());
         }
         if parsed.path().contains("/tasks/") {
             return fetch_atcoder_problem(&client, &url).map(|problem| vec![problem]);
@@ -1074,5 +1269,66 @@ mod tests {
         let html = r#"<table class="problems"><tbody><tr><td><a href="/contest/9999/problem/A">A</a></td></tr><tr><td><a href="/contest/9999/problem/B2">B2</a></td></tr></tbody></table>"#;
         let base = reqwest::Url::parse("https://codeforces.com/contest/9999?locale=en").unwrap();
         assert_eq!(parse_codeforces_contest_urls(html, &base), vec!["https://codeforces.com/contest/9999/problem/A".to_string(), "https://codeforces.com/contest/9999/problem/B2".to_string()]);
+    }
+
+    /// A BOJ problem page as the site renders it (acmicpc.net, November 2026), trimmed.
+    const BOJ_PROBLEM: &str = r#"<html><head><title>1000번: A+B</title></head><body>
+        <span id="problem_title">A+B</span>
+        <table class="table" id="problem-info"><thead><tr><th>시간 제한</th><th>메모리 제한</th><th>제출</th></tr></thead>
+        <tbody><tr><td>0.5 초 (추가 시간 없음) </td><td>128 MB</td><td>1413017</td></tr></tbody></table>
+        <section id="sampleinput1"><pre class="sampledata" id="sample-input-1">1 2
+</pre></section><section id="sampleoutput1"><pre class="sampledata" id="sample-output-1">3
+</pre></section>
+        <section id="sampleinput2"><pre class="sampledata" id="sample-input-2">3 4
+5 6
+</pre></section><section id="sampleoutput2"><pre class="sampledata" id="sample-output-2">7
+</pre></section>
+        <a href="/problem/added">새로 추가된 문제</a></body></html>"#;
+
+    #[test]
+    fn a_boj_problem_page_is_read() {
+        let page = parse_boj_problem(BOJ_PROBLEM).expect("a problem");
+        assert_eq!(page.title, "A+B");
+        assert_eq!(page.tests.iter().map(|test| (test.input.as_str(), test.expected.as_str())).collect::<Vec<_>>(), vec![("1 2\n", "3"), ("3 4\n5 6\n", "7")]);
+        assert_eq!(page.limits, Some(ProblemLimits::new(Some(500), Some(128))));
+        // `/problem/added` is the menu, not the problem's number.
+        assert_eq!(page.archive_id, None);
+        // The login page a contest problem shows a visitor is no problem.
+        assert!(parse_boj_problem(r#"<form id="login_form"></form>"#).is_none());
+        assert!(boj_wants_login("https://www.acmicpc.net/login?next=%2Fcontest%2Fproblem%2F1%2F1", ""));
+        assert!(!boj_wants_login("https://www.acmicpc.net/problem/1000", BOJ_PROBLEM));
+    }
+
+    #[test]
+    fn boj_limits_are_read_in_their_units() {
+        assert_eq!([boj_time_ms("2 초 "), boj_time_ms("1 seconds"), boj_time_ms("0.25 초 (하단 참고)"), boj_time_ms("초")], [Some(2000), Some(1000), Some(250), None]);
+        assert_eq!([boj_memory_mb("256 MB"), boj_memory_mb("1024 MB"), boj_memory_mb("32768 KB"), boj_memory_mb("x")], [Some(256), Some(1024), Some(32), None]);
+    }
+
+    #[test]
+    fn boj_addresses_are_told_apart() {
+        let page = |url: &str| boj_page(&reqwest::Url::parse(url).unwrap());
+        assert_eq!(page("https://www.acmicpc.net/problem/1000"), BojPage::Problem("1000".into()));
+        assert_eq!(page("https://acmicpc.net/problem/1000/"), BojPage::Problem("1000".into()));
+        assert_eq!(page("https://www.acmicpc.net/contest/problem/1684/3"), BojPage::ContestProblem("1684".into(), "3".into()));
+        for listing in ["https://www.acmicpc.net/contest/view/1684", "https://www.acmicpc.net/workbook/view/1152", "https://www.acmicpc.net/step/1", "https://www.acmicpc.net/problem/added"] {
+            assert_eq!(page(listing), BojPage::Listing, "{listing}");
+        }
+        assert!(is_boj_host("acmicpc.net") && is_boj_host("www.acmicpc.net") && !is_boj_host("acmicpc.net.example.com"));
+    }
+
+    #[test]
+    fn a_boj_contest_lists_its_own_rows_and_a_workbook_its_problems() {
+        let contest = r#"<a href="/problem/added">menu</a><table><tbody>
+            <tr><td> A </td><td><a href = "/contest/problem/1684/1"> !!New Game Start!! </a></td></tr>
+            <tr><td> B </td><td><a href = "/contest/problem/1684/2"> 11 싫어 수 </a></td></tr></tbody></table>"#;
+        assert_eq!(boj_listed_problems(contest), vec![
+            (Some("A".to_string()), "https://www.acmicpc.net/contest/problem/1684/1".to_string()),
+            (Some("B".to_string()), "https://www.acmicpc.net/contest/problem/1684/2".to_string()),
+        ]);
+        let workbook = r#"<a href="/problem/13460">구슬 탈출 2</a><a href="/problem/12100">2048</a><a href="/problem/13460">again</a><a href="/problem/tags">tags</a>"#;
+        assert_eq!(boj_listed_problems(workbook).into_iter().map(|(_, url)| url).collect::<Vec<_>>(), vec!["https://www.acmicpc.net/problem/13460", "https://www.acmicpc.net/problem/12100"]);
+        assert_eq!(boj_listing_name("<title>UCPC 2026 본선</title>").as_deref(), Some("UCPC 2026 본선"));
+        assert_eq!(boj_listing_name("<title>Baekjoon Online Judge</title>"), None);
     }
 }

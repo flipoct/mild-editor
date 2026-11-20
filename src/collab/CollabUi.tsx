@@ -12,7 +12,7 @@ import { secondsLeft, KEYBOARD_IDLE_MS } from "./keyboard";
 import { DEFAULT_RELAY_PORT, formatInvite, peerName, shortAddress } from "./protocol";
 
 /** The name a cursor carries until the user gives one: a judge handle if there is one, since that is what teammates know each other by. */
-const fallbackName = () => getSetting("atcoderHandle") || getSetting("codeforcesHandle") || getSetting("dojHandle") || `Player ${10 + Math.floor(Math.random() * 90)}`;
+const fallbackName = () => getSetting("atcoderHandle") || getSetting("codeforcesHandle") || getSetting("dojHandle") || getSetting("bojHandle") || `Player ${10 + Math.floor(Math.random() * 90)}`;
 
 /** The status-bar entry: the way in while there is no room, and who is in it while there is one. */
 export function CollabChip({ t }: { t: Translate }) {

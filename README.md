@@ -1,6 +1,6 @@
 # Mild Editor
 
-A focused competitive-programming editor for C++ and Python 3. Import problems and sample test cases directly from **AtCoder**, **Codeforces**, and **doj.kr**, then code, run tests, and organize an entire contest in one workspace.
+A focused competitive-programming editor for C++ and Python 3. Import problems and sample test cases directly from **AtCoder**, **Codeforces**, **doj.kr** and **BOJ** (acmicpc.net), then code, run tests, and organize an entire contest in one workspace.
 
 ## Download
 
@@ -45,7 +45,7 @@ contest-folder/
 
 ## Problem import
 
-`Import` supports AtCoder, Codeforces, and doj.kr problem URLs. AtCoder and Codeforces contest URLs import their listed problems. Imported sample tests are stored with the workspace.
+`Import` supports AtCoder, Codeforces, doj.kr and BOJ problem URLs. Contest URLs import their listed problems, and so do BOJ workbooks (`/workbook/view/…`) and steps (`/step/…`); BOJ also brings each problem's time and memory limits. A contest problem only its participants may read comes through the problem browser's login. Imported sample tests are stored with the workspace.
 
 `use output` copies the latest program output into the expected-output field.
 
@@ -55,6 +55,7 @@ contest-folder/
 AtCoder/C_Remove_and_Append.py
 Codeforces/Codeforces Round 1117 (Div. 2)/A_Watermelon.py
 DOJ/47_AND와_OR.py
+BOJ/1000_A+B.py
 ```
 
 The import dialog, contest URLs and Competitive Companion all follow the setting; files already saved stay where they are.
@@ -99,7 +100,7 @@ Outputs are compared by the same rule the test cases use, float tolerance includ
 
 ## Submitting
 
-**Submit** in the title bar, or `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS), saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder, Codeforces and DOJ forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
+**Submit** in the title bar, or `Ctrl+Shift+Enter` (`⌘⇧↵` on macOS), saves the file and opens the judge's own submit page in the problem browser — which is already logged in — with the problem, language and source filled in. Review it and press the judge's submit button; the editor never sends anything by itself. AtCoder, Codeforces, DOJ and BOJ forms are filled; for any other judge the solution is copied to the clipboard and the problem page opens. With your handle in **Settings → online judges**, the result shows up on the file a few seconds later.
 
 **Really submit** in **Settings → online judges** (off by default) goes one step further: once the form is filled, the editor checks that it holds this problem, a language of the file's family and the file's exact source, and then presses the judge's submit button for you. If any check fails, nothing is pressed — the page is left as it is and the status bar says which check failed.
 
@@ -113,7 +114,7 @@ Templates and snippets live in a folder, as plain files, so they can be edited i
 
 ```
 templates/default.cpp     what a new C++ file starts as
-templates/atcoder.py      a Python file imported from AtCoder (codeforces, doj likewise)
+templates/atcoder.py      a Python file imported from AtCoder (codeforces, doj, boj likewise)
 snippets/segtree.cpp      the snippet "segtree", for C++
 snippets/order.json       the order snippets are offered in
 ```
@@ -206,7 +207,7 @@ The Edit menu restores the standard macOS text-editing shortcuts, and the editor
 
 The problem panel is a real Chromium (CEF) hosted inside the editor window, so Chrome extensions run against the problem page. **Settings → problem browser → placement** moves it into a window of its own instead (`src/ProblemWindow.tsx`, a second Tauri window that hosts the same view); the panel and the window are shown and hidden by the same chip, menu item and `Ctrl+W`. It is pinned to CEF 151.3.24: 152.0.5 hangs every network request on macOS 26, verified against CEF's own sample.
 
-The panel's `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once. It asks Competitive Companion to parse the page, so every judge the extension supports works; without it the built-in importer handles AtCoder, Codeforces and doj.kr. The panel is a native view layered over the window, so it is hidden automatically while a dialog or menu is open.
+The panel's `import` button turns the page you are reading into a file with its sample tests, and a contest page imports every problem at once. It asks Competitive Companion to parse the page, so every judge the extension supports works; without it the built-in importer handles AtCoder, Codeforces, doj.kr and BOJ. The panel is a native view layered over the window, so it is hidden automatically while a dialog or menu is open.
 
 Development needs the CEF binaries and a build tool the `cef` crate expects:
 

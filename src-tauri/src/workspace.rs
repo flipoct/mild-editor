@@ -451,6 +451,12 @@ pub(crate) struct ProblemLimits {
     memory_limit_mb: Option<u64>,
 }
 
+impl ProblemLimits {
+    pub(crate) fn new(time_limit_ms: Option<u64>, memory_limit_mb: Option<u64>) -> Self {
+        Self { time_limit_ms, memory_limit_mb }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceProblemMetadata {
@@ -591,7 +597,7 @@ pub(crate) fn save_workspace_tests(request: SaveWorkspaceTestsRequest) -> Result
 #[tauri::command(async)]
 pub(crate) fn update_workspace_source(request: UpdateWorkspaceSourceRequest) -> Result<(), String> {
     let _metadata = metadata_lock();
-    if !matches!(request.source.as_str(), "atcoder" | "codeforces" | "doj" | "other") {
+    if !matches!(request.source.as_str(), "atcoder" | "codeforces" | "doj" | "boj" | "other") {
         return Err("Unknown problem source.".into());
     }
     let folder = std::path::PathBuf::from(request.folder_path);

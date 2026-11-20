@@ -16,6 +16,8 @@ pub(crate) struct SubmissionStatusRequest {
     atcoder_handle: String,
     codeforces_handle: String,
     doj_handle: String,
+    #[serde(default)]
+    boj_handle: String,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +182,108 @@ impl<'a> DojSession<'a> {
     }
 }
 
+// ── BOJ ──
+
+/// The problem's number in BOJ's archive, from `/problem/<id>`. A contest problem's address
+/// has none, and the status page filters by it alone.
+fn boj_problem_id(url: &str) -> Option<String> {
+    match crate::import::boj_page(&reqwest::Url::parse(url).ok()?) {
+        crate::import::BojPage::Problem(id) => Some(id),
+        _ => None,
+    }
+}
+
+/// One row of BOJ's status table (`#status-table`), which lists the newest first.
+#[derive(Debug, PartialEq, Clone)]
+struct BojSubmission {
+    id: String,
+    user: String,
+    problem: String,
+    verdict: String,
+    /// Seconds since the epoch, from the row's `data-timestamp`.
+    at: u64,
+}
+
+/// A row's result as the editor's verdicts read: `AC`, `WA`, …, `JUDGING` while BOJ is still
+/// at it, and `SCORE n/100` for a partial score.
+fn boj_verdict_of(color: &str, text: &str) -> String {
+    let score = text.split('점').next().map(str::trim).filter(|value| text.contains('점') && value.parse::<f64>().is_ok());
+    match (color, score) {
+        ("ac", _) => "AC".into(),
+        (_, Some(score)) => format!("SCORE {score}/100"),
+        ("wa", _) => "WA".into(),
+        ("pe", _) => "PE".into(),
+        ("tle", _) => "TLE".into(),
+        ("mle", _) => "MLE".into(),
+        ("ole", _) => "OLE".into(),
+        ("rte", _) => "RE".into(),
+        ("ce", _) => "CE".into(),
+        ("wait" | "compile" | "judging" | "rejudge-wait" | "no-judge", _) => "JUDGING".into(),
+        _ => text.split_whitespace().collect::<Vec<_>>().join(" "),
+    }
+}
+
+fn parse_boj_status(html: &str) -> Vec<BojSubmission> {
+    let document = scraper::Html::parse_document(html);
+    let select = |css: &str| scraper::Selector::parse(css).unwrap();
+    let (rows, user, problem, result, stamp) = (select("#status-table tbody tr"), select("a[href^=\"/user/\"]"), select("a[href^=\"/problem/\"]"), select(".result-text"), select("[data-timestamp]"));
+    document.select(&rows).filter_map(|row| {
+        let id = row.value().attr("id")?.strip_prefix("solution-")?.to_string();
+        let user = row.select(&user).next()?.text().collect::<String>().trim().to_string();
+        let problem = row.select(&problem).next()?.value().attr("href")?.trim_start_matches("/problem/").to_string();
+        let result = row.select(&result).next()?;
+        let color = result.value().attr("data-color").unwrap_or("");
+        let verdict = boj_verdict_of(color, &result.text().collect::<String>());
+        let at = row.select(&stamp).next().and_then(|element| element.value().attr("data-timestamp")).and_then(|value| value.parse().ok()).unwrap_or(0);
+        Some(BojSubmission { id, user, problem, verdict, at })
+    }).collect()
+}
+
+fn boj_status_page(client: &reqwest::blocking::Client, handle: &str, problem: Option<&str>) -> Option<Vec<BojSubmission>> {
+    let mut url = reqwest::Url::parse("https://www.acmicpc.net/status").unwrap();
+    url.query_pairs_mut().append_pair("problem_id", problem.unwrap_or("")).append_pair("user_id", handle).append_pair("language_id", "-1").append_pair("result_id", "-1");
+    let response = client.get(url).send().ok()?;
+    let status = response.status().as_u16();
+    let mitigated = response.headers().get("cf-mitigated").and_then(|value| value.to_str().ok()).map(str::to_string);
+    let html = response.text().ok()?;
+    // Without the table this is some other page: a block, or the site down.
+    (!is_cloudflare_challenge(status, mitigated.as_deref(), &html) && html.contains("status-table")).then(|| parse_boj_status(&html))
+}
+
+/// How many problems one poll may ask BOJ about by number.
+const BOJ_LOOKUPS_PER_POLL: usize = 3;
+/// The BOJ problems asked about by number in this run.
+static BOJ_LOOKED_UP: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// BOJ's public status page, read as DOJ's "내 제출" is: the user's newest 20 submissions in
+/// one request per poll, a new one being by definition among them, and each problem not
+/// there asked about by number once in the run of the app, a few a poll.
+struct BojStatus<'a> {
+    client: &'a reqwest::blocking::Client,
+    handle: &'a str,
+    recent: Option<Vec<BojSubmission>>,
+    lookups_left: usize,
+    looked_up: &'a mut BTreeSet<String>,
+    unsettled: bool,
+}
+
+impl BojStatus<'_> {
+    fn submission(&mut self, problem: &str) -> Option<BojSubmission> {
+        self.unsettled = false;
+        let Some(recent) = self.recent.as_ref() else { self.unsettled = true; return None };
+        let mine = |rows: &[BojSubmission]| rows.iter().find(|row| row.problem == problem && row.user.eq_ignore_ascii_case(self.handle)).cloned();
+        if let Some(found) = mine(recent) { return Some(found); }
+        if recent.is_empty() || self.looked_up.contains(problem) { return None; }
+        self.unsettled = true;
+        if self.lookups_left == 0 { return None; }
+        self.lookups_left -= 1;
+        let rows = boj_status_page(self.client, self.handle, Some(problem))?;
+        self.unsettled = false;
+        self.looked_up.insert(problem.to_string());
+        mine(&rows)
+    }
+}
+
 /// The user's latest submissions from the official API, newest first. The API is not behind
 /// the browser check that guards the site's pages; should that change, the answer says so
 /// instead of failing as JSON that would not parse.
@@ -302,6 +406,13 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
     let polls_doj = !doj_handle.is_empty() && request.problems.iter().any(|problem| problem.source == "doj" && doj_problem_id(&problem.source_url).is_some());
     let mut doj_looked_up = DOJ_LOOKED_UP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut doj_session = session.filter(|_| polls_doj).and_then(|get| DojSession::open(get, &doj_handle, &mut doj_looked_up));
+    let boj_handle = request.boj_handle.trim().to_string();
+    let polls_boj = !boj_handle.is_empty() && request.problems.iter().any(|problem| problem.source == "boj" && boj_problem_id(&problem.source_url).is_some());
+    let mut boj_looked_up = BOJ_LOOKED_UP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut boj_status = polls_boj.then(|| BojStatus {
+        client: &client, handle: &boj_handle, recent: boj_status_page(&client, &boj_handle, None),
+        lookups_left: BOJ_LOOKUPS_PER_POLL, looked_up: &mut boj_looked_up, unsettled: false,
+    });
 
     for problem in request.problems {
         let mut status = None;
@@ -380,6 +491,19 @@ fn refresh_submission_statuses_sync(request: SubmissionStatusRequest, session: O
                         status = Some(verdict);
                         submission_url = Some(doj_submissions_page(&problem.source_url, &problem_id, &doj_handle));
                     }
+                }
+            }
+            "boj" if !boj_handle.is_empty() => {
+                if let (Some(problem_id), Some(poll)) = (boj_problem_id(&problem.source_url), boj_status.as_mut()) {
+                    if let Some(found) = poll.submission(&problem_id) {
+                        status = Some(found.verdict);
+                        submitted_at = found.at;
+                        submission_url = Some(format!("https://www.acmicpc.net/source/{}", found.id));
+                    }
+                    settled = !poll.unsettled;
+                    answered_by = Some(format!("public:{boj_handle}"));
+                } else {
+                    settled = false;
                 }
             }
             // No handle for this judge: it was not asked.
@@ -556,7 +680,7 @@ mod tests {
             problems: vec![problem("doj", "https://doj.kr/ko/problems/286"), problem("atcoder", "https://atcoder.jp/contests/abc400/tasks/abc400_a"), problem("codeforces", "https://codeforces.com/contest/1/problem/A")],
             atcoder_handle: " ".into(),
             codeforces_handle: String::new(),
-            doj_handle: String::new(),
+            doj_handle: String::new(), boj_handle: String::new(),
         }, None).unwrap();
         assert_eq!(statuses.len(), 3);
         assert!(statuses.iter().all(|status| !status.settled && status.status.is_none() && status.answered_by.is_none()));
@@ -630,5 +754,39 @@ mod tests {
         }
         assert_eq!(long.len(), 50);
         assert_eq!(long[0].url.as_deref(), Some("s/10"));
+    }
+    /// Rows of acmicpc.net/status as the site renders them (November 2026), trimmed.
+    const BOJ_STATUS: &str = r#"<table id="status-table"><tbody>
+        <tr id="solution-105219303"><td>105219303</td><td><a href="/user/watson">watson</a></td><td><a href="/problem/1000" class="problem_title">1000</a></td>
+          <td class="result"><span class="result-text result-wait " data-color="wait">기다리는 중</span></td><td></td><td></td><td>Java 11</td><td><a data-timestamp="1795173821">56초 전</a></td></tr>
+        <tr id="solution-105219293"><td>105219293</td><td><a href="/user/watson">watson</a></td><td><a href="/problem/1001">1001</a></td>
+          <td class="result"><span class="result-text result-ac" data-color="ac">맞았습니다!!</span></td><td>2020</td><td>0</td><td>C++17</td><td><a data-timestamp="1795173794">1분 전</a></td></tr>
+        <tr id="solution-105219280"><td>105219280</td><td><a href="/user/other">other</a></td><td><a href="/problem/1002">1002</a></td>
+          <td class="result"><span class="result-text result-pac" data-color="pac">37점</span></td><td></td><td></td><td>PyPy3</td><td><a data-timestamp="1795173700">2분 전</a></td></tr>
+        </tbody></table>"#;
+
+    #[test]
+    fn boj_status_rows_are_read() {
+        let rows = parse_boj_status(BOJ_STATUS);
+        assert_eq!(rows.iter().map(|row| (row.id.as_str(), row.problem.as_str(), row.verdict.as_str(), row.at)).collect::<Vec<_>>(), vec![
+            ("105219303", "1000", "JUDGING", 1795173821),
+            ("105219293", "1001", "AC", 1795173794),
+            ("105219280", "1002", "SCORE 37/100", 1795173700),
+        ]);
+        assert_eq!(rows[2].user, "other");
+        assert!(parse_boj_status("<html>no table</html>").is_empty());
+    }
+
+    #[test]
+    fn boj_results_read_as_the_editors_verdicts() {
+        let cases = [("wa", "틀렸습니다"), ("tle", "시간 초과"), ("mle", "메모리 초과"), ("rte", "런타임 에러 (OutOfBounds)"), ("ce", "컴파일 에러"), ("pe", "출력 형식이 잘못되었습니다"), ("ole", "출력 초과"), ("judging", "채점 중 (37%)"), ("ac", "100점")];
+        assert_eq!(cases.map(|(color, text)| boj_verdict_of(color, text)), ["WA", "TLE", "MLE", "RE", "CE", "PE", "OLE", "JUDGING", "AC"].map(String::from));
+        assert_eq!(boj_verdict_of("mystery", "새로운  결과"), "새로운 결과");
+    }
+
+    #[test]
+    fn only_archive_problems_are_polled_on_boj() {
+        assert_eq!(boj_problem_id("https://www.acmicpc.net/problem/1000"), Some("1000".into()));
+        assert_eq!(boj_problem_id("https://www.acmicpc.net/contest/problem/1684/1"), None);
     }
 }
