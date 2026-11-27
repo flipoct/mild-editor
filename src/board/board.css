@@ -1,0 +1,128 @@
+/* The board's own controls (ui.ts) and surface (render.ts), in the editor and on a tablet.
+   Everything is under .board-root; the editor sets the colours from its theme (styles.css),
+   a tablet's page goes by the device's light or dark. */
+.board-root {
+  --b-panel: #ffffff; --b-panel-2: #f2f2ee; --b-line: #e2e2db;
+  --b-ink: #1f1f1d; --b-muted: #7d7d75;
+  --b-accent: #3d63dd; --b-accent-soft: #e6ebfc; --b-accent-ink: #fff;
+  --b-danger: #cf3636;
+  --b-shadow: 0 1px 2px rgba(20, 20, 15, .06), 0 4px 14px rgba(20, 20, 15, .08);
+  position: relative; overflow: hidden; container-type: inline-size;
+  color: var(--b-ink); font: 13px/1.4 "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; outline: none;
+}
+.board-root.board-dark {
+  --b-panel: #232321; --b-panel-2: #2e2e2b; --b-line: #3b3b36;
+  --b-ink: #ececea; --b-muted: #9a9a92;
+  --b-accent: #86a2ff; --b-accent-soft: #2b3558; --b-accent-ink: #10131f;
+  --b-danger: #ff8080;
+  --b-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .45);
+}
+.board-root *, .board-root *::before, .board-root *::after { box-sizing: border-box; }
+.board-root button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.board-root button:focus-visible { outline: 2px solid var(--b-accent); outline-offset: -2px; }
+.board-root [hidden] { display: none !important; }
+.board-root svg { display: block; flex: none; }
+
+/* ── The surface ── */
+.board-stage-live { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: default; }
+.board-stage-live > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.board-overlay { pointer-events: none; }
+.board-textlayer { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; pointer-events: none; }
+.board-stage-live.tool-pen, .board-stage-live.tool-highlighter, .board-stage-live.tool-rect, .board-stage-live.tool-ellipse, .board-stage-live.tool-line, .board-stage-live.tool-arrow { cursor: crosshair; }
+.board-stage-live.tool-eraser { cursor: none; }
+.board-stage-live.tool-text { cursor: text; }
+.board-stage-live.tool-hand, .board-stage-live.space { cursor: grab; }
+.board-stage-live.panning { cursor: grabbing; }
+.board-t.erasing { opacity: .22; }
+.board-editor {
+  position: absolute; pointer-events: auto; margin: 0; padding: 0; border: 0; border-radius: 0;
+  outline: 1.5px dashed var(--b-accent); outline-offset: 5px; background: transparent; resize: none; overflow: hidden;
+  min-width: 1.5em; min-height: 1.45em; transform-origin: center; caret-color: var(--b-accent); z-index: 100000;
+  -webkit-user-select: text; user-select: text;
+}
+.board-editor:not(.wrap) { white-space: pre; overflow-wrap: normal; }
+.board-preview {
+  position: absolute; pointer-events: none; width: max-content; max-width: 44em; z-index: 100001;
+  background: var(--b-panel); color: var(--b-ink); border: 1px solid var(--b-line); border-radius: .4em;
+  padding: .3em .6em; box-shadow: var(--b-shadow);
+}
+
+/* ── Floating controls ── */
+.board-island {
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  background: var(--b-panel); border: 1px solid var(--b-line); border-radius: 12px; box-shadow: var(--b-shadow); pointer-events: auto;
+}
+.board-top { position: absolute; z-index: 5; top: 10px; left: 10px; right: 10px; display: flex; align-items: flex-start; gap: 8px; pointer-events: none; }
+.board-top-side { flex: 1 1 0; min-width: 0; display: flex; }
+.board-top-side.right { justify-content: flex-end; }
+.board-toolbar { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.board-ui-tool { position: relative; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; flex: none; }
+.board-ui-tool:hover { background: var(--b-panel-2); }
+.board-ui-tool:disabled { opacity: .35; cursor: default; background: none; }
+.board-ui-tool[aria-pressed="true"] { background: var(--b-accent-soft); color: var(--b-accent); }
+.board-ui-tool sub { position: absolute; right: 3px; bottom: 2px; font-size: 9px; line-height: 1; color: var(--b-muted); font-weight: 600; }
+.board-ui-tool[aria-pressed="true"] sub { color: var(--b-accent); }
+.board-ui-sep { width: 1px; height: 20px; background: var(--b-line); margin: 0 3px; flex: none; }
+.board-ui-zoom { min-width: 52px; height: 34px; border-radius: 8px; font-variant-numeric: tabular-nums; font-size: 12px; }
+.board-ui-zoom:hover { background: var(--b-panel-2); }
+.board-menu-island { position: relative; }
+
+.board-style {
+  position: absolute; z-index: 4; left: 10px; top: 62px; flex-direction: column; align-items: stretch; gap: 10px;
+  padding: 12px; width: 188px; max-height: calc(100% - 128px); overflow-y: auto;
+}
+.board-style section { display: block; }
+.board-style h4 { margin: 0 0 6px; font-size: 11.5px; font-weight: 600; color: var(--b-muted); }
+.board-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.board-sw { aspect-ratio: 1; border-radius: 7px; border: 1px solid rgba(128, 128, 128, .25) !important; background: var(--c) !important; position: relative; }
+.board-sw[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--b-panel), 0 0 0 4px var(--b-accent); }
+.board-sw.none { background: var(--b-panel) !important; overflow: hidden; }
+.board-sw.none::after { content: ""; position: absolute; left: -20%; right: -20%; top: 50%; height: 1.5px; background: var(--b-danger); transform: rotate(-45deg); }
+.board-seg { display: flex; gap: 4px; }
+.board-seg button { flex: 1; height: 30px; border-radius: 7px; background: var(--b-panel-2) !important; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+.board-seg button[aria-pressed="true"] { background: var(--b-accent-soft) !important; color: var(--b-accent); }
+.board-dot { display: block; border-radius: 50%; background: currentColor; }
+
+.board-bottom { position: absolute; z-index: 5; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.board-hint { margin: 0 0 0 6px; flex: 0 1 auto; min-width: 0; color: var(--b-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 760px) { .board-hint { display: none; } }
+
+.board-toast {
+  position: absolute; z-index: 20; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: min(90%, 520px);
+  padding: 9px 14px; background: var(--b-ink); color: var(--b-panel); border-radius: 10px; box-shadow: var(--b-shadow);
+}
+
+.board-menu {
+  position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 210px; padding: 5px; display: flex; flex-direction: column;
+  background: var(--b-panel); border: 1px solid var(--b-line); border-radius: 10px; box-shadow: var(--b-shadow);
+}
+.board-menu button { display: flex; justify-content: space-between; align-items: center; gap: 20px; height: 32px; padding: 0 10px; border-radius: 6px; text-align: left; white-space: nowrap; }
+.board-menu button:hover, .board-menu button:focus-visible { background: var(--b-panel-2); outline: none; }
+.board-menu button i { display: inline-block; width: 1em; }
+.board-menu hr { border: 0; border-top: 1px solid var(--b-line); margin: 4px 2px; }
+.board-root kbd, .board-help kbd { font: 11px/1 "Cascadia Code", Consolas, monospace; color: var(--b-muted); background: var(--b-panel-2); border-radius: 4px; padding: 3px 5px; }
+
+.board-help {
+  border: 1px solid var(--b-line); border-radius: 14px; background: var(--b-panel); color: var(--b-ink);
+  box-shadow: var(--b-shadow); padding: 22px 24px 18px; max-width: min(92vw, 860px); -webkit-user-select: text; user-select: text;
+}
+.board-help::backdrop { background: rgba(0, 0, 0, .35); }
+.board-help h2 { margin: 0 0 14px; font-size: 16px; }
+.board-help h3 { margin: 0 0 6px; font-size: 12px; color: var(--b-muted); font-weight: 600; }
+.board-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 28px; }
+.board-keys dl { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; margin: 0 0 14px; }
+.board-keys dt { white-space: nowrap; }
+.board-keys dd { margin: 0; text-align: right; color: var(--b-muted); white-space: nowrap; }
+.board-note { margin: 0; color: var(--b-muted); line-height: 1.6; }
+.board-help form { display: flex; justify-content: flex-end; margin-top: 12px; }
+.board-help form button { height: 34px; padding: 0 16px; border-radius: 8px; background: var(--b-accent); color: var(--b-accent-ink); font-weight: 600; }
+
+/* A narrow board (a split screen, a phone): the tools go on a line of their own. */
+@container (max-width: 860px) {
+  .board-top { flex-wrap: wrap; }
+  .board-top-side { flex: 1 1 40%; }
+  .board-toolbar { order: 3; margin: 0 auto; max-width: 100%; }
+  .board-style { top: 106px; max-height: calc(100% - 172px); }
+}
+@media (prefers-reduced-motion: reduce) { .board-root * { transition: none !important; } }

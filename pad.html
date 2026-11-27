@@ -10,9 +10,8 @@
     <title>Mild Editor · Board</title>
   </head>
   <body>
-    <main id="pad">
-      <canvas id="board"></canvas>
-      <nav id="tools" aria-label="tools"></nav>
+    <main id="pad" class="board-root" tabindex="-1">
+      <div id="stage"></div>
       <p id="status" role="status"></p>
     </main>
     <script type="module" src="/src/pad/main.ts"></script>

@@ -1,14 +1,20 @@
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import qrcode from "qrcode-generator";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCollab } from "../collab/collabStore";
 import { explorerBasename, fileKey } from "../fileNaming";
 import type { Translate } from "../i18n";
 import { Icon } from "../icons";
-import { errorMessage } from "../platform";
-import { clearBoard, holdBoard, type BoardHandle } from "./boardStore";
-import { BoardCanvas, type Tool } from "./canvas";
-import { INK_SHADES, INKS, WIDTHS, type Ink } from "./model";
+import { errorMessage, IS_TAURI } from "../platform";
+import { workspace } from "../workspaceStore";
+import "./board.css";
+import { holdBoard } from "./boardStore";
+import { BoardCanvas } from "./canvas";
+import { parseBoard, type Element } from "./model";
 import { pairBoard, pairings, reachFromOutside, unpairBoard } from "./pads";
+import { mountBoardUi } from "./ui";
+import { boardWords } from "./words";
 
 /** Whether the theme in use is a dark one, from its own background. */
 const themeIsDark = () => {
@@ -77,84 +83,160 @@ function TabletPanel({ t, path, onClose }: { t: Translate; path: string; onClose
   </div>;
 }
 
+/** The writing on a board, for searching it. */
+const writingOf = (elements: readonly Element[]) => elements.flatMap((element) => element.type === "text" ? [element.text] : []).join("\n");
+
 /**
- * A board in the editor's place: the canvas, its tools, and the way to draw on it from a
- * tablet. `themeKey` changes with the theme, which every ink's shade follows.
+ * The workspace's boards beside the open one, and a search through their names and what is
+ * written on them. A board's writing is read from its file the first time it is searched.
  */
-export function BoardView({ t, path, themeKey, onClose }: { t: Translate; path: string; themeKey: string; onClose: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function BoardList({ t, boards, current, currentWriting, onOpen, onNew, onHide }: { t: Translate; boards: string[]; current: string; currentWriting: () => string; onOpen: (path: string) => void; onNew: () => void; onHide: () => void }) {
+  const [query, setQuery] = useState("");
+  const [writing, setWriting] = useState<Record<string, string>>({});
+  const asked = useRef(new Set<string>());
+  // The writing of another board may have changed since it was read.
+  useEffect(() => { asked.current.clear(); setWriting({}); }, [boards]);
+  useEffect(() => {
+    if (!query.trim()) return;
+    const folderPath = workspace.get().workspacePath;
+    if (!folderPath) return;
+    for (const path of boards) {
+      if (fileKey(path) === fileKey(current) || asked.current.has(path)) continue;
+      asked.current.add(path);
+      void invoke<string>("read_workspace_board", { request: { folderPath, filename: path } })
+        .then((text) => setWriting((known) => ({ ...known, [path]: writingOf(parseBoard(text).elements) })), () => undefined);
+    }
+  }, [query, boards, current]);
+  const needle = query.trim().toLocaleLowerCase();
+  const found = useMemo(() => boards.map((path) => {
+    if (!needle) return { path, line: "" };
+    if (path.toLocaleLowerCase().includes(needle)) return { path, line: "" };
+    const text = fileKey(path) === fileKey(current) ? currentWriting() : writing[path] ?? "";
+    const line = text.split("\n").find((item) => item.toLocaleLowerCase().includes(needle));
+    return line === undefined ? null : { path, line: line.trim().slice(0, 80) };
+  }).filter((item): item is { path: string; line: string } => item !== null), [boards, needle, writing, current, currentWriting]);
+  return <aside className="board-list" aria-label={t("boardList")}>
+    <div className="board-list-head">
+      <strong>{t("boardList")}</strong>
+      <span>
+        <button className="board-tool" title={t("boardNew")} aria-label={t("boardNew")} onClick={onNew}><Icon name="plus" size={14} /></button>
+        <button className="board-tool" title={`${t("boardListHide")} (Ctrl+\\)`} aria-label={t("boardListHide")} onClick={onHide}><Icon name="arrowLeft" size={14} /></button>
+      </span>
+    </div>
+    <label className="board-list-search"><Icon name="search" size={13} /><input type="search" value={query} placeholder={t("boardSearch")} spellCheck={false} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && query) { event.stopPropagation(); setQuery(""); } }} /></label>
+    <div className="board-list-items" role="listbox">
+      {!boards.length ? <p className="board-list-empty">{t("boardNone")}</p> : !found.length ? <p className="board-list-empty">{t("boardNoMatch")}</p> : found.map(({ path, line }) => {
+        const slash = path.lastIndexOf("/");
+        return <button key={path} role="option" aria-selected={fileKey(path) === fileKey(current)} className={`board-list-item ${fileKey(path) === fileKey(current) ? "active" : ""}`} title={path} onClick={() => onOpen(path)}>
+          <span><Icon name="board" size={13} />{explorerBasename(path)}</span>
+          {slash > 0 && <small>{path.slice(0, slash)}</small>}
+          {line && <small className="board-list-line">{line}</small>}
+        </button>;
+      })}
+    </div>
+  </aside>;
+}
+
+const LIST_KEY = "mild-board-list";
+
+/**
+ * A board in the editor's place: the board list, the canvas with its tools (ui.ts — the same
+ * as a tablet's), and the way to draw on it from a tablet. `themeKey` changes with the theme,
+ * which every colour's shade follows.
+ */
+export function BoardView({ t, path, themeKey, korean, boards, onOpen, onNew, onClose }: {
+  t: Translate; path: string; themeKey: string; korean: boolean; boards: string[];
+  onOpen: (path: string) => void; onNew: () => void; onClose: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<BoardCanvas | null>(null);
-  const handleRef = useRef<BoardHandle | null>(null);
-  const [tool, setTool] = useState<Tool>("pen");
-  const [ink, setInk] = useState<Ink>("ink");
-  const [width, setWidth] = useState<number>(WIDTHS[1]);
-  const [zoom, setZoom] = useState(1);
+  const uiRef = useRef<ReturnType<typeof mountBoardUi> | null>(null);
   const [tablet, setTablet] = useState(false);
+  const [listOpen, setListOpen] = useState(() => localStorage.getItem(LIST_KEY) !== "0");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [dark, setDark] = useState(themeIsDark);
   const shared = useCollab((state) => state.boards.has(fileKey(path)));
   const paired = pairings.use((state) => Boolean(state[fileKey(path)]));
   const tablets = pairings.use((state) => state[fileKey(path)]?.tablets ?? 0);
-  const dark = themeIsDark();
 
   useEffect(() => {
     const handle = holdBoard(path);
-    handleRef.current = handle;
-    const board = new BoardCanvas(canvasRef.current!, handle.source, { dark: themeIsDark, onZoom: setZoom });
+    const words = boardWords(korean);
+    const root = rootRef.current!;
+    const board = new BoardCanvas(stageRef.current!, handle.source, { dark: themeIsDark, words, scope: root, toast: (message) => uiRef.current?.toast(message) });
     boardRef.current = board;
-    return () => { board.destroy(); handle.release(); boardRef.current = null; handleRef.current = null; };
-  }, [path]);
-  useEffect(() => { boardRef.current?.redraw(); }, [themeKey]);
+    uiRef.current = mountBoardUi(root, board, words, {
+      name: () => explorerBasename(path),
+      savePng: async (blob, name) => {
+        if (!IS_TAURI) {
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = name;
+          link.click();
+          window.setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+          return;
+        }
+        const target = await save({ defaultPath: name, filters: [{ name: "PNG", extensions: ["png"] }] });
+        if (!target) return;
+        try {
+          await invoke("save_board_picture", { request: { path: target, data: Array.from(new Uint8Array(await blob.arrayBuffer())) } });
+          uiRef.current?.toast(t("boardSavedPng").replace("{name}", target.split(/[\\/]/).pop() ?? name));
+        } catch (error) {
+          uiRef.current?.toast(errorMessage(error));
+        }
+      },
+    });
+    // A board opens ready to write on.
+    board.setTool("pen");
+    root.focus({ preventScroll: true });
+    return () => { uiRef.current?.destroy(); uiRef.current = null; board.destroy(); handle.release(); boardRef.current = null; };
+    // `t` follows `korean`; the board is not made again for a new translate function.
+  }, [path, korean]);
   useEffect(() => {
-    const board = boardRef.current;
-    if (!board) return;
-    board.setTool(tool);
-    board.ink = ink;
-    board.width = width;
-  }, [tool, ink, width, path]);
-  // P, E and H pick the tool, while nothing that takes typing has the keyboard.
+    setDark(themeIsDark());
+    boardRef.current?.redraw();
+    uiRef.current?.refresh();
+  }, [themeKey]);
+  useEffect(() => { localStorage.setItem(LIST_KEY, listOpen ? "1" : "0"); }, [listOpen]);
+  // Ctrl+\ folds the board list away and back, wherever in the board view the keyboard is.
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (event.metaKey || event.ctrlKey || event.altKey || target?.closest("input, textarea, select, [contenteditable=true], .monaco-editor")) return;
-      const picked = ({ p: "pen", e: "eraser", h: "hand" } as Record<string, Tool>)[event.key.toLowerCase()];
-      if (picked) { setTool(picked); event.preventDefault(); }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === "Backslash" && sectionRef.current?.contains(event.target as Node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setListOpen((open) => !open);
+      }
     };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
   }, []);
 
-  const toolButton = (name: Tool, icon: "pen" | "eraser" | "hand", label: string, keyHint: string) =>
-    <button className={`board-tool ${tool === name ? "active" : ""}`} aria-pressed={tool === name} title={`${label} (${keyHint})`} onClick={() => setTool(name)}><Icon name={icon} size={15} /></button>;
+  const currentWriting = useMemo(() => () => writingOf(boardRef.current?.elements() ?? []), []);
 
-  return <section className="board-view" aria-label={explorerBasename(path)}>
+  return <section ref={sectionRef} className="board-view" aria-label={explorerBasename(path)}>
     <header className="board-bar">
+      <button className={`board-tool ${listOpen ? "active" : ""}`} aria-pressed={listOpen} title={`${t(listOpen ? "boardListHide" : "boardListShow")} (Ctrl+\\)`} aria-label={t(listOpen ? "boardListHide" : "boardListShow")} onClick={() => setListOpen((open) => !open)}><Icon name="files" size={14} /></button>
       <span className="board-name"><Icon name="board" size={14} />{explorerBasename(path)}{shared && <small className="board-shared"><Icon name="users" size={11} />{t("boardShared")}</small>}</span>
-      <div className="board-tools" role="toolbar">
-        {toolButton("pen", "pen", t("boardPen"), "P")}
-        {toolButton("eraser", "eraser", t("boardEraser"), "E")}
-        {toolButton("hand", "hand", t("boardHand"), "H")}
-        <span className="board-sep" />
-        {INKS.map((name) => <button key={name} className={`board-ink ${ink === name ? "active" : ""}`} aria-pressed={ink === name} title={t("boardInk")} style={{ ["--ink" as string]: INK_SHADES[name][dark ? "dark" : "light"] }} onClick={() => { setInk(name); if (tool !== "pen") setTool("pen"); }} />)}
-        <span className="board-sep" />
-        {WIDTHS.map((size) => <button key={size} className={`board-width ${width === size ? "active" : ""}`} aria-pressed={width === size} title={t("boardWidth")} onClick={() => { setWidth(size); if (tool !== "pen") setTool("pen"); }}><i style={{ width: size + 3, height: size + 3 }} /></button>)}
-        <span className="board-sep" />
-        <button className="board-tool" title={t("boardZoomOut")} onClick={() => boardRef.current?.zoom(1 / 1.25)}><Icon name="minus" size={14} /></button>
-        <button className="board-zoom" title={t("boardFit")} onClick={() => boardRef.current?.fit()}>{Math.round(zoom * 100)}%</button>
-        <button className="board-tool" title={t("boardZoomIn")} onClick={() => boardRef.current?.zoom(1.25)}><Icon name="plus" size={14} /></button>
-      </div>
       <div className="board-actions">
         <button className="subtle-button" onClick={() => setConfirmClear(true)}>{t("boardClear")}</button>
         <button className={`subtle-button board-tablet-button ${paired ? "paired" : ""}`} onClick={() => setTablet((open) => !open)}><Icon name="tablet" size={14} />{t("boardTablet")}{tablets > 0 && <em>{tablets}</em>}</button>
         <button className="board-tool" aria-label={t("boardClose")} title={t("boardClose")} onClick={onClose}><Icon name="close" size={14} /></button>
       </div>
     </header>
-    <div className="board-stage">
-      <canvas ref={canvasRef} className={`board-canvas tool-${tool}`} />
-      {tablet && <TabletPanel t={t} path={path} onClose={() => setTablet(false)} />}
-      {confirmClear && <div className="board-confirm" role="alertdialog">
-        <p>{shared ? t("boardClearShared") : t("boardClearAsk")}</p>
-        <div><button className="subtle-button" autoFocus onClick={() => setConfirmClear(false)}>{t("cancel")}</button><button className="danger-button" onClick={() => { if (handleRef.current) clearBoard(handleRef.current); setConfirmClear(false); }}>{t("boardClear")}</button></div>
-      </div>}
+    <div className="board-body">
+      {listOpen && <BoardList t={t} boards={boards} current={path} currentWriting={currentWriting} onOpen={onOpen} onNew={onNew} onHide={() => { setListOpen(false); rootRef.current?.focus({ preventScroll: true }); }} />}
+      <div className="board-stage">
+        <div ref={rootRef} className={`board-root in-editor ${dark ? "board-dark" : ""}`} tabIndex={-1}>
+          <div ref={stageRef} />
+        </div>
+        {tablet && <TabletPanel t={t} path={path} onClose={() => setTablet(false)} />}
+        {confirmClear && <div className="board-confirm" role="alertdialog">
+          <p>{shared ? t("boardClearShared") : t("boardClearAsk")}</p>
+          <div><button className="subtle-button" autoFocus onClick={() => setConfirmClear(false)}>{t("cancel")}</button><button className="danger-button" onClick={() => { boardRef.current?.clearAll(); setConfirmClear(false); }}>{t("boardClear")}</button></div>
+        </div>}
+      </div>
     </div>
   </section>;
 }

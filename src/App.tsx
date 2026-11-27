@@ -1,6 +1,6 @@
 import { VerdictBadge } from "./VerdictBadge";
 import { commonFolder, contestPlan, verdictView, type ContestSchedule } from "./workbench";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { AppLogo, Icon, LanguageIcon } from "./icons";
 import { diffView, splitFlags } from "./judge";
 import Editor, { type OnMount } from "@monaco-editor/react";
@@ -39,7 +39,6 @@ import { SettingsDialog } from "./SettingsDialog";
 import { useBackgroundImage } from "./backgroundImage";
 import { adjustUiZoom, getSetting, persistSettings, useSetting } from "./settingsStore";
 import { expandDirectories, refreshDirectories, rescanWorkspace, setExplorerSelection, setSavedFiles, setWorkspaceDirectories, setWorkspacePath, useSavedFiles, useWorkspaceBoards, useWorkspaceDirectories, useWorkspacePath, workspace, type RelocatedFolder } from "./workspaceStore";
-import { BoardView } from "./board/BoardView";
 import { chosenToolchain, ensureToolchains, minorVersion, toolchains } from "./toolchains";
 import { DEFAULT_PRESENCE_OPTIONS, DISCORD_APPLICATION_ID, discordActivity, type PresenceOptions } from "./discord";
 import { iconBytes } from "./appIcon";
@@ -49,6 +48,8 @@ import { unpairAll } from "./board/pads";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
 import { CollabChip, CollabDialogs, KeyboardBanner, KeyboardChip } from "./collab/CollabUi";
 import { DEVICES, openDevice, useDevice } from "./collab/devices";
+// The board brings KaTeX and its fonts: loaded the first time a board is opened.
+const BoardView = lazy(() => import("./board/BoardView").then((module) => ({ default: module.BoardView })));
 
 /** What the editor and the test panel read while no file is open. Constants, so nothing re-runs over them. */
 const NO_CODES: Record<Language, string> = { cpp: "", python: "" };
@@ -3983,7 +3984,7 @@ function App() {
             })}
           </div>}
           <KeyboardBanner t={t} shared={!openBoardPath && sharedFiles.has(activeTabId)} />
-          {openBoardPath && <BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} onClose={() => setOpenBoardPath(null)} />}
+          {openBoardPath && <Suspense fallback={null}><BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} korean={uiLocale === "ko"} boards={workspaceBoards} onOpen={openBoard} onNew={() => void newBoard()} onClose={() => setOpenBoardPath(null)} /></Suspense>}
           {tabs.length ? <>
           <Editor
             beforeMount={setupMonaco}

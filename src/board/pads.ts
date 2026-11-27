@@ -4,7 +4,7 @@ import { explorerBasename, fileKey } from "../fileNaming";
 import { IS_TAURI } from "../platform";
 import { createStore } from "../store";
 import { holdBoard, type BoardHandle } from "./boardStore";
-import { catchUp, fullState, readFromPad, type Sent, type ToPad } from "./padProtocol";
+import { applyChange, changes, fullState, heard, newSent, readFromPad, type Sent, type ToPad } from "./padProtocol";
 
 /**
  * The editor's end of drawing on a board from a tablet (src-tauri/src/pad.rs has the wire,
@@ -52,13 +52,13 @@ const show = (pairing: Pairing, change: Partial<PairingView> = {}) => pairings.s
   return { ...state, [fileKey(pairing.path)]: { urls: known?.urls ?? [], outside: known?.outside ?? { state: "none" }, ...change, tablets: pairing.tablets.size } };
 });
 
-/** Brings every tablet up to the board, a moment after it changed: a stroke being drawn changes it every frame. */
+/** Brings every tablet up to the board, a moment after it changed: a line being drawn changes it every frame. */
 const catchUpSoon = (pairing: Pairing) => {
   if (pairing.timer !== null) return;
   pairing.timer = window.setTimeout(() => {
     pairing.timer = null;
-    const strokes = pairing.handle.source.strokes();
-    for (const [client, sent] of pairing.tablets) catchUp(sent, strokes).forEach((message) => void send(pairing, client, message));
+    const { source } = pairing.handle;
+    for (const [client, sent] of pairing.tablets) changes(sent, source.elements(), source.assets()).forEach((message) => void send(pairing, client, message));
   }, 30);
 };
 
@@ -126,24 +126,20 @@ if (IS_TAURI) {
     const source = pairing.handle.source;
     let sent = pairing.tablets.get(payload.client);
     if (message.t === "hello") {
-      sent = new Map();
+      sent = newSent();
       pairing.tablets.set(payload.client, sent);
-      void send(pairing, payload.client, fullState(sent, explorerBasename(pairing.path), source.strokes()));
+      void send(pairing, payload.client, fullState(sent, explorerBasename(pairing.path), source.elements()));
+      // The pictures follow, one a message.
+      changes(sent, source.elements(), source.assets()).forEach((change) => void send(pairing, payload.client, change));
       show(pairing);
       return;
     }
     if (!sent) return;
-    // What the tablet drew it already has: counted as sent before the change is heard.
-    if (message.t === "begin") {
-      sent.set(message.stroke.id, message.stroke.points.length);
-      source.begin(message.stroke);
-    } else if (message.t === "pts") {
-      sent.set(message.id, (sent.get(message.id) ?? 0) + message.pts.length);
-      source.extend(message.id, message.pts);
-    } else if (message.t === "erase") {
-      message.ids.forEach((id) => sent!.delete(id));
-      source.erase(message.ids);
-    }
+    // What the tablet did it already has: counted as told before the change is heard back.
+    heard(sent, message);
+    if (message.t === "asset") source.putAsset(message.id, message.data);
+    else if (message.t === "pts") source.extend(message.id, message.pts);
+    else source.commit(applyChange(source.elements(), message));
   });
   void listen<PadEvent>("pad-gone", ({ payload }) => {
     const pairing = byToken.get(payload.token);

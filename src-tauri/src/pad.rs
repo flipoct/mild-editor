@@ -36,7 +36,8 @@ use tokio_tungstenite::tungstenite::Message;
 pub const DEFAULT_PORT: u16 = 10046;
 /// A request head larger than this is not one this page's browser sends.
 const MOST_HEAD: usize = 16 * 1024;
-const MOST_MESSAGE: usize = 4 * 1024 * 1024;
+/// A message larger than this is not one the tablet's page sends; a picture put on the board is the largest.
+const MOST_MESSAGE: usize = 12 * 1024 * 1024;
 
 type Outbox = mpsc::UnboundedSender<String>;
 
