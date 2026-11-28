@@ -162,6 +162,7 @@ function App() {
   // against; package.json is only the fallback for the browser preview.
   const [appVersion, setAppVersion] = useState(APP_VERSION);
   const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
+  const updateNoticeRef = useRef<HTMLElement>(null);
   /**
    * The release notes of the version now running, shown once after an update replaced the
    * app under it. They are kept from the moment the download finished, because by the time
@@ -2386,7 +2387,8 @@ function App() {
   // popover or menu above it: hide it while anything floats over it. A dialog dims the whole
   // window, so it always counts; the contest board and the explorer menu are small and sit
   // where they were opened, so they only count when they actually reach the page — the
-  // board is for reading beside the problem, not instead of it.
+  // board is for reading beside the problem, not instead of it. The update notice counts the
+  // same way, for when there was no room to move it beside the page.
   const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
     // A panel being dragged counts too: its drop preview has to show over the page, and VS
@@ -2397,7 +2399,7 @@ function App() {
     }
     // This runs after every render, keystrokes included, so the page's box is only measured
     // when a menu is up: measuring forces the browser to lay the whole window out first.
-    const menus = document.querySelectorAll(".explorer-context-menu, .contest-popover, .file-menu-list");
+    const menus = document.querySelectorAll(".explorer-context-menu, .contest-popover, .file-menu-list, .update-notice");
     const host = menus.length ? problemHostRef.current?.getBoundingClientRect() : undefined;
     const reachesPage = (element: Element) => {
       const box = element.getBoundingClientRect();
@@ -2426,6 +2428,24 @@ function App() {
     const width = Math.min(420, window.innerWidth - 2 * margin);
     if (!host || host.left >= margin + width || host.right + 2 * margin + width > window.innerWidth) return undefined;
     return host.right + margin;
+  };
+  /**
+   * The update notice sits at the top right, which is where a problem page docked on the right
+   * is: it would be drawn under the page and never seen. Like the board, it moves beside the
+   * page instead — to its left, else to its right. With room on neither side it stays put, and
+   * the overlay check above hides the page for as long as the notice is up.
+   */
+  const updateNoticePlace = (): CSSProperties | undefined => {
+    const host = showProblemPanel ? problemHostRef.current?.getBoundingClientRect() : undefined;
+    const margin = 16;
+    const top = 88;
+    const width = Math.min(340, window.innerWidth - 2 * margin);
+    const height = updateNoticeRef.current?.offsetHeight ?? 160;
+    const overlaps = (left: number) => Boolean(host) && left < host!.right && left + width > host!.left && top < host!.bottom && top + height > host!.top;
+    if (!host || !overlaps(window.innerWidth - margin - width)) return undefined;
+    if (host.left >= width + 2 * margin) return { right: window.innerWidth - host.left + margin };
+    if (window.innerWidth - host.right >= width + 2 * margin) return { right: "auto", left: host.right + margin };
+    return undefined;
   };
   // Panels keep a fixed DOM order (PANEL_IDS) and take their place through CSS `order`.
   // Reordering the DOM instead would move keyed subtrees, and React's StrictMode re-runs
@@ -4050,7 +4070,7 @@ function App() {
         </Fragment>))}
       </section>
 
-      {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside className={`update-notice ${updateStatus.phase}`} role="status" aria-live="polite">
+      {(updateStatus.phase === "available" || updateStatus.phase === "downloading" || updateStatus.phase === "installing" || updateStatus.phase === "installed" || (updateStatus.phase === "error" && updateStatus.version)) && !updateNoticeDismissed && <aside ref={updateNoticeRef} className={`update-notice ${updateStatus.phase}`} style={updateNoticePlace()} role="status" aria-live="polite">
         <strong>{updateStatus.phase === "error" ? t("updatesError") : updateStatusLine(updateStatus, t)}</strong>
         {updateStatus.phase === "downloading" && <progress max={updateStatus.total || 1} value={updateStatus.total ? updateStatus.received || 0 : undefined} aria-label={t("updatesDownloading")} />}
         {updateStatus.phase === "error" && <small>{updateStatus.error}</small>}

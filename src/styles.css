@@ -1051,7 +1051,11 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .app-shell[data-wallpaper="image"]::before {
   content: "";
   position: absolute;
-  z-index: 0;
+  /* Below the content, inside the shell's own stacking context (isolation above). The regions
+     used to sit over it with a z-index each instead, which made each one a stacking context
+     of its own: the workspace then painted over every popup the title bar opened (the File
+     menu under a docked explorer), and the status bar over the workspace's menus. */
+  z-index: -1;
   inset: -36px;
   pointer-events: none;
   background-image: linear-gradient(color-mix(in srgb, var(--bg-0) 12%, transparent), color-mix(in srgb, var(--bg-0) 12%, transparent)), var(--wallpaper-image);
@@ -1060,10 +1064,6 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
   background-size: cover, var(--wallpaper-size, cover);
   filter: blur(var(--acrylic-blur)) saturate(125%);
 }
-.app-shell[data-wallpaper="image"] > .window-titlebar,
-.app-shell[data-wallpaper="image"] > .problem-tabs,
-.app-shell[data-wallpaper="image"] > .workspace,
-.app-shell[data-wallpaper="image"] > .statusbar { position: relative; z-index: 1; }
 .app-shell[data-wallpaper] .window-titlebar,
 .app-shell[data-wallpaper] .problem-tabs,
 .app-shell[data-wallpaper] .statusbar { background: color-mix(in srgb, var(--bg-0) var(--acrylic-opacity), transparent); }
