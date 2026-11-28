@@ -57,13 +57,12 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.23.0
+            ## What's changed in v1.23.1
 
-            - **The drawing board is a whiteboard**: select, pressure pen, highlighter, formulas, shapes, arrows and pictures, with undo that stays yours in a shared room, a searchable board list, and PNG export.
-            - **Popups stay on top**: the File menu no longer opens behind a docked explorer when a wallpaper is set.
-            - **The update notice shows with the problem browser docked on the right.**
+            - **A drawing board can have a window of its own**, beside the code instead of over it. Pick it in Settings → Appearance, or with the button beside a board's close button.
+            - **Disconnect in the tablet panel ends the pairing on screen too.**
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.23.0/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.23.1/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

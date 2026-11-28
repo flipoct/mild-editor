@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.23.1
 
 - **A drawing board can have a window of its own**, beside the code instead of over it, as the problem browser can. **Settings → Appearance → Drawing boards open** chooses over the editor or in a window, and the button beside a board's close button moves it there and back. The window has the whole board: the board list and search, every tool, PNG export and the tablet. It switches boards instead of opening more windows, and closing it only hides it. The editor window still holds the board, so saving, shared rooms and tablets work as before.
 - **Disconnect** in the tablet panel now ends the pairing in the panel too. The button used to stay green and the old QR code stayed up.
