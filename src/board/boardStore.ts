@@ -5,12 +5,12 @@ import { fileKey } from "../fileNaming";
 import { workspace } from "../workspaceStore";
 import { BoardDoc } from "./boardDoc";
 import type { BoardSource } from "./canvas";
-import { parseBoard, serializeBoard, type Stroke } from "./model";
+import { parseBoard, serializeBoard, type Element } from "./model";
 
 /**
  * The boards that are open — in the editor, or on a tablet — by workspace path. Whoever
  * draws on a board holds it (`holdBoard`) and lets go when done; a board nobody holds is put
- * away, its last strokes written first.
+ * away, what was last drawn written first.
  *
  * A board in a shared room is drawn on in the room's document, and the room writes its file
  * (collabStore.ts). Any other board has a document of its own, read from its file and written
@@ -47,14 +47,14 @@ const save = (board: Open) => {
   if (board.saving !== null) window.clearTimeout(board.saving);
   board.saving = null;
   if (!board.own) return;
-  void invoke("write_workspace_board", { request: { folderPath: board.folder, filename: board.path, text: serializeBoard(board.doc.strokes()) } }).catch(() => undefined);
+  void invoke("write_workspace_board", { request: { folderPath: board.folder, filename: board.path, text: serializeBoard(board.doc.elements(), board.doc.assets()) } }).catch(() => undefined);
 };
 
 /** Points `board` at the document it is drawn on now: the room's, or one of its own read from the file. */
 const attach = async (board: Open) => {
   const room = sharedBoard(board.path);
   // Out of a room, the board goes on from what the room had: its file may not be written yet.
-  const carried = board.own ? null : board.doc.strokes();
+  const carried = board.own ? null : { elements: [...board.doc.elements()], assets: { ...board.doc.assets() } };
   board.unobserve();
   if (board.saving !== null) save(board);
   board.doc.destroy();
@@ -110,12 +110,14 @@ export const holdBoard = (path: string): BoardHandle => {
   const held = board;
   let released = false;
   const source: BoardSource = {
-    strokes: () => held.doc.strokes(),
+    elements: () => held.doc.elements(),
+    assets: () => held.doc.assets(),
     subscribe: (listener) => { held.listeners.add(listener); return () => { held.listeners.delete(listener); }; },
-    begin: (stroke: Stroke) => held.doc.add(stroke),
+    begin: (element: Element) => held.doc.add(element),
     extend: (id, points) => held.doc.extend(id, points),
     end: () => undefined,
-    erase: (ids) => held.doc.remove(ids),
+    commit: (next) => held.doc.commit(next),
+    putAsset: (id, data) => held.doc.putAsset(id, data),
   };
   return {
     path,
@@ -133,10 +135,4 @@ export const holdBoard = (path: string): BoardHandle => {
       held.own?.destroy();
     },
   };
-};
-
-/** Clears a board, for everyone drawing on it. */
-export const clearBoard = (handle: BoardHandle) => {
-  const board = [...open.values()].find((item) => fileKey(item.path) === fileKey(handle.path));
-  board?.doc.clear();
 };

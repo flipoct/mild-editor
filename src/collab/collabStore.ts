@@ -60,7 +60,7 @@ import { firstReachable, RelayProvider, type EndReason, type Link } from "./prov
  *
  * ── Boards ──
  * A drawing board in the shared folder (a `.board` file, src/board) is in the document too,
- * under `boards`: a map by random id with its `path` and its strokes (boardDoc.ts). Everyone
+ * under `boards`: a map by random id with its `path`, elements and pictures (boardDoc.ts). Everyone
  * draws on that map directly, and each member writes it to their own file a moment after it
  * changes, so the folder holds the drawing when the room is over. Drawing is not writing
  * code: the ICPC rule leaves boards alone.
@@ -878,7 +878,7 @@ const publishBoards = (room: Session) => {
 const writeBoard = (room: Session, entry: BoardEntry) => {
   if (entry.saving !== null) window.clearTimeout(entry.saving);
   entry.saving = null;
-  void bridge?.writeBoard(join(room.root, entry.path), serializeBoard(entry.doc.strokes())).catch(() => undefined);
+  void bridge?.writeBoard(join(room.root, entry.path), serializeBoard(entry.doc.elements(), entry.doc.assets())).catch(() => undefined);
 };
 
 const saveBoardSoon = (room: Session, entry: BoardEntry) => {
@@ -958,8 +958,8 @@ const syncBoards = (room: Session, boards: string[]) => {
       room.doc.transact(() => {
         room.boards.set(id, map);
         map.set("path", path);
-        // Made with the board: two members drawing a first stroke at once would each make their own list, and one would be lost.
-        map.set("strokes", new Y.Array());
+        // Made with the board: two members drawing a first line at once would each make their own list, and one would be lost.
+        map.set("elements", new Y.Array());
         const doc = new BoardDoc(map);
         doc.replace(parseBoard(text));
         doc.destroy();

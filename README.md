@@ -262,4 +262,6 @@ One Dark Pro, GitHub Dark Dimmed and Everforest Dark are adapted from their VS C
 
 The terminal is drawn by [xterm.js](https://xtermjs.org), MIT licensed, Copyright (c) 2017-2019 The xterm.js authors, (c) 2014-2016 SourceLair and (c) 2012-2013 Christopher Jeffrey, and runs on [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty) from WezTerm, MIT licensed, Copyright (c) 2018 Wez Furlong.
 
+Formulas written on a drawing board are laid out by [KaTeX](https://katex.org), MIT licensed, Copyright (c) 2013-2020 Khan Academy and other contributors, and pen lines are shaped by [perfect-freehand](https://github.com/steveruizok/perfect-freehand), MIT licensed, Copyright (c) 2021 Stephen Ruiz Ltd.
+
 > The local runner is intended for personal use with trusted code. Use an isolated sandbox before exposing code execution to untrusted users.

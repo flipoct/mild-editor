@@ -1,25 +1,26 @@
 import * as Y from "yjs";
-import { cleanPoints, cleanWidth, INKS, isStrokeId, MOST_POINTS, MOST_STROKES, type Ink, type Stroke } from "./model.ts";
+import { cleanElement, fromStroke, isAssetData, isAssetId, MOST_ELEMENTS, MOST_POINTS, type Assets, type Board, type Element } from "./model.ts";
 
 /**
  * A board as a Yjs document, so that it can be drawn on by several people at once — in a
  * room, a board's map sits in the room's document beside the files (collabStore.ts); alone,
  * it has a document of its own.
  *
- * Under `root`, `strokes` is a Y.Array of strokes in drawing order. Each stroke is a Y.Map —
- * `id`, `ink`, `width`, and `points`, a Y.Array of numbers — so that a stroke being drawn
- * reaches everyone a few points at a time rather than once it is finished. Erasing removes
- * whole strokes; clearing removes them all.
+ * Under `root`, `elements` is a Y.Array of elements in drawing order, each a Y.Map of its
+ * fields. A pen line's `points` is a Y.Array of numbers, so that a line being drawn reaches
+ * everyone a few points at a time rather than once it is finished. `assets` maps a picture's
+ * id to its `data:` URL. A board written by an editor from before there were elements has a
+ * `strokes` list instead; it is read as pen lines, and anything done to one moves it over.
  *
- * What comes out of `strokes()` is what the canvas draws: plain arrays, rebuilt only for the
- * strokes that changed, and checked — a teammate's document is only as sound as their copy.
+ * What comes out of `elements()` is what the canvas draws: plain objects, rebuilt only for the
+ * elements that changed, and checked — a teammate's document is only as sound as their copy.
+ * Any change is `commit`ted as the whole list it should become; only the difference is written.
  */
 export class BoardDoc {
   readonly root: Y.Map<unknown>;
-  private cache: Stroke[] | null = null;
-  /** Each stroke's last plain copy, and how many numbers of its points it had then. */
-  private copies = new WeakMap<Y.Map<unknown>, { length: number; stroke: Stroke | null }>();
-
+  private cache: Element[] | null = null;
+  private assetCache: Assets | null = null;
+  private copies = new WeakMap<Y.Map<unknown>, Element | null>();
   private listeners = new Set<(origin: unknown) => void>();
 
   constructor(root: Y.Map<unknown>) {
@@ -27,7 +28,14 @@ export class BoardDoc {
     root.observeDeep(this.changed);
   }
 
-  private changed = (_: unknown, transaction: Y.Transaction) => {
+  private changed = (events: Y.YEvent<Y.AbstractType<unknown>>[], transaction: Y.Transaction) => {
+    for (const event of events) {
+      const target = event.target;
+      // An element's own fields, or its points, changed: its copy is made again.
+      const element = target instanceof Y.Map ? target : target.parent instanceof Y.Map ? target.parent : null;
+      if (element && element !== this.root) this.copies.delete(element as Y.Map<unknown>);
+      if (target === this.root.get("assets") || target === this.root) this.assetCache = null;
+    }
     this.cache = null;
     this.listeners.forEach((listener) => listener(transaction.origin));
   };
@@ -38,13 +46,13 @@ export class BoardDoc {
     this.listeners.clear();
   }
 
-  private list(): Y.Array<Y.Map<unknown>> | null {
-    const list = this.root.get("strokes");
+  private list(name: "elements" | "strokes" = "elements"): Y.Array<Y.Map<unknown>> | null {
+    const list = this.root.get(name);
     return list instanceof Y.Array ? list as Y.Array<Y.Map<unknown>> : null;
   }
 
   /**
-   * The list of strokes, made the first time something is drawn when it is not there. A
+   * The list of elements, made the first time something is drawn when it is not there. A
    * board in a room has it from the start (collabStore.ts): made by two members at once,
    * only one of the two lists would be kept.
    */
@@ -52,7 +60,7 @@ export class BoardDoc {
     const known = this.list();
     if (known) return known;
     const list = new Y.Array<Y.Map<unknown>>();
-    this.root.set("strokes", list);
+    this.root.set("elements", list);
     return list;
   }
 
@@ -61,67 +69,99 @@ export class BoardDoc {
     if (doc) doc.transact(work, origin); else work();
   }
 
-  private copy(map: Y.Map<unknown>): Stroke | null {
-    const points = map.get("points");
-    if (!(points instanceof Y.Array)) return null;
-    const length = Math.min(points.length, MOST_POINTS * 2);
-    const known = this.copies.get(map);
-    if (known && known.length === length) return known.stroke;
-    let stroke: Stroke | null = null;
-    const id = map.get("id");
-    const ink = map.get("ink");
-    if (isStrokeId(id)) {
-      // Points only ever grow while a stroke is drawn: the copy takes the new ones on.
-      const growing = known?.stroke && known.length < length;
-      const added = cleanPoints(points.slice(growing ? known!.length : 0, length - (length % 2)));
-      if (added) {
-        stroke = {
-          id,
-          ink: typeof ink === "string" && (INKS as readonly string[]).includes(ink) ? ink as Ink : "ink",
-          width: cleanWidth(map.get("width")),
-          points: growing ? [...known!.stroke!.points, ...added] : added,
-        };
-      }
-    }
-    this.copies.set(map, { length: length - (length % 2), stroke });
-    return stroke;
+  private copy(map: Y.Map<unknown>, legacy: boolean): Element | null {
+    if (this.copies.has(map)) return this.copies.get(map)!;
+    const raw: Record<string, unknown> = {};
+    map.forEach((value, key) => {
+      raw[key] = value instanceof Y.Array ? value.slice(0, MOST_POINTS * 3) : value;
+    });
+    const element = legacy ? fromStroke(raw) : cleanElement(raw);
+    this.copies.set(map, element);
+    return element;
   }
 
-  /** The strokes, earliest first. The same array until something changes. */
-  strokes(): readonly Stroke[] {
+  /** The elements, earliest first. The same array until something changes. */
+  elements(): readonly Element[] {
     if (this.cache) return this.cache;
-    const list = this.list();
-    const strokes: Stroke[] = [];
+    const elements: Element[] = [];
     const seen = new Set<string>();
-    list?.forEach((map) => {
-      if (strokes.length >= MOST_STROKES || !(map instanceof Y.Map)) return;
-      const stroke = this.copy(map);
-      if (stroke && stroke.points.length && !seen.has(stroke.id)) {
-        seen.add(stroke.id);
-        strokes.push(stroke);
+    const take = (list: Y.Array<Y.Map<unknown>> | null, legacy: boolean) => list?.forEach((map) => {
+      if (elements.length >= MOST_ELEMENTS || !(map instanceof Y.Map)) return;
+      const element = this.copy(map, legacy);
+      if (element && !seen.has(element.id)) {
+        seen.add(element.id);
+        elements.push(element);
       }
     });
-    return this.cache = strokes;
+    take(this.list("strokes"), true);
+    take(this.list(), false);
+    return this.cache = elements;
   }
 
-  /** Starts a stroke, with whatever points it has so far. */
-  add(stroke: Stroke, origin: unknown = null) {
+  /** The pictures, by id. */
+  assets(): Assets {
+    if (this.assetCache) return this.assetCache;
+    const assets: Assets = {};
+    const map = this.root.get("assets");
+    if (map instanceof Y.Map) map.forEach((data, id) => { if (isAssetId(id) && isAssetData(data)) assets[id] = data; });
+    return this.assetCache = assets;
+  }
+
+  putAsset(id: string, data: string, origin: unknown = null) {
+    if (!isAssetId(id) || !isAssetData(data)) return;
     this.transact(() => {
-      const map = new Y.Map<unknown>();
-      const points = new Y.Array<number>();
-      points.push(stroke.points);
-      map.set("id", stroke.id);
-      map.set("ink", stroke.ink);
-      map.set("width", stroke.width);
-      map.set("points", points);
-      this.ensureList().push([map]);
+      let map = this.root.get("assets");
+      if (!(map instanceof Y.Map)) { map = new Y.Map<string>(); this.root.set("assets", map); }
+      const assets = map as Y.Map<string>;
+      if (assets.get(id) !== data) assets.set(id, data);
     }, origin);
+  }
+
+  private static fill(map: Y.Map<unknown>, element: Element, before: Element | null) {
+    // A map not in the document yet cannot be read: everything is simply set.
+    if (!map.doc) {
+      for (const [key, value] of Object.entries(element)) {
+        if (key !== "points") { map.set(key, value); continue; }
+        const list = new Y.Array<number>();
+        list.push(value as number[]);
+        map.set("points", list);
+      }
+      return;
+    }
+    for (const [key, value] of Object.entries(element)) {
+      if (key === "points") {
+        const points = value as number[];
+        const known = map.get("points");
+        const old = before?.type === "pen" ? before.points : null;
+        // A line being drawn only grows: its new points are added, the rest is not sent again.
+        if (known instanceof Y.Array && old && points.length > old.length && old.every((number, index) => points[index] === number)) known.push(points.slice(old.length));
+        else if (!(known instanceof Y.Array) || !old || old.length !== points.length || old.some((number, index) => points[index] !== number)) {
+          const list = new Y.Array<number>();
+          list.push(points);
+          map.set("points", list);
+        }
+      } else if (map.get(key) !== value) {
+        map.set(key, value);
+      }
+    }
+    for (const key of [...map.keys()]) if (!(key in element)) map.delete(key);
+  }
+
+  private static mapOf(element: Element) {
+    const map = new Y.Map<unknown>();
+    BoardDoc.fill(map, element, null);
+    return map;
+  }
+
+  /** Starts a pen line, with whatever points it has so far. */
+  add(element: Element, origin: unknown = null) {
+    this.transact(() => this.ensureList().push([BoardDoc.mapOf(element)]), origin);
   }
 
   private find(id: string): Y.Map<unknown> | null {
     const list = this.list();
     if (!list) return null;
-    // A stroke being drawn is nearly always the last one.
+    // A line being drawn is nearly always the last one.
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const map = list.get(index);
       if (map instanceof Y.Map && map.get("id") === id) return map;
@@ -129,36 +169,63 @@ export class BoardDoc {
     return null;
   }
 
-  /** More points for a stroke being drawn. */
+  /** More points for a pen line being drawn. */
   extend(id: string, points: number[], origin: unknown = null) {
-    const map = this.find(id);
-    const list = map?.get("points");
-    if (!(list instanceof Y.Array) || points.length % 2 || list.length + points.length > MOST_POINTS * 2) return;
+    const list = this.find(id)?.get("points");
+    if (!(list instanceof Y.Array) || points.length % 3 || list.length + points.length > MOST_POINTS * 3) return;
     this.transact(() => list.push(points), origin);
   }
 
-  remove(ids: readonly string[], origin: unknown = null) {
-    const list = this.list();
-    if (!list || !ids.length) return;
-    const gone = new Set(ids);
+  /** Makes the board `next`: what is gone is taken out, what changed is written, what is new is put in its place. */
+  commit(next: readonly Element[], origin: unknown = null) {
+    const nextAt = new Map(next.map((element, index) => [element.id, index]));
+    const current = new Map(this.elements().map((element) => [element.id, element]));
+    /** Old strokes left as they were, where they are. */
+    const unmoved = new Set<string>();
     this.transact(() => {
+      const legacy = this.list("strokes");
+      if (legacy) {
+        // Anything done to an old stroke moves it over to the elements.
+        for (let index = legacy.length - 1; index >= 0; index -= 1) {
+          const id = legacy.get(index)?.get("id") as string;
+          if (!nextAt.has(id) || next[nextAt.get(id)!] !== current.get(id)) { legacy.delete(index, 1); current.delete(id); }
+          else unmoved.add(id);
+        }
+      }
+      const list = this.ensureList();
       for (let index = list.length - 1; index >= 0; index -= 1) {
         const map = list.get(index);
-        if (map instanceof Y.Map && gone.has(map.get("id") as string)) list.delete(index, 1);
+        const id = map instanceof Y.Map ? map.get("id") as string : "";
+        if (!(map instanceof Y.Map) || !nextAt.has(id)) list.delete(index, 1);
       }
+      // What stays, in its order: the longest run already in `next`'s order keeps its place, the rest is moved.
+      const order = list.toArray().map((map) => nextAt.get(map.get("id") as string) ?? -1);
+      const keep = longestRising(order);
+      for (let index = list.length - 1; index >= 0; index -= 1) if (!keep.has(index)) list.delete(index, 1);
+      let at = 0;
+      next.forEach((element) => {
+        if (unmoved.has(element.id)) return;
+        const map = at < list.length ? list.get(at) : null;
+        if (map && map.get("id") === element.id) {
+          const before = current.get(element.id) ?? null;
+          if (before !== element) BoardDoc.fill(map, element, before);
+        } else {
+          list.insert(at, [BoardDoc.mapOf(element)]);
+        }
+        at += 1;
+      });
     }, origin);
   }
 
   clear(origin: unknown = null) {
-    const list = this.list();
-    if (list?.length) this.transact(() => list.delete(0, list.length), origin);
+    this.commit([], origin);
   }
 
-  /** Replaces everything with `strokes`, as a file read from disk says. */
-  replace(strokes: readonly Stroke[], origin: unknown = null) {
+  /** Replaces everything with `board`, as a file read from disk says. */
+  replace(board: Board, origin: unknown = null) {
     this.transact(() => {
-      this.clear(origin);
-      strokes.forEach((stroke) => this.add(stroke, origin));
+      this.commit(board.elements, origin);
+      for (const [id, data] of Object.entries(board.assets)) this.putAsset(id, data, origin);
     }, origin);
   }
 
@@ -168,3 +235,23 @@ export class BoardDoc {
     return () => { this.listeners.delete(listener); };
   }
 }
+
+/** The indices of a longest strictly rising run in `values` (negative ones never count). */
+const longestRising = (values: number[]): Set<number> => {
+  const tails: number[] = [];
+  const before = new Array<number>(values.length).fill(-1);
+  values.forEach((value, index) => {
+    if (value < 0) return;
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (values[tails[middle]] < value) low = middle + 1; else high = middle;
+    }
+    if (low > 0) before[index] = tails[low - 1];
+    tails[low] = index;
+  });
+  const keep = new Set<number>();
+  for (let index = tails.length ? tails[tails.length - 1] : -1; index >= 0; index = before[index]) keep.add(index);
+  return keep;
+};

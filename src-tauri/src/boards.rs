@@ -1,6 +1,7 @@
 //! Drawing boards: `.board` files in the workspace, drawn on instead of edited (src/board in
-//! the frontend). A board is a JSON document of strokes; this side only lists, reads, writes
-//! and deletes them, and checks that what it is asked about is a board inside the workspace.
+//! the frontend). A board is a JSON document of elements and the pictures they show; this side
+//! only lists, reads, writes and deletes them, and checks that what it is asked about is a board
+//! inside the workspace. It also saves a board exported as a PNG where the user chose.
 
 use crate::workspace::{metadata_lock, walk_workspace, workspace_relative_filename};
 use serde::Deserialize;
@@ -10,7 +11,7 @@ use std::path::{Path, PathBuf};
 pub(crate) const BOARD_EXTENSION: &str = "board";
 
 /// A board larger than this is not one the editor wrote; it is refused rather than loaded.
-const MOST_BYTES: u64 = 32 * 1024 * 1024;
+const MOST_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +100,25 @@ pub(crate) fn delete_workspace_board(request: BoardRequest) -> Result<(), String
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("Could not delete the board: {error}")),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoardPictureRequest {
+    path: String,
+    data: Vec<u8>,
+}
+
+/// Saves a board exported as a PNG (src/board/export.ts) at the path the save dialog gave.
+#[tauri::command(async)]
+pub(crate) fn save_board_picture(request: BoardPictureRequest) -> Result<(), String> {
+    if request.data.len() as u64 > MOST_BYTES * 4 {
+        return Err("The picture is too large to save.".into());
+    }
+    if !request.data.starts_with(b"\x89PNG") {
+        return Err("Only a PNG is saved here.".into());
+    }
+    fs::write(&request.path, &request.data).map_err(|error| format!("Could not save {}: {error}", request.path))
 }
 
 #[cfg(test)]

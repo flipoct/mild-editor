@@ -224,6 +224,7 @@ pub fn run() {
             boards::read_workspace_board,
             boards::write_workspace_board,
             boards::delete_workspace_board,
+            boards::save_board_picture,
             pad::pad_open,
             pad::pad_close,
             pad::pad_send,
