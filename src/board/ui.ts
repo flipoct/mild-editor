@@ -144,7 +144,9 @@ export const mountBoardUi = (root: HTMLElement, board: BoardCanvas, words: Board
       item(words.copyPng, async () => {
         const blob = await picture();
         if (!blob) return;
-        try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); toast(words.copied); } catch { toast(words.pngFailed); }
+        // A clipboard that never answers (a webview waiting on a permission nobody sees) is a failure, not a wait.
+        const late = new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 5000));
+        try { await Promise.race([navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]), late]); toast(words.copied); } catch { toast(words.pngFailed); }
       });
     }
     menu.append(element("hr"));

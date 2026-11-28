@@ -1,4 +1,3 @@
-import katexCss from "katex/dist/katex.min.css?inline";
 import type { BoardCanvas } from "./canvas";
 import { boundsOf } from "./model";
 import { canvasShade, drawElement, TEXT_CSS } from "./render";
@@ -18,18 +17,38 @@ const toBase64 = (buffer: ArrayBuffer) => {
   return btoa(text);
 };
 
-/** KaTeX's style with every font in it as a `data:` URL: a picture cannot load anything. */
+/**
+ * KaTeX's style, as this page loaded it, with every font in it as a `data:` URL: a picture
+ * cannot load anything. Read from the page's own style sheets rather than imported as text,
+ * so it is the same wherever the page came from (a build, the development server, a tablet).
+ */
 const katexWithFonts = () => fontedKatex ??= (async () => {
-  const urls = [...new Set([...katexCss.matchAll(/url\(\s*["']?([^"')]+\.woff2)["']?\s*\)/g)].map((match) => match[1]))];
-  const data = new Map<string, string>();
-  await Promise.all(urls.map(async (url) => {
-    if (url.startsWith("data:")) return;
-    const response = await fetch(url);
-    if (response.ok) data.set(url, `data:font/woff2;base64,${toBase64(await response.arrayBuffer())}`);
+  const rules: { text: string; base: string }[] = [];
+  for (const sheet of [...document.styleSheets]) {
+    let list: CSSRuleList;
+    try { list = sheet.cssRules; } catch { continue; }
+    const texts = [...list].map((rule) => rule.cssText);
+    if (!texts.some((text) => text.includes("KaTeX_Main"))) continue;
+    const base = sheet.href ?? location.href;
+    texts.forEach((text) => rules.push({ text, base }));
+  }
+  const face = /url\(\s*["']?([^"')]+\.woff2)["']?\s*\)/;
+  const fonts = new Map<string, string>();
+  await Promise.all(rules.map(async ({ text, base }) => {
+    const found = text.startsWith("@font-face") ? face.exec(text) : null;
+    if (!found || found[1].startsWith("data:")) return;
+    const url = new URL(found[1], base).href;
+    if (fonts.has(url)) return;
+    fonts.set(url, "");
+    const response = await fetch(url).catch(() => null);
+    if (response?.ok) fonts.set(url, `data:font/woff2;base64,${toBase64(await response.arrayBuffer())}`);
   }));
-  // Only the woff2 of each face: the others would be fetched as well.
-  return katexCss
-    .replace(/src:\s*url\(\s*["']?([^"')]+\.woff2)["']?\s*\)\s*format\(["']?woff2["']?\)[^;}]*/g, (whole, url: string) => data.has(url) ? `src:url(${data.get(url)}) format("woff2")` : whole);
+  return rules.map(({ text, base }) => {
+    const found = text.startsWith("@font-face") ? face.exec(text) : null;
+    const data = found ? fonts.get(new URL(found[1], base).href) : "";
+    // Only the woff2 of each face: the others would be fetched as well.
+    return found && data ? text.replace(/src:[^;}]*/, `src: url(${data}) format("woff2")`) : text;
+  }).join("\n");
 })();
 
 const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
