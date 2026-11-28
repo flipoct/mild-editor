@@ -70,6 +70,10 @@ runs:
         brew install ninja
         if [ "${{ steps.cef.outputs.cache-hit }}" != "true" ]; then
           git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$RUNNER_TEMP/cef-rs"
+          # CEF's index.json outgrew ureq's 10 MB default for a JSON body (10.7 MB on
+          # 2026-11-27), and download-cef reads it whole: raise the limit before it runs.
+          perl -pi -e 's/\.read_json\(\)\?\)/.with_config().limit(64 * 1024 * 1024).read_json()?)/' "$RUNNER_TEMP/cef-rs/download-cef/src/lib.rs"
+          grep -q 'limit(64' "$RUNNER_TEMP/cef-rs/download-cef/src/lib.rs"
           (cd "$RUNNER_TEMP/cef-rs" && cargo run -p export-cef-dir -- --force --target ${{ inputs.target }} "$RUNNER_TEMP/cef")
         fi
         echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
@@ -83,6 +87,11 @@ runs:
         choco install ninja --no-progress -y
         if ("${{ steps.cef.outputs.cache-hit }}" -ne "true") {
           git clone --depth 1 --branch cef-v151.8.1+151.3.24 https://github.com/tauri-apps/cef-rs "$env:RUNNER_TEMP/cef-rs"
+          # See the macOS step: CEF's index.json is over ureq's 10 MB default.
+          $lib = "$env:RUNNER_TEMP/cef-rs/download-cef/src/lib.rs"
+          $source = (Get-Content -Raw $lib).Replace(".read_json()?)", ".with_config().limit(64 * 1024 * 1024).read_json()?)")
+          if (-not $source.Contains("limit(64")) { throw "download-cef: read_json() not found to raise its limit" }
+          Set-Content -NoNewline -Path $lib -Value $source
           Push-Location "$env:RUNNER_TEMP/cef-rs"
           cargo run -p export-cef-dir -- --force --target ${{ inputs.target }} "$env:RUNNER_TEMP/cef"
           Pop-Location
