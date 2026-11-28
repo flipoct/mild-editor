@@ -66,6 +66,7 @@ const definitions = {
   atcoderHandle: text("mild-atcoder-handle", "", trimmed),
   codeforcesHandle: text("mild-codeforces-handle", "", trimmed),
   dojHandle: text("mild-doj-handle", "", trimmed),
+  bojHandle: text("mild-boj-handle", "", trimmed),
   // Language for every file the editor creates on its own: contest and single imports,
   // Competitive Companion, and blank files typed without an extension. The old key only
   // covered contest imports, so it seeds the new one for existing installs.

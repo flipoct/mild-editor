@@ -10,7 +10,7 @@
 
 export type SubmitLanguage = "cpp" | "python";
 
-export type SubmitJudge = "atcoder" | "codeforces" | "doj";
+export type SubmitJudge = "atcoder" | "codeforces" | "doj" | "boj";
 
 export type SubmitTarget = {
   judge: SubmitJudge;
@@ -22,7 +22,8 @@ export type SubmitTarget = {
   problemIndex?: string;
   /** Codeforces problem set: `1234A`, typed into `submittedProblemCode`. */
   problemCode?: string;
-  /** DOJ: the problem's segment of the URL, which the submit form carries as `problemSlug`. */
+  /** DOJ: the problem's segment of the URL, which the submit form carries as `problemSlug`.
+   *  BOJ: what follows `/submit/` in the form's address — `1000`, or `1684/1` in a contest. */
   problemSlug?: string;
 };
 
@@ -49,6 +50,13 @@ export const submitTarget = (sourceUrl: string | undefined): SubmitTarget | null
   // which is what makes it a submission to that contest; the site's own IDE link keeps them as they are.
   const doj = host === "doj.kr" ? path.match(/^(.*\/problems\/([^/]+?))(?:\/ide)?$/) : null;
   if (doj && doj[2] !== "ide") return { judge: "doj", url: `${url.origin}${doj[1]}/ide${url.search}`, problemSlug: doj[2] };
+  // BOJ submits from `/submit/<id>`, and a contest's problem from `/contest/submit/<contest>/<number>`.
+  if (host === "acmicpc.net") {
+    const archive = path.match(/^\/(?:problem|submit)\/(\d+)$/);
+    if (archive) return { judge: "boj", url: `https://acmicpc.net/submit/${archive[1]}`, problemSlug: archive[1] };
+    const contest = path.match(/^\/contest\/(?:problem|submit)\/(\d+)\/(\d+)$/);
+    if (contest) return { judge: "boj", url: `https://acmicpc.net/contest/submit/${contest[1]}/${contest[2]}`, problemSlug: `${contest[1]}/${contest[2]}` };
+  }
   return null;
 };
 
@@ -67,7 +75,9 @@ export function pickLanguageOption(options: Array<{ value: string; text: string;
   if (current) return current.value;
   const version = (text: string) => {
     const match = language === "cpp" ? text.match(/\+\+\s*(\d+)/) : text.match(/(\d+(?:\.\d+)?)/);
-    return match ? Number(match[1]) : 0;
+    const number = match ? Number(match[1]) : 0;
+    // C++98 is the oldest standard, not the newest: a two-digit year from the last century.
+    return language === "cpp" && number >= 90 ? number - 100 : number;
   };
   // GCC is what the local runner uses; PyPy is what a contest solution in Python needs.
   const preferred = language === "cpp" ? /gcc|g\+\+/i : /pypy/i;
@@ -118,10 +128,27 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
 
     if (document.querySelector(".doj-local-ide")) {
       // The IDE at `/problems/<slug>/ide`: a workspace of files, of which the entry file is sent.
-      const mainEditor = () => document.querySelector(".doj-local-ide-code-pane.is-main-group .cm-content");
+      // Two panes carry the main group's class; the one not hidden is the code (the other is the AI chat).
+      const mainEditor = () => document.querySelector(".doj-local-ide-code-pane.is-main-group:not([hidden]) .cm-content") ?? document.querySelector(".doj-local-ide-code-pane.is-main-group .cm-content");
       const ready = () => !document.querySelector(".doj-local-ide-loading") && Boolean(mainEditor());
       await until(ready);
-      const languageList = () => document.querySelector<HTMLSelectElement>('.doj-local-ide select[aria-label="제출 언어"], .doj-local-ide select[aria-label="Submission language"], .doj-local-ide-language select');
+      // The language list is DOJ's own dropdown: a combobox button carrying the list's class, and
+      // beside it, in the same root, the native select it keeps in step and reads from. Older
+      // pages had the native select itself, or one inside an element of that class.
+      const languageList = () => {
+        const marked = document.querySelector(".doj-local-ide .doj-local-ide-language");
+        if (marked instanceof HTMLSelectElement) return marked;
+        return marked?.closest("[data-select-root]")?.querySelector<HTMLSelectElement>("select")
+          ?? document.querySelector<HTMLSelectElement>('.doj-local-ide-language select, .doj-local-ide select[aria-label="제출 언어"], .doj-local-ide select[aria-label="Submission language"]');
+      };
+      // A problem that limits its languages shows a button to list them in the list's place.
+      if (!languageList()) {
+        const reveal = [...document.querySelectorAll<HTMLButtonElement>(".doj-local-ide button.button-ghost")].find((button) => !button.disabled && /언어|language/i.test(button.textContent ?? ""));
+        if (reveal) {
+          reveal.click();
+          await until(() => Boolean(languageList()));
+        }
+      }
       const list = languageList();
       if (list) {
         const value = pick([...list.options].map((option) => ({ value: option.value, text: option.text, selected: option.selected })), payload.language);
@@ -166,6 +193,27 @@ async function fillSubmitForm(payload: FillPayload, pick: typeof pickLanguageOpt
     }
     for (const content of document.querySelectorAll(".doj-submit-modal .cm-content")) replaceCode(content);
     await settle();
+    return;
+  }
+
+  if (payload.judge === "boj") {
+    // BOJ dresses its language list with chosen.js and its source with CodeMirror 5.
+    const list = document.querySelector<HTMLSelectElement>('#submit_form select[name="language"], select#language');
+    if (list) {
+      const value = pick([...list.options].map((option) => ({ value: option.value, text: option.text, selected: option.selected })), payload.language);
+      if (value && list.value !== value) {
+        assign(list, value);
+        changed(list);
+        const jquery = (window as unknown as { jQuery?: (element: Element) => { trigger: (name: string) => void } }).jQuery;
+        try { jquery?.(list).trigger("chosen:updated"); } catch { /* the native list holds the value */ }
+      }
+    }
+    const area = document.querySelector<HTMLTextAreaElement>('#submit_form textarea[name="source"], textarea#source');
+    if (area) { assign(area, payload.code); changed(area); }
+    for (const element of document.querySelectorAll(".CodeMirror")) {
+      try { (element as unknown as { CodeMirror?: { setValue: (value: string) => void } }).CodeMirror?.setValue(payload.code); } catch { /* the textarea carries the code */ }
+    }
+    document.querySelector<HTMLElement>("#submit_button")?.scrollIntoView({ block: "center" });
     return;
   }
 
@@ -262,6 +310,18 @@ async function pressSubmitForm(payload: PressPayload, pick: typeof pickLanguageO
     const areas = [...form.querySelectorAll<HTMLTextAreaElement>('textarea[name="source"], textarea#sourceCodeTextarea')];
     if (!areas.length || !areas.every((area) => same(area.value, payload.code)) || !aceAgrees()) return report("code");
     button = form.querySelector<HTMLInputElement>('input.submit[type="submit"], input[type="submit"], button[type="submit"]');
+  } else if (payload.judge === "boj") {
+    const form = document.querySelector<HTMLFormElement>("#submit_form") ?? document.querySelector<HTMLFormElement>('form[action*="/submit/"]');
+    // A visitor is sent to the login page, which has its own form.
+    if (!form) return report(document.querySelector("#login_form") ? "login" : "form");
+    if (!new URL(form.action, location.href).pathname.replace(/\/+$/, "").endsWith(`/submit/${payload.problemSlug ?? ""}`)) return report("problem");
+    const list = form.querySelector<HTMLSelectElement>('select[name="language"]');
+    if (!list || !family.test(list.selectedOptions[0]?.text ?? "")) return report("language");
+    const mirror = form.querySelector(".CodeMirror") as unknown as { CodeMirror?: { getValue: () => string } } | null;
+    const area = form.querySelector<HTMLTextAreaElement>('textarea[name="source"]');
+    const shown = mirror?.CodeMirror ? mirror.CodeMirror.getValue() : area?.value;
+    if (shown === undefined || !same(shown, payload.code)) return report("code");
+    button = form.querySelector<HTMLButtonElement>('#submit_button, button[type="submit"]');
   } else {
     // DOJ's submit button sits in the IDE (or the older modal) and names its form, whose hidden
     // inputs mirror the editor's state: they are what is sent.

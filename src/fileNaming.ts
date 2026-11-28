@@ -88,6 +88,11 @@ export const problemIdentity = (source: string | undefined, rawUrl: string | und
       const id = [...parts].reverse().find((part) => /^\d+$/.test(part));
       if (id) return `doj:${id}`;
     }
+    if (source === "boj") {
+      // `/problem/<id>`, or a contest's own `/contest/problem/<contest>/<number>`.
+      if (parts[0] === "problem" && /^\d+$/.test(parts[1] ?? "")) return `boj:${parts[1]}`;
+      if (parts[0] === "contest" && parts[1] === "problem" && parts[2] && parts[3]) return `boj:contest:${parts[2]}:${parts[3]}`;
+    }
     url.search = "";
     url.hash = "";
     return `${source || "other"}:${url.toString().replace(/\/$/, "").toLocaleLowerCase()}`;
@@ -97,12 +102,13 @@ export const problemIdentity = (source: string | undefined, rawUrl: string | und
 };
 
 /** The judge a page is on, by its address; "other" for anything else. */
-export const sourceOfUrl = (rawUrl: string): "atcoder" | "codeforces" | "doj" | "other" => {
+export const sourceOfUrl = (rawUrl: string): "atcoder" | "codeforces" | "doj" | "boj" | "other" => {
   try {
     const host = new URL(rawUrl).hostname.replace(/^www\./, "");
     if (host === "atcoder.jp" || host.endsWith(".atcoder.jp")) return "atcoder";
     if (host === "codeforces.com" || host.endsWith(".codeforces.com")) return "codeforces";
     if (host === "doj.kr" || host.endsWith(".doj.kr")) return "doj";
+    if (host === "acmicpc.net" || host.endsWith(".acmicpc.net")) return "boj";
   } catch { /* not an address */ }
   return "other";
 };
@@ -112,6 +118,7 @@ const PROBLEM_PAGE: Record<string, RegExp> = {
   atcoder: /\/tasks\/[^/]+\/?$/,
   codeforces: /\/(contest|gym)\/\d+\/problem\/[^/]+\/?$|\/problemset\/problem\/\d+\/[^/]+\/?$/,
   doj: /\/problems\/\d+\/?$/,
+  boj: /^\/(problem\/\d+|contest\/problem\/\d+\/\d+)\/?$/,
 };
 
 /** Whether `fileUrl` (a file's problem) and `pageUrl` (a page) are the same problem, under any of its addresses. */
@@ -139,6 +146,7 @@ const platformFolders: Record<string, string> = {
   atcoder: "AtCoder",
   codeforces: "Codeforces",
   doj: "DOJ",
+  boj: "BOJ",
 };
 
 export const platformFolder = (source: string | undefined) => platformFolders[source || ""] || "Other";

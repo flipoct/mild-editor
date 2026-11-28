@@ -12,6 +12,10 @@ const eq = (label: string, got: unknown, want: unknown) => {
 };
 
 // --- DOJ: the problem's IDE page --------------------------------------------------------
+eq("BOJ problem", submitTarget("https://acmicpc.net/problem/1000"), { judge: "boj", url: "https://acmicpc.net/submit/1000", problemSlug: "1000" });
+eq("BOJ without www, from its submit page", submitTarget("https://acmicpc.net/submit/1000/"), { judge: "boj", url: "https://acmicpc.net/submit/1000", problemSlug: "1000" });
+eq("BOJ contest problem", submitTarget("https://acmicpc.net/contest/problem/1684/3"), { judge: "boj", url: "https://acmicpc.net/contest/submit/1684/3", problemSlug: "1684/3" });
+eq("BOJ pages that are no problem", [submitTarget("https://acmicpc.net/status?problem_id=1000"), submitTarget("https://acmicpc.net/workbook/view/1")], [null, null]);
 eq("practice problem", submitTarget("https://doj.kr/ko/problems/1"),
   { judge: "doj", url: "https://doj.kr/ko/problems/1/ide", problemSlug: "1" });
 eq("contest problem keeps its contest", submitTarget("https://doj.kr/ko/problems/421?contest=cmt7b6o9w00063827xfnbigsa"),
@@ -36,6 +40,9 @@ const dojOptions = (selected: string) => [
   ["cpp17", "C++17"], ["cpp20", "C++20"], ["python3", "Python 3"], ["pypy3", "PyPy 3"], ["java21", "Java 21"],
 ].map(([value, text]) => ({ value, text, selected: value === selected }));
 eq("c++: newest standard", pickLanguageOption(dojOptions("java21"), "cpp"), "cpp20");
+const bojOptions = ["C++98", "C++11", "C++17", "C++20", "C++23", "C++17 (Clang)", "C11", "Python 3", "PyPy3", "Text"].map((text, index) => ({ value: String(index), text, selected: false }));
+eq("BOJ c++: the newest standard, not 98", bojOptions[Number(pickLanguageOption(bojOptions, "cpp"))].text, "C++23");
+eq("BOJ python: PyPy3", bojOptions[Number(pickLanguageOption(bojOptions, "python"))].text, "PyPy3");
 eq("c++: keeps the one chosen", pickLanguageOption(dojOptions("cpp17"), "cpp"), "cpp17");
 eq("python: pypy", pickLanguageOption(dojOptions("cpp17"), "python"), "pypy3");
 

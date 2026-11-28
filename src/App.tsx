@@ -173,6 +173,7 @@ function App() {
   const [atcoderHandle] = useSetting("atcoderHandle");
   const [codeforcesHandle] = useSetting("codeforcesHandle");
   const [dojHandle] = useSetting("dojHandle");
+  const [bojHandle] = useSetting("bojHandle");
   const [defaultLanguage, setDefaultLanguage] = useSetting("defaultLanguage");
   const [atcoderLibraryPath] = useSetting("atcoderLibraryPath");
   const [refreshingJudge, setRefreshingJudge] = useState(false);
@@ -998,6 +999,12 @@ function App() {
     });
     setWorkspacePath(saved.folderPath);
     settleSavedTabs(snapshot, nextTabs);
+    // The tabs this save brought (a new file, a copy, an import) are not open yet: they open
+    // here, or the editor was left on a tab id it did not have and showed the first tab.
+    setTabs((items) => {
+      const added = snapshot.filter((tab) => !items.some((live) => live.id === tab.id));
+      return added.length ? [...items, ...added] : items;
+    });
     setSavedFiles(persistedTabs);
     const nextActive = snapshot.find((tab) => tab.id === nextActiveId);
     if (nextActive) activateTab(nextActive);
@@ -1945,7 +1952,7 @@ function App() {
   const editorCanImport = (url: string) => {
     try {
       const host = new URL(url).hostname;
-      return ["atcoder.jp", "codeforces.com", "doj.kr"].some((site) => host === site || host.endsWith(`.${site}`));
+      return ["atcoder.jp", "codeforces.com", "doj.kr", "acmicpc.net"].some((site) => host === site || host.endsWith(`.${site}`));
     } catch { return false; }
   };
 
@@ -2038,6 +2045,7 @@ function App() {
           atcoderHandle,
           codeforcesHandle,
           dojHandle,
+          bojHandle,
         },
       });
       const update = (file: ProblemTab) => {
@@ -2064,7 +2072,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!workspacePath || (!atcoderHandle && !codeforcesHandle && !dojHandle)) return;
+    if (!workspacePath || (!atcoderHandle && !codeforcesHandle && !dojHandle && !bojHandle)) return;
     // AtCoder's public submission feed is eventually consistent. Polling a
     // little more often makes virtual-contest verdicts appear soon after the
     // feed catches up without requiring a manual refresh.
@@ -2072,7 +2080,7 @@ function App() {
     void refreshSubmissionStatuses(true);
     return () => window.clearInterval(timer);
     // File lists intentionally do not restart polling after every returned status update.
-  }, [workspacePath, atcoderHandle, codeforcesHandle, dojHandle, judgeProblemKey]);
+  }, [workspacePath, atcoderHandle, codeforcesHandle, dojHandle, bojHandle, judgeProblemKey]);
 
   const finishTabRename = () => {
     const draft = tabRenameDraft;
@@ -3377,7 +3385,7 @@ function App() {
       { id: "file.new", label: t("cmdNewFile"), keywords: "create file 만들기 파일", disabled: !workspacePath, run: () => beginBlankFile(explorerRef.current?.creationParent()) },
       { id: "workspace.new", label: t("cmdNewWorkspace"), keywords: "create project folder 프로젝트 폴더", shortcut: shortcutLabel("N"), run: newProblem },
       { id: "file.folder", label: t("cmdNewFolder"), keywords: "directory 디렉터리", shortcut: shortcutLabel("N", { shift: true }), disabled: !workspacePath, run: () => explorerRef.current?.newFolder() },
-      { id: "file.import", label: t("cmdImport"), keywords: "import url atcoder codeforces doj 가져오기", shortcut: shortcutLabel("T"), run: beginImport },
+      { id: "file.import", label: t("cmdImport"), keywords: "import url atcoder codeforces doj boj baekjoon acmicpc 백준 가져오기", shortcut: shortcutLabel("T"), run: beginImport },
       { id: "file.open", label: t("cmdOpen"), keywords: "open folder workspace 열기", shortcut: shortcutLabel("O"), run: () => void openProblem() },
       { id: "file.save", label: t("cmdSave"), keywords: "save 저장", shortcut: shortcutLabel("S"), disabled: noFile, run: () => void saveProblem({ explicit: true }) },
       { id: "file.reopen", label: t("cmdReopen"), keywords: "reopen undo close 복원", shortcut: shortcutLabel("T", { shift: true }), run: reopenClosedTab },
@@ -4096,6 +4104,7 @@ function App() {
             <option value="atcoder">AtCoder</option>
             <option value="codeforces">Codeforces</option>
             <option value="doj">DOJ</option>
+            <option value="boj">BOJ</option>
           </select>
         </label>
         {sourceValue !== "other" && <label className="clangd-path-label">Problem URL (optional)
@@ -4291,7 +4300,7 @@ function App() {
               <button className="modal-close" onClick={cancelProblemImport} aria-label="Close problem import"><Icon name="close" size={14} /></button>
             </header>
             <p className="settings-help">{testcaseImportTarget ? "Replace only this file's test cases. Its code and filename stay unchanged." : t("importHelp")}</p>
-            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} placeholder="AtCoder, Codeforces, or doj.kr problem URL" autoFocus />
+            <input className="atcoder-url" value={atCoderUrl} onChange={(event) => setAtCoderUrl(event.target.value)} placeholder="AtCoder, Codeforces, doj.kr or acmicpc.net problem URL" autoFocus />
             <footer className="settings-footer">
               <span className="footer-spacer" />
               <button className="subtle-button" onClick={cancelProblemImport}>{newFileImportPending ? (uiLocale === "ko" ? "빈 파일 만들기" : "create blank file") : t("cancel")}</button>

@@ -57,15 +57,13 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Mild Editor __VERSION__
           releaseBody: |
-            ## What's changed in v1.21.2
+            ## What's changed in v1.22.0
 
-            - **Unsaved tabs are asked about** before another workspace opens or is created.
-            - **Files deleted outside the editor are marked on their tab**; saving asks whether to write them again.
-            - **Python speaks UTF-8 on Windows**, and **C++ compiles under a non-ASCII user name** with MinGW.
-            - Settings backups carry the library folder's templates and snippets; contest imports skip only problems already in that contest's folder.
-            - Fixes to snippets renamed in another case, stress-test comparison, Codeforces and AtCoder imports, saving while tabs open or close, and Windows/Linux shortcuts.
+            - **BOJ (acmicpc.net) is supported**: import problems and contests with samples and limits, auto-submit, and verdicts for your handle.
+            - **DOJ auto-submit works again** with DOJ's new language picker.
+            - **Imports, new files and copies open in their own tab again** instead of the first tab.
 
-            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.21.2/CHANGELOG.md) for the patch notes.
+            See [`CHANGELOG.md`](https://github.com/flipoct/mild-editor/blob/v1.22.0/CHANGELOG.md) for the patch notes.
           releaseDraft: false
           # A tag with a pre-release suffix (v1.8.0-rc.1) builds a test release that stays
           # out of "latest" and publishes no latest.json, so installed copies do not update

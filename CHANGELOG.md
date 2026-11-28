@@ -8,6 +8,16 @@
   - A tablet gets the very same tools, and everything — writing, shapes, pictures — is drawn for everyone in a room and on every tablet at once.
   - Boards are saved in a new format, with their pictures inside; boards drawn before are opened as they were.
 
+## 1.22.0
+
+- **BOJ (acmicpc.net) is supported** beside AtCoder, Codeforces and DOJ.
+  - Import a problem with its samples and time and memory limits from `/problem/<id>`, or every problem of a contest, workbook or `/step/<n>` page (up to 30). A contest's own problems, which are not public, are read through the problem browser's login.
+  - Auto-submit fills the submit page (language and code) and presses Submit, for the problem set and for contests.
+  - Verdicts come from the status page for the BOJ handle set in Settings: AC, WA, PE, TLE, MLE, OLE, RTE, CE and partial scores.
+  - BOJ has its own template (`templates/boj.cpp`, `.py`), explorer filter and `BOJ/` folder, and shows in Discord status.
+- **DOJ auto-submit works again.** DOJ's IDE turned its language list into a custom dropdown, and a problem limited to some languages first shows a button to reveal them; both are handled.
+- **An import, a new file or a copy opens in its own tab again.** Since 1.20.0 the editor could show the first tab instead, and the problem panel then followed that tab to another problem.
+
 ## 1.21.2
 
 - **Unsaved tabs are asked about before another workspace opens.** Opening or creating a workspace with unsaved changes shows Save and continue / Continue without saving / Cancel; it used to drop the changes.

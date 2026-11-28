@@ -18,7 +18,7 @@ export type UiTheme = "pastel" | "midnight" | "latte" | "sakura" | "blossom" | "
 /** The interface's form, independent of the theme's palette: shape, density and type. */
 export type UiStyle = "mild" | "instrument" | "paper";
 
-export type ProblemSource = "atcoder" | "codeforces" | "doj" | "other";
+export type ProblemSource = "atcoder" | "codeforces" | "doj" | "boj" | "other";
 
 export type UiLocale = "en" | "ko";
 
