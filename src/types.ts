@@ -75,6 +75,8 @@ export type BrowserExtension = { id: string; name: string; version: string; path
 
 /** Where the problem browser lives: a panel in the workspace, or a window of its own. */
 export type ProblemBrowserMode = "panel" | "window";
+/** Where a drawing board is shown: over the editor, or in a window of its own (src/board/BoardWindow.tsx). */
+export type BoardPlacement = "panel" | "window";
 
 export type InteractiveEntry = { id: number; kind: "stdout" | "stderr" | "input" | "info"; text: string };
 

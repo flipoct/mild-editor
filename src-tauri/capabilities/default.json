@@ -4,7 +4,8 @@
   "description": "Default capability for Mild Editor",
   "windows": [
     "main",
-    "problem"
+    "problem",
+    "board"
   ],
   "permissions": [
     "core:default",

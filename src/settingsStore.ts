@@ -3,7 +3,7 @@ import { DEFAULT_FLOAT_TOLERANCE } from "./judge";
 import { IS_TAURI } from "./platform";
 import { boundedNumber, clampEditorFontSize, clampUiZoom, defaultEditorFontId, EDITOR_FONT_SIZE_DEFAULT, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, isUiStyle, loadCustomFonts, loadSnippets, parseWallpaperLayout, storedPanelGrid, storedProfileFlags, UI_ZOOM_MAX, UI_ZOOM_MIN } from "./settings";
 import { createStore } from "./store";
-import type { CompileProfile, EditorFont, ExplorerSort, Language, ProblemBrowserMode, ProblemSource, UiLocale, UiStyle, UiTheme } from "./types";
+import type { CompileProfile, EditorFont, ExplorerSort, Language, BoardPlacement, ProblemBrowserMode, ProblemSource, UiLocale, UiStyle, UiTheme } from "./types";
 import { autoSaveEnabled } from "./workbench";
 
 /**
@@ -60,6 +60,7 @@ const definitions = {
   testPanelVisible: flag("mild-test-panel-visible", true),
   problemPanelOpen: stored("mild-problem-panel", (value) => import.meta.env.VITE_PROBLEM_PANEL_OPEN === "force" || (value ?? (import.meta.env.VITE_PROBLEM_PANEL_OPEN === "1" ? "1" : "0")) === "1", (open) => open ? "1" : "0"),
   problemBrowserMode: stored<ProblemBrowserMode>("mild-problem-browser-mode", (value) => value === "window" ? "window" : "panel"),
+  boardPlacement: stored<BoardPlacement>("mild-board-placement", (value) => value === "window" ? "window" : "panel"),
   explorerSort: text<ExplorerSort>("mild-explorer-sort", "problem"),
   explorerSource: text<ProblemSource | "all">("mild-explorer-source", "all"),
 

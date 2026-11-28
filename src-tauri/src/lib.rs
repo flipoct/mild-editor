@@ -225,6 +225,8 @@ pub fn run() {
             boards::write_workspace_board,
             boards::delete_workspace_board,
             boards::save_board_picture,
+            boards::board_window_open,
+            boards::board_window_hide,
             pad::pad_open,
             pad::pad_close,
             pad::pad_send,
@@ -291,6 +293,9 @@ pub fn run() {
                     // for the next time, and the app window is told so its chip follows.
                     if window.label() == browser::PROBLEM_WINDOW {
                         browser::hide_problem_window(window.app_handle());
+                    } else if window.label() == boards::BOARD_WINDOW {
+                        // The board window only hides too; its board stays with the app window.
+                        boards::hide_board_window(window.app_handle());
                     } else {
                         let _ = window.emit("native-close-requested", ());
                     }
@@ -301,6 +306,8 @@ pub fn run() {
                 tauri::WindowEvent::Destroyed if window.label() == browser::PROBLEM_WINDOW => {
                     browser::host_destroyed(window, &window.state::<browser::BrowserState>());
                 }
+                // The board window going takes nothing with it: the services belong to the app window.
+                tauri::WindowEvent::Destroyed if window.label() == boards::BOARD_WINDOW => {}
                 tauri::WindowEvent::Destroyed => {
                     clangd::stop(&window.state::<clangd::ClangdState>());
                     interactive::stop_session(&window.state::<interactive::InteractiveState>());

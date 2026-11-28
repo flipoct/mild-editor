@@ -181,6 +181,7 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
   const [editorFontSize, setEditorFontSize] = useSetting("editorFontSize");
   const [customFonts, setCustomFonts] = useSetting("customFonts");
   const [autoSave, setAutoSave] = useSetting("autoSave");
+  const [boardPlacement, setBoardPlacement] = useSetting("boardPlacement");
   const wallpaper = wallpaperCss(wallpaperLayout, wallpaperScale, wallpaperPositionX, wallpaperPositionY);
   // The field holds free text while it is typed and only applies on commit; clamping on
   // every keystroke would turn the "2" on the way to "20" into the minimum.
@@ -258,6 +259,7 @@ function AppearancePage({ t, fontOptions, selectedFont, systemFonts, background,
       <label className="appearance-range"><span>{t("acrylicBlur")}</span><input type="range" min="0" max="32" value={acrylicBlur} onChange={(event) => setAcrylicBlur(Number(event.target.value))} /><output>{acrylicBlur}px</output></label>
     </div>
     <div className="appearance-group"><label>{t("editorFont")}<select value={selectedFont.id} onChange={(event) => setEditorFont(event.target.value)}>{fontOptions.map((font) => <option value={font.id} key={font.id}>{font.label}</option>)}</select></label><label>{t("editorFontSize")}<span className="editor-font-size"><input type="number" inputMode="numeric" min={EDITOR_FONT_SIZE_MIN} max={EDITOR_FONT_SIZE_MAX} step={1} value={editorFontSizeDraft} onChange={(event) => setEditorFontSizeDraft(event.target.value)} onBlur={commitEditorFontSize} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} aria-label={t("editorFontSize")} /><small>px</small></span></label><div className="font-actions"><button className="subtle-button" onClick={() => void addEditorFont()}>{t("addFont")}</button>{selectedFont.path && <button className="danger-button" onClick={removeEditorFont}>{t("remove")}</button>}</div><pre style={{ fontFamily: selectedFont.family, fontSize: editorFontSize }}>int main() {'{'} return 0; {'}'}</pre></div>
+    <div className="appearance-group"><label>{t("boardPlacement")}<select value={boardPlacement} onChange={(event) => setBoardPlacement(event.target.value === "window" ? "window" : "panel")}><option value="panel">{t("boardInPanel")}</option><option value="window">{t("boardInWindow")}</option></select></label><p className="settings-help">{t("boardPlacementHelp")}</p></div>
     <div className="appearance-group"><label className="companion-toggle"><input type="checkbox" checked={autoSave} onChange={(event) => setAutoSave(event.target.checked)} />{t("autoSave")}</label><p className="settings-help">{t("autoSaveHelp")}</p></div>
   </div>;
 }
