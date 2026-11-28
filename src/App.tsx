@@ -45,6 +45,7 @@ import { iconBytes } from "./appIcon";
 import { libraryBackupEntries } from "./library";
 import { EMPTY_BOARD } from "./board/model";
 import { unpairAll } from "./board/pads";
+import { boardWindow, hideBoardWindow, setBoardWindowActions, showBoardWindow } from "./board/windowLink";
 import { addSharedBoard, attachCollabEditor, collab, keyboardTakenBy, leaveRoom, moveSharedFile, replaceSharedText, showCollabDialog, syncWorkspace, useCollab, useCollabBridge } from "./collab/collabStore";
 import { CollabChip, CollabDialogs, KeyboardBanner, KeyboardChip } from "./collab/CollabUi";
 import { DEVICES, openDevice, useDevice } from "./collab/devices";
@@ -223,6 +224,9 @@ function App() {
   const problemHostRef = useRef<HTMLDivElement | null>(null);
   const problemUrlEditingRef = useRef(false);
   const [problemBrowserMode] = useSetting("problemBrowserMode");
+  // Where boards open: over the editor, or in the board window (src/board/windowLink.ts).
+  const [boardPlacement, setBoardPlacement] = useSetting("boardPlacement");
+  const windowBoardPath = boardWindow.use((state) => state.path);
   // True from the browser view taking the keyboard until this page gets it back. The
   // view is native, so `document.activeElement` does not know about it.
   const cefFocusedRef = useRef(false);
@@ -882,7 +886,12 @@ function App() {
     if (file) openSavedFile(file);
   });
   const openBoard = useStableCallback((path: string) => {
-    setOpenBoardPath(path);
+    if (IS_TAURI && boardPlacement === "window") {
+      setOpenBoardPath(null);
+      showBoardWindow(path).catch((error) => setFileStatus(errorMessage(error)));
+    } else {
+      setOpenBoardPath(path);
+    }
     setExplorerSelection({ kind: "file", filename: path });
   });
   const deleteBoard = useStableCallback(async (path: string) => {
@@ -914,7 +923,25 @@ function App() {
     if (openBoardPath && !workspaceBoards.some((board) => fileKey(board) === fileKey(openBoardPath))) setOpenBoardPath(null);
   }, [workspaceBoards, openBoardPath]);
   // Another workspace: its boards are other boards, and no tablet goes on drawing on the old ones.
-  useEffect(() => { setOpenBoardPath(null); unpairAll(); }, [workspacePath]);
+  useEffect(() => { setOpenBoardPath(null); hideBoardWindow(); unpairAll(); }, [workspacePath]);
+  // The placement changed, in Settings or by a board's own button: the board that is open moves with it.
+  const previousBoardPlacement = useRef(boardPlacement);
+  useEffect(() => {
+    if (previousBoardPlacement.current === boardPlacement) return;
+    previousBoardPlacement.current = boardPlacement;
+    if (boardPlacement === "window" && IS_TAURI) {
+      if (openBoardPath) {
+        setOpenBoardPath(null);
+        showBoardWindow(openBoardPath).catch((error) => setFileStatus(errorMessage(error)));
+      }
+    } else {
+      const shown = boardWindow.get().path;
+      hideBoardWindow();
+      if (shown) setOpenBoardPath(shown);
+    }
+  }, [boardPlacement, openBoardPath]);
+  // What the board window asks of this one.
+  useEffect(() => setBoardWindowActions({ open: openBoard, create: () => void newBoard(), dock: () => setBoardPlacement("panel") }));
   const renameExplorerFile = useStableCallback(async (filename: string, requested: string) => {
     const original = explorerFile(filename);
     return original ? commitWorkspaceRename(original, requested) : null;
@@ -953,7 +980,7 @@ function App() {
     onFolderRelocated: followRelocatedFolder,
     onFilesDeleted: closeDeletedFiles,
     showStatus: setFileStatus,
-    activeBoard: openBoardPath ?? "",
+    activeBoard: openBoardPath ?? windowBoardPath ?? "",
     openBoard,
     deleteBoard,
   };
@@ -3427,7 +3454,7 @@ function App() {
         } },
       ] : []),
       { id: "board.new", label: t("cmdBoardNew"), keywords: "board draw drawing whiteboard sketch tablet pad 그림판 그림 화이트보드 태블릿 판서", disabled: !workspacePath, run: () => void newBoard() },
-      ...(openBoardPath ? [{ id: "board.close", label: t("cmdBoardClose"), keywords: "board close 그림판 닫기", run: () => setOpenBoardPath(null) }] : []),
+      ...(openBoardPath || windowBoardPath ? [{ id: "board.close", label: t("cmdBoardClose"), keywords: "board close 그림판 닫기", run: () => { setOpenBoardPath(null); hideBoardWindow(); } }] : []),
       { id: "file.rescan", label: t("cmdRescan"), keywords: "refresh reload rescan 새로고침", disabled: !workspacePath, run: () => void rescanWorkspaceFiles(true) },
       { id: "view.explorer", label: t("cmdExplorer"), keywords: "explorer sidebar files 탐색기", shortcut: shortcutLabel("B"), run: () => setExplorerVisible((visible) => !visible) },
       { id: "view.tests", label: t("cmdTestPanel"), keywords: "tests panel 테스트 패널", shortcut: shortcutLabel("B", { shift: true }), run: () => setTestPanelVisible((visible) => !visible) },
@@ -4012,7 +4039,7 @@ function App() {
             })}
           </div>}
           <KeyboardBanner t={t} shared={!openBoardPath && sharedFiles.has(activeTabId)} />
-          {openBoardPath && <Suspense fallback={null}><BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} korean={uiLocale === "ko"} boards={workspaceBoards} onOpen={openBoard} onNew={() => void newBoard()} onClose={() => setOpenBoardPath(null)} /></Suspense>}
+          {openBoardPath && <Suspense fallback={null}><BoardView key={openBoardPath} t={t} path={openBoardPath} themeKey={uiTheme} korean={uiLocale === "ko"} boards={workspaceBoards} onOpen={openBoard} onNew={() => void newBoard()} onClose={() => setOpenBoardPath(null)} onPopOut={IS_TAURI ? () => setBoardPlacement("window") : undefined} /></Suspense>}
           {tabs.length ? <>
           <Editor
             beforeMount={setupMonaco}

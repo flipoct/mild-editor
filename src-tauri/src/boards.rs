@@ -5,6 +5,7 @@
 
 use crate::workspace::{metadata_lock, walk_workspace, workspace_relative_filename};
 use serde::Deserialize;
+use tauri::{Emitter, Manager};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -119,6 +120,62 @@ pub(crate) fn save_board_picture(request: BoardPictureRequest) -> Result<(), Str
         return Err("Only a PNG is saved here.".into());
     }
     fs::write(&request.path, &request.data).map_err(|error| format!("Could not save {}: {error}", request.path))
+}
+
+/// The board window: one window of its own that shows a board instead of the editor's panel
+/// (src/board/BoardWindow.tsx). The app window keeps holding the board — its file, its room,
+/// its tablets — and the two pages sync over events (src/board/windowLink.ts).
+pub(crate) const BOARD_WINDOW: &str = "board";
+/// Told to the app window when the board window was hidden, by its own button or the system's.
+pub(crate) const BOARD_WINDOW_HIDDEN_EVENT: &str = "board-window-hidden";
+
+/// Shows the board window, making it the first time. Async, and built on the main thread
+/// through the event loop: a window made from a synchronous command hangs WebView2.
+#[tauri::command]
+pub(crate) async fn board_window_open(app: tauri::AppHandle, focus: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(BOARD_WINDOW) {
+        let _ = window.unminimize();
+        window.show().map_err(|error| error.to_string())?;
+        if focus {
+            let _ = window.set_focus();
+        }
+        return Ok(());
+    }
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        // The same chrome as the problem window: the page draws the title bar.
+        let builder = tauri::WebviewWindowBuilder::new(&handle, BOARD_WINDOW, tauri::WebviewUrl::App("index.html".into()))
+            .title("Board")
+            .inner_size(1100.0, 780.0)
+            .min_inner_size(480.0, 360.0)
+            .shadow(true);
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .decorations(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(8.0, 18.0));
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.decorations(false);
+        if let Err(error) = builder.build() {
+            if !matches!(error, tauri::Error::WebviewLabelAlreadyExists(_)) {
+                eprintln!("board window: {error}");
+            }
+        }
+    }).map_err(|error| error.to_string())
+}
+
+/// Hides the board window, keeping its page for the next time; the app window is told.
+#[tauri::command]
+pub(crate) fn board_window_hide(app: tauri::AppHandle) {
+    hide_board_window(&app);
+}
+
+pub(crate) fn hide_board_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(BOARD_WINDOW) {
+        let _ = window.hide();
+    }
+    let _ = app.emit_to("main", BOARD_WINDOW_HIDDEN_EVENT, ());
 }
 
 #[cfg(test)]

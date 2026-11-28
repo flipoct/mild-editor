@@ -462,6 +462,11 @@ body.panel-dragging .panel-grip { cursor: grabbing; }
 .problem-window { position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-h) auto minmax(0, 1fr); background: var(--bg-1); color: var(--text); }
 :root[data-platform="mac"] .problem-window { grid-template-rows: auto auto minmax(0, 1fr); }
 .problem-window > .problem-host { position: relative; }
+/* The board in a window of its own (src/board/BoardWindow.tsx): the same title bar, the board under it. */
+.board-window { position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-h) minmax(0, 1fr); background: var(--bg-1); color: var(--text); }
+:root[data-platform="mac"] .board-window { grid-template-rows: auto minmax(0, 1fr); }
+.board-window-body { position: relative; min-height: 0; }
+.board-window-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; color: var(--muted); font-size: var(--fs-s); text-align: center; }
 .problem-toolbar { height: var(--bar); flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border-subtle); }
 .problem-toolbar button { height: 26px; min-width: 26px; display: grid; grid-auto-flow: column; place-items: center; gap: 6px; padding: 0 6px; border: 0; border-radius: var(--r-m); background: transparent; color: var(--text-2); transition: background-color var(--dur-micro), color var(--dur-micro); }
 .problem-toolbar button:hover:not(:disabled) { background: var(--hover); color: var(--text); }

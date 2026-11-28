@@ -24,7 +24,8 @@ export type Outside = { state: "none" | "checking" | "no-gateway" | "nat" | "ref
 /** What the board's QR panel shows: where a tablet goes, and how many are drawing now. */
 export type PairingView = { urls: string[]; tablets: number; outside: Outside };
 
-export const pairings = createStore<Record<string, PairingView>>({});
+/** By file key; a board whose pairing ended is `undefined` (a store merges what it is given, so a key cannot be taken out). */
+export const pairings = createStore<Record<string, PairingView | undefined>>({});
 
 type Pairing = {
   token: string;
@@ -110,7 +111,7 @@ export const unpairBoard = (path: string) => {
   pairing.handle.release();
   // After the goodbyes, which are queued on the same connections.
   window.setTimeout(() => void invoke("pad_close", { token: pairing.token }).catch(() => undefined), 200);
-  pairings.set((state) => { const next = { ...state }; delete next[fileKey(path)]; return next; });
+  pairings.set({ [fileKey(path)]: undefined });
 };
 
 /** Every pairing ends, when the workspace they were for goes. */

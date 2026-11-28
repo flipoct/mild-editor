@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A drawing board can have a window of its own**, beside the code instead of over it, as the problem browser can. **Settings → Appearance → Drawing boards open** chooses over the editor or in a window, and the button beside a board's close button moves it there and back. The window has the whole board: the board list and search, every tool, PNG export and the tablet. It switches boards instead of opening more windows, and closing it only hides it. The editor window still holds the board, so saving, shared rooms and tablets work as before.
+- **Disconnect** in the tablet panel now ends the pairing in the panel too. The button used to stay green and the old QR code stayed up.
+
 ## 1.23.0
 
 - **Drawing boards are a whiteboard of their own, alone at the computer as much as with a tablet or a room.** Beside the pen and the eraser there is now a select tool (move, resize, rotate, Alt+drag to copy, bring forward or back), a pressure-sensitive pen, a highlighter, writing with formulas (`$x^2$` in a line, `$$…$$` on its own, laid out by KaTeX), rectangles and ellipses with a fill, lines and arrows, and pictures — pasted, dropped or picked, a large photo scaled down as it goes in. The style of what is selected or drawn next is set beside the board.
