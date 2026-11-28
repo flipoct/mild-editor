@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.23.0
 
 - **Drawing boards are a whiteboard of their own, alone at the computer as much as with a tablet or a room.** Beside the pen and the eraser there is now a select tool (move, resize, rotate, Alt+drag to copy, bring forward or back), a pressure-sensitive pen, a highlighter, writing with formulas (`$x^2$` in a line, `$$…$$` on its own, laid out by KaTeX), rectangles and ellipses with a fill, lines and arrows, and pictures — pasted, dropped or picked, a large photo scaled down as it goes in. The style of what is selected or drawn next is set beside the board.
   - **Undo and redo** (`Ctrl+Z`, `Ctrl+Shift+Z`) take back only what you did, so they are right in a room where others draw too. Copy, cut, paste and duplicate work within a board and between boards, pictures included.
   - **The board list** beside the canvas shows the workspace's boards and searches their names and what is written on them; it folds away and back with its arrow or `Ctrl+\`. **Save as PNG** and **Copy as PNG** export the board, or what is selected, formulas included. `?` shows every shortcut.
   - A tablet gets the very same tools, and everything — writing, shapes, pictures — is drawn for everyone in a room and on every tablet at once.
   - Boards are saved in a new format, with their pictures inside; boards drawn before are opened as they were.
+- **Popups stay on top.** With a wallpaper, the File menu no longer opens behind a docked explorer, and the status bar no longer covers the explorer's menus.
+- **The update notice shows with the problem browser docked on the right.** It moves beside the page, and when there is no room the page steps aside while the notice is up.
 
 ## 1.22.0
 
